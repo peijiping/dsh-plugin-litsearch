@@ -1,0 +1,10 @@
+# dsh bundle patch：把本插件插入 profile 层栈。
+#
+# - 模型侧工具由本插件自持：直接在 Host 进程内调用免费文献 API
+#   （OpenAlex、Crossref…），再以 `literature_*` 名称注册进 dsh 工具表。
+#   因此不需要插入任何 MCP client 行。
+# - 人侧检索界面由 Client 半注册右侧栏 tab，并通过本插件在宿主 web server
+#   上注册的 `/dsh-litsearch/api/*` 只读端点取数。
+- insert:
+    - id: dsh-plugin-litsearch
+      name: dsh-plugin-litsearch

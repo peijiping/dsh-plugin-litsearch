@@ -1,0 +1,18 @@
+# 依赖
+node_modules/
+
+# 构建产物
+/lib/
+/client/
+*.tsbuildinfo
+/*.tgz
+
+# 本地/发布目录
+local/
+
+# 系统文件
+.DS_Store
+
+# 本地工具目录（不纳入版本控制）
+.trae/
+.workbuddy/

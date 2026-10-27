@@ -1,0 +1,129 @@
+/**
+ * dsh-plugin-litsearch —— 客户端入口。
+ *
+ * 在右侧栏注册一个「页」类型 tab（不给 patterns，走 guide 入口），并把面板
+ * 正文注册到 `sidebar.right.pane.tab` 席位。会话级标准 prop `inputActions`
+ * 由 ui-conversation 通过 `uiSession.provide` 下发，随槽位作用域透传给正文。
+ *
+ * 注意：cordis 的对象式 inject 是「拦截 config」，不是 {required,optional}，
+ * 因此这里用数组式 inject。
+ */
+
+import { createElement, type ComponentType, type ReactElement } from 'react'
+
+import { ConfigCard, LitsearchCardController, ROW_CONFIG_KEY, ROW_ID } from './ConfigCard'
+import type { InputActions } from './inline'
+import { dicts, NS, type Translate } from './locales'
+import { SearchPane } from './SearchPane'
+
+/** locale 服务中本插件用到的那部分。 */
+interface LocaleService {
+  register(namespace: string, dicts: { zh: Record<string, string>; en: Record<string, string> }): unknown
+  bind(namespace: string): Translate
+}
+
+/** guide 入口项（kind / providerId 由注册表注入）。 */
+interface GuideEntry {
+  id: string
+  title: () => string
+  description?: () => string
+  order?: number
+}
+
+/** 右侧栏 tab 类型定义。 */
+interface TabDefinition {
+  id: string
+  kind: string
+  title: () => string
+  guide?: readonly GuideEntry[]
+}
+
+/** 右侧栏 tab 类型注册表。 */
+interface SidebarRightTabsService {
+  register(definition: TabDefinition): unknown
+}
+
+/** slots 服务。 */
+interface SlotsService {
+  register(meta: Record<string, unknown>, component: ComponentType<never>): unknown
+  /** 声明感知注册：席位尚未声明时先等，声明后（含重新声明）再注册；返回解除器。 */
+  inject(key: string, callback: () => unknown): () => void
+}
+
+/** 配置表单服务（由 `@deepseek-ai/dsh-client-ui-settings` 提供）。 */
+interface ConfigFormsService {
+  /** 某 Host 插件条目的共享配置表单（`scope` 交给 `SettingsFormModel`）。 */
+  get(entryId: string): unknown
+  /** Host 服务其中任一命名空间时才注册；返回的 disposer 交给 `ctx.effect`。 */
+  whileServed(
+    namespaces: string[],
+    register: (served: Set<string>) => () => void,
+  ): () => void
+}
+
+interface ClientContext {
+  effect(callback: () => unknown, label?: string): void
+  locale: LocaleService
+  slots: SlotsService
+  sidebarRightTabs: SidebarRightTabsService
+  configForms: ConfigFormsService
+}
+
+/** tab 类型 id，同时用作 `sidebar.right.pane.tab` 席位的 key。 */
+const TAB_ID = 'litsearch'
+
+export const name = 'dsh-plugin-litsearch'
+export const inject = ['slots', 'locale', 'sidebarRightTabs', 'configForms']
+
+export function apply(ctx: ClientContext): void {
+  ctx.effect(() => ctx.locale.register(NS, dicts), 'dsh-plugin-litsearch: dictionaries')
+  const t = ctx.locale.bind(NS)
+
+  ctx.effect(
+    () => ctx.sidebarRightTabs.register({
+      id: TAB_ID,
+      kind: 'litsearch',
+      title: () => t('tab.title'),
+      guide: [{
+        id: TAB_ID,
+        title: () => t('guide.title'),
+        description: () => t('guide.desc'),
+        order: 20,
+      }],
+    }),
+    'dsh-plugin-litsearch: sidebar tab',
+  )
+
+  // 正文：把 t 闭包进来，并把槽位透传的会话级标准 prop `inputActions` 取出来
+  // 交给面板（面板不在会话上下文时该 prop 为 undefined）。
+  const Body = (props: { inputActions?: InputActions }): ReactElement =>
+    createElement(SearchPane, { t, inputActions: props.inputActions })
+
+  ctx.effect(
+    () => ctx.slots.register(
+      { name: 'sidebar.right.pane.tab', key: TAB_ID },
+      Body as ComponentType<never>,
+    ),
+    'dsh-plugin-litsearch: pane body',
+  )
+
+  // 插件页「配置」入口：行级配置页渲染在 `plugins.row.config` 席位，
+  // 仅当 Host 服务本插件的 settings 命名空间时才注册（key = 包名#行 id）。
+  const controller = new LitsearchCardController(ctx.configForms.get(ROW_ID))
+  ctx.effect(() => () => controller.dispose(), 'dsh-plugin-litsearch: card form')
+  ctx.effect(
+    () => ctx.configForms.whileServed([ROW_ID], () => ctx.slots.inject(
+      'plugins.row.config',
+      () => ctx.slots.register(
+        {
+          name: 'plugins.row.config',
+          key: ROW_CONFIG_KEY,
+          locale: NS,
+          inject: () => controller.inject(),
+        },
+        ConfigCard as ComponentType<never>,
+      ),
+    )),
+    'dsh-plugin-litsearch: row config card',
+  )
+}

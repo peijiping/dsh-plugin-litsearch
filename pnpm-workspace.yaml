@@ -1,0 +1,9 @@
+fetchTimeout: 600000
+fetchRetries: 5
+fetchRetryMaxtimeout: 300000
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': true
+  '@google/genai': true
+  koffi: true
+  node-pty: true
+  protobufjs: true
