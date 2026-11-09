@@ -7,6 +7,10 @@ node_modules/
 *.tsbuildinfo
 /*.tgz
 
+# 测试沙盒
+tstest/node_modules/
+plugin_helloword/lib/
+
 # 本地/发布目录
 local/
 
@@ -17,4 +21,4 @@ local/
 .trae/
 .workbuddy/
 
-参考代码/*
+.参考代码/

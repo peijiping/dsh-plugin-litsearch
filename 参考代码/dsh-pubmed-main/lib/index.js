@@ -1,0 +1,347 @@
+// dsh-pubmed — DSH npm bundle plugin entry.
+//
+// Loads the shared, transport-agnostic core (lib/pubmed-core.js) and registers
+// the 25 PubMed / Europe PMC / PubTator3 / Semantic Scholar model tools on the host `tools`
+// registry using Node's global `fetch` for HTTP. The bundle row is declared in
+// cordis.patch.yml; install with
+// `dsh plugin --profile <name> add dsh-pubmed@latest` or add the package
+// to the profile's bundles list manually.
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import { nlpExtractKeywords, nlpExtractRelations, nlpAvailable, RELATION_VERB_STEMS, STOPWORDS } from './nlp.js'
+
+/** Plugin identity used by loader diagnostics. */
+export const name = 'pubmed'
+
+/**
+ * P4-一.5: single boolean parser — patch YAML configs often carry quoted
+ * strings ("false"), which a bare !!value would misread as true. Exported for
+ * tests; used for every boolean config/env flag in apply().
+ */
+export function parseBool(value, defaultValue) {
+  if (value === undefined || value === null || value === '') return defaultValue
+  if (typeof value === 'boolean') return value
+  const s = String(value).trim().toLowerCase()
+  if (['false', '0', 'no', 'off'].includes(s)) return false
+  if (['true', '1', 'yes', 'on'].includes(s)) return true
+  return defaultValue
+}
+
+/** Hard dependency: the host tool registry that receives the 26 tools. */
+export const inject = ['tools']
+
+/**
+ * Optional proxy transport: when HTTPS_PROXY / HTTP_PROXY is set in the process
+ * environment, HTTP failures are retried through it via undici.ProxyAgent.
+ * Lazy + dynamic import keeps the plugin loadable even if 'undici' isn't
+ * resolvable (falls back to direct-only).
+ */
+let _proxyState = 0 // 0=unchecked 1=no-proxy 2=ready 3=unavailable
+let _proxyFetch = null
+async function getProxyFetch() {
+  if (_proxyState === 1 || _proxyState === 2) return _proxyFetch
+  if (_proxyState === 3) return null
+  const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy
+  if (!proxy) { _proxyState = 1; return null }
+  try {
+    const undici = await import('undici')
+    const agent = new undici.ProxyAgent({ uri: proxy, requestTimeout: 30000 })
+    _proxyFetch = (u, o) => undici.fetch(u, Object.assign({}, o, { dispatcher: agent }))
+    _proxyState = 2
+  } catch (e) {
+    _proxyState = 3
+  }
+  return _proxyFetch
+}
+
+/**
+ * One HTTP GET. Direct fetch first; on a NETWORK failure (not an HTTP error),
+ * retries through the proxy when one is configured. Rejects on non-2xx; returns
+ * `{ status, body }` otherwise. `signal` is the tool-call cancellation signal.
+ * P4-二.1 修复：timeoutMs 现在真正生效——与 caller signal 经 AbortSignal.any
+ * 组合，黑洞窗口下的 connect 不再悬挂到 OS 级 ~21s（此前 timeout 参数被忽略）。
+ */
+async function httpGet(url, signal, timeoutMs) {
+  const options = {
+    headers: {
+      'user-agent': 'Mozilla/5.0 (compatible; dsh-pubmed/1.0)',
+    },
+    redirect: 'follow',
+  }
+  const signals = []
+  if (signal) signals.push(signal)
+  if (timeoutMs && timeoutMs > 0) signals.push(AbortSignal.timeout(timeoutMs))
+  if (signals.length === 1) options.signal = signals[0]
+  else if (signals.length > 1) options.signal = AbortSignal.any(signals)
+  const doFetch = async (f) => {
+    const res = await f(url, options)
+    const text = await res.text()
+    if (res.status >= 400) {
+      throw new Error('HTTP ' + res.status + ' from ' + String(url).split('?')[0] + ': ' + text.slice(0, 400))
+    }
+    return { status: res.status, body: text }
+  }
+  try {
+    return await doFetch(fetch)
+  } catch (e) {
+    // HTTP status errors are real answers — do not retry through the proxy.
+    if (/^HTTP \d+/.test(String(e.message || ''))) throw e
+    const proxyFetch = await getProxyFetch()
+    if (proxyFetch) return await doFetch(proxyFetch)
+    throw e
+  }
+}
+
+/**
+ * Where downloaded PDFs land by default: `~/.dsh/dsh-pubmed-pdfs/` — the only
+ * location the plugin can determine HONESTLY. The plugin runs inside the DSH
+ * host process, whose cwd is wherever `dsh` was launched from (often the user
+ * home), and no env/exec field carries the session workspace, so guessing the
+ * "current project" is unreliable (live test: files landed in C:\Users\<you>\).
+ * `~/.dsh` is stable, discoverable, and matches the user-graph file location.
+ *
+ * Users can point it elsewhere, in escalating priority:
+ *   1. `outDir` per call (the agent knows the session workspace from its own
+ *      system prompt — pass <workspace>/dsh-pubmed-pdfs for project files)
+ *   2. patch config `PDF_DIR` (persistent, survives restarts)
+ *   3. env `DSH_PUBMED_PDF_DIR`
+ */
+function pdfDownloadDir(cfg) {
+  const configured = (cfg && cfg.PDF_DIR) || process.env.DSH_PUBMED_PDF_DIR
+  if (configured && String(configured).trim()) return String(configured).trim()
+  const base = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(base, 'dsh-pubmed-pdfs')
+}
+
+/**
+ * Download a PDF (or any URL) to a local file — bundle-only capability (needs
+ * node:fs + node:os). Injected into the core as `deps.downloadToFile`; the
+ * dynamic-plugin mode simply reports the download step as unavailable. The PDF
+ * is saved as-is: no parsing happens here or in the core.
+ */
+async function downloadToFile(url, opts) {
+  const o = opts || {}
+  const dir = o.dir && String(o.dir).trim() ? String(o.dir) : pdfDownloadDir()
+  const res = await fetch(url, {
+    headers: { 'user-agent': 'Mozilla/5.0 (compatible; dsh-pubmed/1.0)', accept: 'application/pdf,*/*;q=0.5' },
+    redirect: 'follow',
+    ...(o.signal ? { signal: o.signal } : {}),
+    ...(o.timeoutMs ? { signal: o.signal ? AbortSignal.any([o.signal, AbortSignal.timeout(o.timeoutMs)]) : AbortSignal.timeout(o.timeoutMs) } : {}),
+  })
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' downloading ' + String(url).split('?')[0])
+  const buf = Buffer.from(await res.arrayBuffer())
+  const ctype = String(res.headers.get('content-type') || '').toLowerCase()
+  // Publishers frequently answer a PDF URL with an HTML interstitial (consent
+  // wall, paywall notice, Cloudflare challenge) at HTTP 200. Detect that from
+  // the body signature — saving it as .pdf would silently hand the caller a
+  // broken file. `%PDF` must appear within the first 1 KB (some servers prepend
+  // whitespace or a BOM).
+  const head = buf.slice(0, 1024).toString('latin1')
+  if (!head.includes('%PDF')) {
+    const looksHtml = /^\s*(<!doctype|<html|<\?xml)/i.test(head) || ctype.includes('text/html')
+    throw new Error(
+      'not a PDF — the server returned ' + (looksHtml ? 'an HTML page (consent wall, paywall or bot challenge)' : 'unrecognized content') +
+      ' (content-type: ' + (ctype || 'unknown') + '). The link may need a browser session; try another location from `locations`.',
+    )
+  }
+  // Derive a readable filename. The URL's last path segment is often useless
+  // ("file?id=…", "pdf", "counter/pdf"), so a caller-supplied name (PMID/DOI)
+  // wins, then a segment that actually looks like a filename, then the host.
+  let name = ''
+  if (o.name && String(o.name).trim()) {
+    name = String(o.name).trim().replace(/[^\w.\-]+/g, '_')
+  } else {
+    try {
+      const parsed = new URL(res.url || url)
+      const seg = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '')
+      // Only trust a segment that carries an extension or is reasonably long and
+      // not a generic endpoint word.
+      if (/\.[a-z0-9]{2,5}$/i.test(seg) && !/^index\./i.test(seg)) name = seg
+      else {
+        const host = parsed.hostname.replace(/^www\./, '').split('.')[0]
+        const slug = seg && !/^(pdf|counter|file|download|article|fulltext|content)$/i.test(seg) ? '_' + seg : ''
+        name = host + slug
+      }
+    } catch (e) { /* keep the fallback */ }
+  }
+  if (!name) name = 'paper'
+  name = name.replace(/[^\w.\-]+/g, '_').slice(0, 80)
+  if (!/\.pdf$/i.test(name)) name = name + '.pdf'
+  mkdirSync(dir, { recursive: true })
+  const savedPath = join(dir, name)
+  writeFileSync(savedPath, buf)
+  return { savedPath, bytes: buf.length, contentType: ctype || null, finalUrl: res.url || url }
+}
+
+/**
+ * Persistent user-knowledge-graph storage. A single JSON file under the DSH
+ * home (or the user home) holds the accumulated personal graph; read/modify/
+ * write on each explicit commit. Kept separate from the shared core so the
+ * dynamic-plugin mode (no node:fs) simply reports persistence unavailable.
+ */
+function userGraphPath() {
+  // Always under a `.dsh` directory: ${DSH_HOME}/… when the host sets it,
+  // otherwise ${home}/.dsh/… (the conventional DSH user-data location).
+  const base = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(base, 'dsh-pubmed-graph.json')
+}
+
+function loadUserGraph() {
+  const p = userGraphPath()
+  try {
+    if (!existsSync(p)) return null
+    const raw = readFileSync(p, 'utf8')
+    const data = JSON.parse(raw)
+    if (data && typeof data === 'object' && data.nodes && data.edges) return data
+    return null
+  } catch (e) {
+    return null
+  }
+}
+
+function saveUserGraph(graph) {
+  const p = userGraphPath()
+  try {
+    mkdirSync(dirname(p), { recursive: true })
+    // P4-二.5: atomic write — tmp file + rename, so a crash can never leave a
+    // half-written user graph behind.
+    const tmp = p + '.tmp'
+    writeFileSync(tmp, JSON.stringify(graph, null, 2), 'utf8')
+    renameSync(tmp, p)
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+function clearUserGraph() {
+  const p = userGraphPath()
+  try {
+    rmSync(p, { force: true })
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+/**
+ * Cordis plugin body. Reads the shared core and evaluates it (plain JS, no
+ * exports), then calls `registerPubmedTools(ctx, deps)` with a fetch-based
+ * transport and the real tool registry.
+ *
+ * `config` comes from the profile patch row (`- override: { id: pubmed, config }
+ * …`), which is the preferred way to supply `NCBI_API_KEY` / `AUTO_GRAPH`
+ * because process-environment variables may not reach the bundle depending on
+ * how DSH is launched. The environment remains a fallback.
+ */
+// P3.9: self-register the bundled skill doc into ~/.dsh/skills (a scanned
+// discovery root) at activation — clean installs get the routing guide with
+// zero manual copying. Idempotent, version-aware (rewrites when content
+// differs), non-fatal; SKILL_DOC:false (config/env) disables it.
+function installSkillDoc(cfg) {
+  try {
+    const enabled = parseBool(cfg.SKILL_DOC ?? process.env.SKILL_DOC, true)
+    if (!enabled) return 'disabled'
+    const base = process.env.DSH_HOME || join(homedir(), '.dsh')
+    const dir = join(base, 'skills', 'dsh-pubmed')
+    const src = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'dsh-pubmed', 'SKILL.md')
+    const content = readFileSync(src, 'utf8')
+    mkdirSync(dir, { recursive: true })
+    const dst = join(dir, 'SKILL.md')
+    let existing = ''
+    try { existing = readFileSync(dst, 'utf8') } catch (e) { /* first install */ }
+    if (existing === content) return 'unchanged'
+    writeFileSync(dst, content, 'utf8')
+    return existing ? 'updated' : 'installed'
+  } catch (e) {
+    console.warn('[dsh-pubmed] skill doc self-registration skipped:', String((e && e.message) || e))
+    return 'failed'
+  }
+}
+
+export function apply(ctx, pluginConfig) {
+  const cfg = pluginConfig || {}
+  // P3.9: register the skill doc before tools load (failure is non-fatal).
+  const skillDoc = installSkillDoc(cfg)
+  if (skillDoc === 'installed' || skillDoc === 'updated') console.log('[dsh-pubmed] skill doc ' + skillDoc + ' at ~/.dsh/skills/dsh-pubmed/SKILL.md')
+  const coreUrl = new URL('./pubmed-core.js', import.meta.url)
+  const source = readFileSync(fileURLToPath(coreUrl), 'utf8')
+  // pubmed-core.js defines `function registerPubmedTools(ctx, deps)`.
+  const factory = new Function(source + '\n; return registerPubmedTools')
+  const registerPubmedTools = factory()
+  const tools = ctx.get('tools')
+  if (tools === undefined) throw new Error('tools service unavailable')
+  const autoGraph = parseBool(cfg.AUTO_GRAPH ?? process.env.AUTO_GRAPH, true)
+  const pubtatorEnabled = parseBool(cfg.PUBTATOR ?? process.env.PUBTATOR, true)
+  // P4-三.2: promote the two README-documented options to real configuration.
+  const europepmcEnabled = parseBool(cfg.EUROPEPMC_ENABLED ?? process.env.EUROPEPMC_ENABLED, true)
+  const ncbiEmail = cfg.NCBI_ADMIN_EMAIL || process.env.NCBI_ADMIN_EMAIL || ''
+  registerPubmedTools(ctx, {
+    defineTool,
+    register: (def) => tools.register(def),
+    httpGet,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    // NCBI API key — from the profile patch `config` (preferred), else env.
+    apiKey: cfg.NCBI_API_KEY || process.env.NCBI_API_KEY || '',
+    // P4-三.2: NCBI compliance contact email (was a hardcoded constant).
+    ncbiEmail,
+    // AUTO_GRAPH: auto-merge every pubmed_fetch_articles result into the
+    // current session knowledge graph (default ON, config/env can disable).
+    autoGraph,
+    // PUBTATOR: enrich graph with PubTator concept nodes + curated relations
+    // (default ON; falls back to heuristic NLP on any PubTator failure).
+    pubtatorEnabled,
+    // P4-三.2: EUROPEPMC_ENABLED gate (default ON) — registers the two EPM
+    // tools and enables NCBI-failure fallbacks to EBI.
+    europepmcEnabled,
+    // NLP-enhanced keyword extraction (compromise); undefined when compromise
+    // isn't installed so the core falls back to its built-in token+MeSH
+    // extractor (lazy-loaded in nlp.js — see nlpAvailable).
+    extractKeywords: nlpAvailable ? nlpExtractKeywords : undefined,
+    // NLP-directed-relation extraction ("X regulates Y"); same fallback rule.
+    extractRelations: nlpAvailable ? nlpExtractRelations : undefined,
+    // P4-一.2/一.3: shared word lists (single source: lib/constants.js).
+    relationVerbStems: RELATION_VERB_STEMS,
+    stopwords: STOPWORDS,
+    // P1a: graph-edge evidence PMIDs (default ON; PUBTATOR_EDGE_EVIDENCE: false
+    // / env '0' turns it off). P3.4: relation-probe width (default 3, cap 6).
+    pubtatorEdgeEvidence: parseBool(cfg.PUBTATOR_EDGE_EVIDENCE ?? process.env.PUBTATOR_EDGE_EVIDENCE, true),
+    pubtatorRelationProbe: parseInt(cfg.PUBTATOR_RELATION_PROBE || process.env.PUBTATOR_RELATION_PROBE, 10) || 3,
+    // P4-二.1: articles per merge call that get curated-relation probing
+    // (default 8, cap 50) — caps total PubTator calls for large batches.
+    pubtatorProbeArticles: parseInt(cfg.PUBTATOR_RELATION_PROBE_ARTICLES || process.env.PUBTATOR_RELATION_PROBE_ARTICLES, 10) || 8,
+    // P3.8b: self-hosted reverse-proxy support — point any family at your own
+    // endpoint to ride out regional connectivity windows.
+    eutilsBaseUrl: cfg.EUTILS_BASE_URL || process.env.EUTILS_BASE_URL || '',
+    pubtatorBaseUrl: cfg.PUBTATOR_BASE_URL || process.env.PUBTATOR_BASE_URL || '',
+    epmcBaseUrl: cfg.EPMC_BASE_URL || process.env.EPMC_BASE_URL || '',
+    // v0.4.4 P1 (03 分册 §1): the v0.4.x-added sources join the same
+    // reverse-proxy pattern — no hardcoded endpoint left in the core.
+    openalexBaseUrl: cfg.OPENALEX_BASE_URL || process.env.OPENALEX_BASE_URL || '',
+    s2BaseUrl: cfg.S2_BASE_URL || process.env.S2_BASE_URL || '',
+    // E5: Semantic Scholar direct integration (free Graph API).
+    s2Enabled: parseBool(cfg.S2_ENABLED ?? process.env.S2_ENABLED, true),
+    s2ApiKey: cfg.S2_API_KEY || process.env.S2_API_KEY || '',
+    // v0.4.2: Unpaywall contact email for OA PDF discovery. Unpaywall requires a
+    // REAL address (placeholders get HTTP 422); the core's built-in noreply
+    // address is the fallback, this overrides it.
+    unpaywallEmail: cfg.UNPAYWALL_EMAIL || process.env.UNPAYWALL_EMAIL || '',
+    // v0.4.2: bundle-only PDF download step for pubmed_fetch_pdf_oa
+    // (`download: true`) — bytes to disk, never parsed.
+    downloadToFile,
+    // F2 round 3 (C): HEURISTIC_RELATIONS:false disables the heuristic relation
+    // layer entirely (NLP + fallback) — pure curated (PubTator-only) graph.
+    heuristicRelations: parseBool(cfg.HEURISTIC_RELATIONS ?? process.env.HEURISTIC_RELATIONS, true),
+    // F2 round 3 (A2): relation edges require both endpoints to be article
+    // keywords (semantic gate against syntax-fragment debris). Default on.
+    relationEndpointRequireKeyword: parseBool(cfg.RELATION_ENDPOINT_REQUIRE_KEYWORD ?? process.env.RELATION_ENDPOINT_REQUIRE_KEYWORD, true),
+    storage: {
+      loadUserGraph,
+      saveUserGraph,
+      clearUserGraph,
+    },
+  })
+}
