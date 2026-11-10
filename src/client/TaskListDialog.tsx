@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import { Button, Input, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { TaskSummary } from '../search/types'
-import { activateTask, deleteTask, listTasks, updateTask } from './api'
+import { deleteTask, listTasks, updateTask } from './api'
 import { forgetTask, rememberTaskTitle } from './autoOpen'
 import { tpl, type Translate } from './locales'
 import {
@@ -22,6 +22,9 @@ import {
   titleStyle,
 } from './styles'
 import { notifyTaskListChanged, useTaskListVersion } from './taskListStore'
+
+/** 列表里有运行中任务时的刷新间隔。 */
+const RUNNING_POLL_MS = 3000
 
 interface Props {
   t: Translate
@@ -78,9 +81,19 @@ export function TaskListDialog({
     return () => controller.abort()
   }, [open, version, load])
 
+  const hasRunning = tasks.some((task) => task.status === 'running' || task.status === 'queued')
+
+  // 弹窗打开且有任务在跑时轻量刷新，跑完即停，避免停留在「检索中」的旧快照。
+  useEffect(() => {
+    if (!open || !hasRunning) return undefined
+    const timer = setInterval(() => {
+      void load()
+    }, RUNNING_POLL_MS)
+    return () => clearInterval(timer)
+  }, [open, hasRunning, load])
+
   const openTask = (task: TaskSummary): void => {
-    // 进入该任务：Host 把它设为「当前任务」，后续模型检索默认复用它。
-    void activateTask(task.id).catch(() => undefined)
+    // activate 由 onOpenTask（index.ts 的 openTask）统一负责。
     onOpenTask(task.id, task.title)
     onClose()
   }

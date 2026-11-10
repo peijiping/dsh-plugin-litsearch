@@ -19,7 +19,7 @@ import type {
   TaskOrigin,
 } from '../../search/types.js'
 import { finishRound, startRound } from './rounds.js'
-import { countScreening, pruneStates } from './states.js'
+import { countScreening } from './states.js'
 
 export interface RunnerHooks {
   persist(task: SearchTask): Promise<void>
@@ -170,7 +170,6 @@ export class TaskRunner {
       task.result.papers = papers
       task.result.sources = [...statusById.values()]
       task.result.fetchedAt = new Date().toISOString()
-      task.states = pruneStates(task.states, papers)
       task.stats.rawHits = hits.length
       task.stats.deduped = merged.length
       task.stats.screening = countScreening(papers, task.states)

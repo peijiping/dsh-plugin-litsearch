@@ -185,19 +185,6 @@ export function applyAnnotations(
   return { states, updated }
 }
 
-/** 只保留当前结果集里的状态，避免重跑后为已消失的文献无限累积。 */
-export function pruneStates(
-  states: Readonly<Record<string, PaperState>>,
-  papers: readonly Paper[],
-): Record<string, PaperState> {
-  const keep = new Set(papers.map((paper) => paper.paperId))
-  const next: Record<string, PaperState> = {}
-  for (const [paperId, state] of Object.entries(states)) {
-    if (keep.has(paperId)) next[paperId] = state
-  }
-  return next
-}
-
 /** 校验分组列表：id 唯一、名称非空、顺序重排为连续整数。 */
 export function normalizeGroups(values: readonly TaskGroup[] | undefined): TaskGroup[] | undefined {
   if (values === undefined) return undefined

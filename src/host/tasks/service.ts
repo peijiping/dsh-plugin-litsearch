@@ -397,14 +397,21 @@ export class TaskService {
     if (this.currentTaskId === task.id) this.currentTaskId = undefined
   }
 
-  /** 启动一次执行（任务内新一轮）；返回的 Promise 在运行结束后 resolve 为最新任务。 */
-  async run(
-    id: string,
-    mode: 'new' | 'more' = 'new',
-    origin: TaskOrigin = 'panel',
-  ): Promise<SearchTask> {
-    const task = await this.get(id)
-    return this.begin(task, mode, origin)
+  /**
+   * 启动一次执行（任务内新一轮）；返回的 Promise 在运行结束后 resolve 为最新任务。
+   *
+   * 任务已缓存时同步登记运行态，调用方紧接着调 `waitUntilIdle` 也不会误判为空闲。
+   */
+  run(id: string, mode: 'new' | 'more' = 'new', origin: TaskOrigin = 'panel'): Promise<SearchTask> {
+    const cached = this.store.cached(id)
+    if (cached !== undefined) {
+      try {
+        return this.begin(cached, mode, origin)
+      } catch (error) {
+        return Promise.reject(error)
+      }
+    }
+    return this.get(id).then((task) => this.begin(task, mode, origin))
   }
 
   /**
