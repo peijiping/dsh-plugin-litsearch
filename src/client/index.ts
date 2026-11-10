@@ -1,24 +1,38 @@
 /**
  * dsh-plugin-litsearch —— 客户端入口。
  *
- * 在右侧栏注册一个「页」类型 tab（不给 patterns，走 guide 入口），并把面板
- * 正文注册到 `sidebar.right.pane.tab` 席位。会话级标准 prop `inputActions`
- * 由 ui-conversation 通过 `uiSession.provide` 下发，随槽位作用域透传给正文。
+ * 注册：
+ * - 右侧栏「文献检索」主页（新建检索 + 历史任务）；
+ * - `litsearch-task` 资源 tab（一次检索任务一个 tab，含标题席位）；
+ * - 设置对话框里的「文献检索」页；
+ * - 模型任务的自动打开轮询（`startAutoOpen`）。
  *
  * 注意：cordis 的对象式 inject 是「拦截 config」，不是 {required,optional}，
  * 因此这里用数组式 inject。
  */
 
-import { createElement, type ComponentType, type ReactElement } from 'react'
+import { createElement, useEffect, type ComponentType, type ReactElement } from 'react'
 
-import { ConfigCard, LitsearchCardController, ROW_CONFIG_KEY, ROW_ID } from './ConfigCard'
+import {
+  ensureTaskTitle,
+  rememberTaskTitle,
+  startAutoOpen,
+  useTaskTitle,
+} from './autoOpen'
+import { refreshHealth } from './health'
 import type { InputActions } from './inline'
+import { LitsearchPage } from './LitsearchPage'
 import { dicts, NS, type Translate } from './locales'
-import { SearchPane } from './SearchPane'
+import { LitsearchSettingsController, ROW_ID } from './SettingsController'
+import { SettingsSection } from './SettingsSection'
+import { TASK_ADDRESS_PREFIX, TaskPane, taskIdFromAddress } from './TaskPane'
 
 /** locale 服务中本插件用到的那部分。 */
 interface LocaleService {
-  register(namespace: string, dicts: { zh: Record<string, string>; en: Record<string, string> }): unknown
+  register(
+    namespace: string,
+    dicts: { zh: Record<string, string>; en: Record<string, string> },
+  ): unknown
   bind(namespace: string): Translate
 }
 
@@ -34,7 +48,11 @@ interface GuideEntry {
 interface TabDefinition {
   id: string
   kind: string
-  title: () => string
+  title: (address: string) => string
+  multiple?: boolean
+  keepMounted?: boolean
+  patterns?: readonly string[]
+  priority?: 'extension' | 'builtin' | 'fallback'
   guide?: readonly GuideEntry[]
 }
 
@@ -43,18 +61,20 @@ interface SidebarRightTabsService {
   register(definition: TabDefinition): unknown
 }
 
+/** 右侧栏导航服务（只用到按资源地址打开）。 */
+interface SidebarRightService {
+  openResource(address: string, options?: { params?: unknown }): void
+}
+
 /** slots 服务。 */
 interface SlotsService {
   register(meta: Record<string, unknown>, component: ComponentType<never>): unknown
-  /** 声明感知注册：席位尚未声明时先等，声明后（含重新声明）再注册；返回解除器。 */
   inject(key: string, callback: () => unknown): () => void
 }
 
 /** 配置表单服务（由 `@deepseek-ai/dsh-client-ui-settings` 提供）。 */
 interface ConfigFormsService {
-  /** 某 Host 插件条目的共享配置表单（`scope` 交给 `SettingsFormModel`）。 */
   get(entryId: string): unknown
-  /** Host 服务其中任一命名空间时才注册；返回的 disposer 交给 `ctx.effect`。 */
   whileServed(
     namespaces: string[],
     register: (served: Set<string>) => () => void,
@@ -66,64 +86,188 @@ interface ClientContext {
   locale: LocaleService
   slots: SlotsService
   sidebarRightTabs: SidebarRightTabsService
+  sidebarRight: SidebarRightService
   configForms: ConfigFormsService
 }
 
-/** tab 类型 id，同时用作 `sidebar.right.pane.tab` 席位的 key。 */
+/** 主页 tab 类型 id，同时用作 `sidebar.right.pane.tab` 席位的 key。 */
 const TAB_ID = 'litsearch'
 
+/** 任务 tab 的类型 id / kind；正文与标题席位也按这个 key 注册。 */
+const TASK_TAB_ID = 'litsearch-task'
+
+/** 设置对话框里这一页的 section id。 */
+const SETTINGS_SECTION_ID = 'litsearch'
+
+const HEALTH_REFRESH_MS = 30_000
+
 export const name = 'dsh-plugin-litsearch'
-export const inject = ['slots', 'locale', 'sidebarRightTabs', 'configForms']
+export const inject = [
+  'slots',
+  'locale',
+  'sidebarRightTabs',
+  'sidebarRight',
+  'configForms',
+]
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, dicts), 'dsh-plugin-litsearch: dictionaries')
   const t = ctx.locale.bind(NS)
 
   ctx.effect(
-    () => ctx.sidebarRightTabs.register({
-      id: TAB_ID,
-      kind: 'litsearch',
-      title: () => t('tab.title'),
-      guide: [{
+    () =>
+      ctx.sidebarRightTabs.register({
         id: TAB_ID,
-        title: () => t('guide.title'),
-        description: () => t('guide.desc'),
-        order: 20,
-      }],
-    }),
+        kind: TAB_ID,
+        title: () => t('tab.title'),
+        guide: [
+          {
+            id: TAB_ID,
+            title: () => t('guide.title'),
+            description: () => t('guide.desc'),
+            order: 20,
+          },
+        ],
+      }),
     'dsh-plugin-litsearch: sidebar tab',
   )
 
-  // 正文：把 t 闭包进来，并把槽位透传的会话级标准 prop `inputActions` 取出来
-  // 交给面板（面板不在会话上下文时该 prop 为 undefined）。
-  const Body = (props: { inputActions?: InputActions }): ReactElement =>
-    createElement(SearchPane, { t, inputActions: props.inputActions })
+  // 一次检索任务一个资源 tab；地址稳定，重复打开只聚焦已有 tab。
+  ctx.effect(
+    () =>
+      ctx.sidebarRightTabs.register({
+        id: TASK_TAB_ID,
+        kind: TASK_TAB_ID,
+        title: () => t('taskTab.title'),
+        patterns: ['dsh-resource://litsearch-task/**'],
+        priority: 'extension',
+        keepMounted: true,
+      }),
+    'dsh-plugin-litsearch: task tab',
+  )
+
+  /** 打开 / 聚焦某任务的 tab；先把标题记进缓存，布局恢复后不靠 params 也能显示。 */
+  const openTask = (id: string, title?: string): void => {
+    const address = `${TASK_ADDRESS_PREFIX}${encodeURIComponent(id)}`
+    if (title !== undefined && title !== '') rememberTaskTitle(id, title)
+    ctx.sidebarRight.openResource(
+      address,
+      title === undefined || title === '' ? undefined : { params: { title } },
+    )
+  }
+
+  // 主页：t 闭包 + 打开任务 tab 的能力。
+  const Body = (): ReactElement =>
+    createElement(LitsearchPage, {
+      t,
+      onOpenTask: (id: string, title: string) => openTask(id, title),
+    })
 
   ctx.effect(
-    () => ctx.slots.register(
-      { name: 'sidebar.right.pane.tab', key: TAB_ID },
-      Body as ComponentType<never>,
-    ),
+    () =>
+      ctx.slots.register(
+        { name: 'sidebar.right.pane.tab', key: TAB_ID },
+        Body as ComponentType<never>,
+      ),
     'dsh-plugin-litsearch: pane body',
   )
 
-  // 插件页「配置」入口：行级配置页渲染在 `plugins.row.config` 席位，
-  // 仅当 Host 服务本插件的 settings 命名空间时才注册（key = 包名#行 id）。
-  const controller = new LitsearchCardController(ctx.configForms.get(ROW_ID))
-  ctx.effect(() => () => controller.dispose(), 'dsh-plugin-litsearch: card form')
+  type TaskPaneProps = Parameters<typeof TaskPane>[0]
+
+  const TaskBody = (props: {
+    inputActions?: InputActions
+    useTabInfo: TaskPaneProps['useTabInfo']
+  }): ReactElement =>
+    createElement(TaskPane, {
+      t,
+      useTabInfo: props.useTabInfo,
+      inputActions: props.inputActions,
+    })
+
+  /** tab 标题：按地址里的任务 id 读缓存，缺了补取一次详情。 */
+  const TaskTitle = (props: { useTabInfo: TaskPaneProps['useTabInfo'] }): ReactElement => {
+    const info = props.useTabInfo()
+    const navigation = info.tab.navigation
+    const id = taskIdFromAddress(navigation?.address || info.tab.contentId || '')
+    const params = navigation?.params as { title?: unknown } | undefined
+    const openedTitle =
+      typeof params?.title === 'string' && params.title !== '' ? params.title : undefined
+    const cached = useTaskTitle(id)
+
+    useEffect(() => {
+      if (id !== null && cached === undefined) ensureTaskTitle(id)
+    }, [id, cached])
+
+    const title = cached ?? openedTitle ?? t('taskTab.title')
+    return createElement(
+      'span',
+      { title, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+      title,
+    )
+  }
+
   ctx.effect(
-    () => ctx.configForms.whileServed([ROW_ID], () => ctx.slots.inject(
-      'plugins.row.config',
-      () => ctx.slots.register(
-        {
-          name: 'plugins.row.config',
-          key: ROW_CONFIG_KEY,
-          locale: NS,
-          inject: () => controller.inject(),
-        },
-        ConfigCard as ComponentType<never>,
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register(
+          { name: 'sidebar.right.pane.tab', key: TASK_TAB_ID },
+          TaskBody as ComponentType<never>,
+        ),
       ),
-    )),
-    'dsh-plugin-litsearch: row config card',
+    'dsh-plugin-litsearch: task body',
   )
+
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+        ctx.slots.register(
+          { name: 'sidebar.right.pane.tab.title', key: TASK_TAB_ID },
+          TaskTitle as ComponentType<never>,
+        ),
+      ),
+    'dsh-plugin-litsearch: task title',
+  )
+
+  // 设置页：只有「设置」对话框里的独立一页，仅在 Host 服务本插件命名空间时注册。
+  const controller = new LitsearchSettingsController(ctx.configForms.get(ROW_ID))
+  ctx.effect(() => () => controller.dispose(), 'dsh-plugin-litsearch: settings form')
+  ctx.effect(
+    () =>
+      ctx.configForms.whileServed([ROW_ID], () =>
+        ctx.slots.inject('settings.section', () =>
+          ctx.slots.register(
+            {
+              name: 'settings.section',
+              id: SETTINGS_SECTION_ID,
+              order: 30,
+              label: () => t('settings.nav'),
+              locale: NS,
+              inject: () => controller.inject(),
+            },
+            SettingsSection as ComponentType<never>,
+          ),
+        ),
+      ),
+    'dsh-plugin-litsearch: settings section',
+  )
+
+  // 模型任务的自动打开：首次轮询只对齐版本号，之后只打开新任务。
+  ctx.effect(
+    () =>
+      startAutoOpen({
+        open: (id, title) => openTask(id, title),
+      }),
+    'dsh-plugin-litsearch: auto open',
+  )
+
+  // 设置改动没有推送通道：定时刷新 /health，自动打开与默认值随之更新。
+  ctx.effect(() => {
+    void refreshHealth()
+    const timer = setInterval(() => {
+      void refreshHealth()
+    }, HEALTH_REFRESH_MS)
+    return () => {
+      clearInterval(timer)
+    }
+  }, 'dsh-plugin-litsearch: health')
 }

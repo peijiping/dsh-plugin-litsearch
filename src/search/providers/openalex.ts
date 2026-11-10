@@ -7,7 +7,7 @@
 
 import { fetchJson } from '../http.js'
 import { asArray, asNumber, asRecord, asString, doiUrl, normalizeDoi } from '../normalize.js'
-import type { Paper, Provider } from '../types.js'
+import type { PaperRecord, Provider } from '../types.js'
 
 const ENDPOINT = 'https://api.openalex.org/works'
 
@@ -25,7 +25,7 @@ export const openalex: Provider = {
     capabilities: { abstract: true, citationCount: true, openAccess: true, pdf: true },
   },
 
-  async search(query, options): Promise<Paper[]> {
+  async search(query, options): Promise<PaperRecord[]> {
     const params = new URLSearchParams({
       search: query,
       'per-page': String(options.limit),
@@ -54,18 +54,26 @@ export const openalex: Provider = {
   },
 }
 
-function mapWork(raw: unknown): Paper {
+function mapWork(raw: unknown): PaperRecord {
   const work = asRecord(raw)
   const primary = asRecord(work['primary_location'])
   const host = asRecord(primary['source'])
   const bestOa = asRecord(work['best_oa_location'])
+  const ids = asRecord(work['ids'])
   const doi = normalizeDoi(work['doi'])
   const openAlexId = asString(work['id'])
   const landing = asString(primary['landing_page_url'])
+  const language = asString(work['language'])
 
   return {
     source: 'openalex',
     sourceId: openAlexId,
+    ids: {
+      doi,
+      pmid: normalizeId(ids['pmid']),
+      pmcid: normalizeId(ids['pmcid']),
+      arxivId: '',
+    },
     title: asString(work['title']) || asString(work['display_name']),
     authors: asArray(work['authorships'])
       .map((entry) => asString(asRecord(asRecord(entry)['author'])['display_name']))
@@ -75,11 +83,17 @@ function mapWork(raw: unknown): Paper {
     doi,
     url: landing || doiUrl(doi) || openAlexId,
     abstract: abstractFromInverted(work['abstract_inverted_index']),
+    ...(language === '' ? {} : { language }),
     citedBy: asNumber(work['cited_by_count']),
     openAccess: asRecord(work['open_access'])['is_oa'] === true,
     pdfUrl: asString(bestOa['pdf_url']),
     type: asString(work['type']),
   }
+}
+
+/** OpenAlex 的 ids 是完整 URL，取末段作为裸 id。 */
+function normalizeId(value: unknown): string {
+  return asString(value).replace(/\/+$/u, '').split('/').pop() ?? ''
 }
 
 /** OpenAlex 的摘要是「词 → 位置数组」，按位置还原成原文。 */

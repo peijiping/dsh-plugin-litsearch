@@ -1,10 +1,21 @@
 /**
- * Client 侧调 Host 只读端点（同源 fetch，前缀见 search/config.ROUTE_PREFIX）。
+ * Client 侧调 Host 端点（同源 fetch，前缀与 Host 的 ROUTE_PREFIX 对应）。
  *
- * 响应信封由 Host 产出：`{ok:true,data}` / `{ok:false,error}`。
+ * 响应信封由 Host 产出：`{ok:true,data}` / `{ok:false,error}`。写操作必须带
+ * 自定义标识头 + JSON content-type，Host 只认这种「非简单请求」。
  */
 
-import type { SearchResult, SourceId } from '../search/types'
+import { WRITE_HEADER } from '../search/config'
+import type {
+  EventsPage,
+  HealthInfo,
+  ResultsPage,
+  SortMode,
+  SourceId,
+  TaskDetail,
+  TaskLanguage,
+  TaskSummary,
+} from '../search/types'
 
 const BASE = '/dsh-litsearch/api'
 
@@ -19,42 +30,131 @@ export class ApiFailure extends Error {
   }
 }
 
-export interface SearchQuery {
-  q: string
-  sources?: SourceId[]
-  limit?: number
-  yearFrom?: number
-  yearTo?: number
-  openAccessOnly?: boolean
-  signal?: AbortSignal
-}
+type Envelope<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: string; message: string } }
 
-export async function search(query: SearchQuery): Promise<SearchResult> {
-  const params = new URLSearchParams({ q: query.q })
-  if (query.sources !== undefined && query.sources.length > 0) {
-    params.set('sources', query.sources.join(','))
-  }
-  if (query.limit !== undefined) params.set('limit', String(query.limit))
-  if (query.yearFrom !== undefined) params.set('yearFrom', String(query.yearFrom))
-  if (query.yearTo !== undefined) params.set('yearTo', String(query.yearTo))
-  if (query.openAccessOnly === true) params.set('openAccessOnly', '1')
-
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
-    res = await fetch(`${BASE}/search?${params.toString()}`, { signal: query.signal })
+    res = await fetch(`${BASE}${path}`, init)
   } catch (error) {
-    if (query.signal?.aborted === true) throw new ApiFailure('network_error', '请求已取消')
+    if (init?.signal?.aborted === true) throw new ApiFailure('network_error', '请求已取消')
     const message = error instanceof Error ? error.message : String(error)
     throw new ApiFailure('network_error', `无法访问 Host 端点：${message}`)
   }
 
-  const payload = (await res.json().catch(() => null)) as
-    | { ok: true; data: SearchResult }
-    | { ok: false; error: { code: string; message: string } }
-    | null
+  const payload = (await res.json().catch(() => null)) as Envelope<T> | null
   if (payload === null) {
     throw new ApiFailure('internal_error', `Host 返回了非 JSON 响应（HTTP ${res.status}）`)
   }
   if (!payload.ok) throw new ApiFailure(payload.error.code, payload.error.message)
   return payload.data
+}
+
+function writeInit(method: 'POST' | 'PATCH' | 'DELETE', body?: unknown): RequestInit {
+  return {
+    method,
+    headers: {
+      'content-type': 'application/json',
+      [WRITE_HEADER]: '1',
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }
+}
+
+function taskPath(id: string, suffix = ''): string {
+  return `/tasks/${encodeURIComponent(id)}${suffix}`
+}
+
+export interface CreateTaskBody {
+  query: string
+  title?: string
+  sources?: SourceId[]
+  pageSize?: number
+  yearFrom?: number
+  yearTo?: number
+  openAccessOnly?: boolean
+  language?: TaskLanguage
+  sort?: SortMode
+}
+
+export interface TaskPatchBody {
+  title?: string
+  notes?: string
+  pinned?: boolean
+  rev?: number
+}
+
+export interface ResultsQuery {
+  offset?: number
+  limit?: number
+  sort?: SortMode
+  source?: SourceId
+  yearFrom?: number
+  yearTo?: number
+  openAccessOnly?: boolean
+  q?: string
+  screening?: 'unread' | 'read' | 'included' | 'excluded'
+}
+
+export function fetchHealth(signal?: AbortSignal): Promise<HealthInfo> {
+  return request<HealthInfo>('/health', { signal })
+}
+
+export function fetchEvents(sinceRev: number, signal?: AbortSignal): Promise<EventsPage> {
+  return request<EventsPage>(`/events?sinceRev=${encodeURIComponent(String(sinceRev))}`, { signal })
+}
+
+export function listTasks(signal?: AbortSignal): Promise<TaskSummary[]> {
+  return request<TaskSummary[]>('/tasks', { signal })
+}
+
+export function fetchTask(id: string, signal?: AbortSignal): Promise<TaskDetail> {
+  return request<TaskDetail>(taskPath(id), { signal })
+}
+
+export function createTask(body: CreateTaskBody, signal?: AbortSignal): Promise<TaskDetail> {
+  return request<TaskDetail>('/tasks', { ...writeInit('POST', body), signal })
+}
+
+export function updateTask(
+  id: string,
+  patch: TaskPatchBody,
+  signal?: AbortSignal,
+): Promise<TaskDetail> {
+  return request<TaskDetail>(taskPath(id), { ...writeInit('PATCH', patch), signal })
+}
+
+export function deleteTask(id: string): Promise<{ id: string }> {
+  return request<{ id: string }>(taskPath(id), writeInit('DELETE'))
+}
+
+export function runTask(id: string): Promise<TaskDetail> {
+  return request<TaskDetail>(taskPath(id, '/run'), writeInit('POST', {}))
+}
+
+export function cancelTask(id: string): Promise<TaskDetail> {
+  return request<TaskDetail>(taskPath(id, '/cancel'), writeInit('POST', {}))
+}
+
+export function fetchResults(
+  id: string,
+  query: ResultsQuery = {},
+  signal?: AbortSignal,
+): Promise<ResultsPage> {
+  const params = new URLSearchParams()
+  if (query.offset !== undefined) params.set('offset', String(query.offset))
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  if (query.sort !== undefined) params.set('sort', query.sort)
+  if (query.source !== undefined) params.set('source', query.source)
+  if (query.yearFrom !== undefined) params.set('yearFrom', String(query.yearFrom))
+  if (query.yearTo !== undefined) params.set('yearTo', String(query.yearTo))
+  if (query.openAccessOnly === true) params.set('openAccessOnly', '1')
+  if (query.q !== undefined && query.q !== '') params.set('q', query.q)
+  if (query.screening !== undefined) params.set('screening', query.screening)
+  const suffix = params.toString()
+  return request<ResultsPage>(taskPath(id, `/results${suffix === '' ? '' : `?${suffix}`}`), {
+    signal,
+  })
 }

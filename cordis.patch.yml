@@ -4,7 +4,7 @@
 #   （OpenAlex、Crossref…），再以 `literature_*` 名称注册进 dsh 工具表。
 #   因此不需要插入任何 MCP client 行。
 # - 人侧检索界面由 Client 半注册右侧栏 tab，并通过本插件在宿主 web server
-#   上注册的 `/dsh-litsearch/api/*` 只读端点取数。
+#   上注册的 `/dsh-litsearch/api/*` 端点读写任务。
 - insert:
     - id: dsh-plugin-litsearch
       name: dsh-plugin-litsearch

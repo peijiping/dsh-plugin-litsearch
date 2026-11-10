@@ -16,7 +16,7 @@ import {
   normalizeDoi,
   stripTags,
 } from '../normalize.js'
-import type { Paper, Provider } from '../types.js'
+import type { PaperRecord, Provider } from '../types.js'
 
 const ENDPOINT = 'https://api.crossref.org/works'
 
@@ -49,7 +49,7 @@ export const crossref: Provider = {
     capabilities: { abstract: true, citationCount: true, openAccess: false, pdf: true },
   },
 
-  async search(query, options): Promise<Paper[]> {
+  async search(query, options): Promise<PaperRecord[]> {
     const params = new URLSearchParams({
       query,
       rows: String(options.limit),
@@ -77,7 +77,7 @@ export const crossref: Provider = {
   },
 }
 
-function mapItem(raw: unknown): Paper {
+function mapItem(raw: unknown): PaperRecord {
   const item = asRecord(raw)
   const doi = normalizeDoi(item['DOI'])
   const links = asArray(item['link']).map(asRecord)
@@ -86,10 +86,12 @@ function mapItem(raw: unknown): Paper {
     .map((entry) => asString(asRecord(entry)['URL']))
     .join(' ')
   const issued = asArray(asRecord(item['issued'])['date-parts'])[0]
+  const language = asString(item['language'])
 
   return {
     source: 'crossref',
     sourceId: doi,
+    ids: { doi, pmid: '', pmcid: '', arxivId: '' },
     title: stripTags(firstString(item['title'])),
     authors: asArray(item['author'])
       .map(authorName)
@@ -99,6 +101,7 @@ function mapItem(raw: unknown): Paper {
     doi,
     url: asString(item['URL']) || doiUrl(doi),
     abstract: stripTags(item['abstract']),
+    ...(language === '' ? {} : { language }),
     citedBy: asNumber(item['is-referenced-by-count']),
     // Crossref 没有统一的 OA 标志，这里按许可证 URL 粗略判断。
     openAccess: /creativecommons|open\s*access/iu.test(licenseText),
