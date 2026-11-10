@@ -225,6 +225,41 @@ export interface TaskResult {
   fetchedAt?: string
 }
 
+/**
+ * 任务内一次检索（一轮）的元数据快照。
+ *
+ * 只留「这一轮用什么条件、什么时候跑、跑出多少、结果如何」，**不保存文献列表**：
+ * 当前结果永远是最新一轮的 `result.papers`，人工标注按 paperId 跨轮保留。
+ * 历史轮次用于时间轴回看与「回填条件重跑」。
+ */
+export interface SearchRound {
+  /** 任务内稳定 id，形如 `r3`。 */
+  id: string
+  /** 从 1 开始递增的序号（轮次被裁剪后仍保持递增，不复用旧号）。 */
+  index: number
+  createdAt: string
+  finishedAt?: string
+  /** 本轮发起方：模型工具 / 右侧栏面板。 */
+  origin: TaskOrigin
+  /** 本轮检索条件快照，深拷贝，与后续轮次的修改完全隔离。 */
+  conditions: TaskConditions
+  /** 运行中为空，结束后回填任务状态。 */
+  status?: TaskStatus
+  /** 本轮命中统计快照。 */
+  stats?: {
+    rawHits: number
+    deduped: number
+    loaded: number
+    perQuery: Record<string, number>
+  }
+  /** 因遵守上游限流而跳过的数据源数量。 */
+  skippedSources?: number
+  /** 真实失败的数据源数量。 */
+  failedSources?: number
+  /** 取消 / 异常原因。 */
+  error?: string
+}
+
 export interface SearchTask {
   id: string
   title: string
@@ -248,6 +283,11 @@ export interface SearchTask {
   result: TaskResult
   /** paperId → 筛选状态。 */
   states: Record<string, PaperState>
+  /**
+   * 任务内检索轮次（按时间升序，只保留最近若干轮）。
+   * 旧版本落盘的任务没有该字段，读取时统一按 `[]` 兼容。
+   */
+  rounds: SearchRound[]
 }
 
 /** 历史列表与事件推送用的任务摘要。 */
@@ -263,6 +303,8 @@ export interface TaskSummary {
   error?: string
   stats: TaskStats
   progress?: TaskProgress
+  /** 已完成 + 进行中的轮次数（旧数据兼容为 0）。 */
+  roundCount: number
 }
 
 /** 任务详情（不含结果正文，结果走分页端点）。 */
@@ -270,6 +312,8 @@ export interface TaskDetail extends TaskSummary {
   conditions: TaskConditions
   notes: string
   groups: TaskGroup[]
+  /** 轮次元数据，供时间轴展示与条件回填；按时间升序。 */
+  rounds: SearchRound[]
   /** paperId → 筛读状态；只含有过人工操作或继承的条目。 */
   states: Record<string, PaperState>
   /** 建立任务时继承筛读状态的来源任务。 */

@@ -638,6 +638,26 @@ async function handleTasks(
     return
   }
 
+  if (action === 'rounds') {
+    if (req.method !== 'GET') {
+      fail(res, 405, 'bad_request', 'rounds 仅支持 GET')
+      return
+    }
+    ok(res, await service.getRounds(id))
+    return
+  }
+
+  if (action === 'activate') {
+    // 用户从任务列表点开某任务 = 进入该任务，之后的模型检索默认落在这里。
+    if (req.method !== 'POST') {
+      fail(res, 405, 'bad_request', 'activate 仅支持 POST')
+      return
+    }
+    const task = await service.activate(id)
+    ok(res, await service.getDetail(task.id))
+    return
+  }
+
   if (action === 'annotate') {
     if (req.method !== 'POST') {
       fail(res, 405, 'bad_request', 'annotate 仅支持 POST')
@@ -739,7 +759,9 @@ async function handleTasks(
     const mode = readEnum(body['mode'], 'mode', ['new', 'more'] as const) ?? 'new'
     await service.get(id)
     if (service.isRunning(id)) throw new SearchError('conflict', '任务正在运行')
-    void service.run(id, mode).catch((error: unknown) => {
+    // 面板里主动重跑 = 用户正在这个任务里工作，把它设为「当前任务」。
+    service.setCurrentTask(id)
+    void service.run(id, mode, 'panel').catch((error: unknown) => {
       console.warn('[dsh-plugin-litsearch] 任务执行失败：', error)
     })
     ok(res, await service.getDetail(id), 202)

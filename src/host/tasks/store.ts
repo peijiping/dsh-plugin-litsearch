@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 
 import { MAX_ABSTRACT_CHARS } from '../../search/config.js'
 import type { Paper, SearchTask, TaskSummary } from '../../search/types.js'
-import { toSummary } from './summary.js'
+import { cloneRound, roundsOf, toSummary, trimRounds } from './summary.js'
 
 const INDEX_VERSION = 1
 
@@ -83,6 +83,8 @@ export class TaskStore {
         await this.remove(id)
         return undefined
       }
+      // 旧版本任务文件没有 rounds；统一补齐并裁掉超限轮次，避免历史无限增长。
+      parsed.task.rounds = trimRounds(roundsOf(parsed.task))
       this.cache.set(id, parsed.task)
       return parsed.task
     } catch {
@@ -225,6 +227,8 @@ function truncateForDisk(task: SearchTask): SearchTask {
       screening: { ...task.stats.screening },
     },
     states: { ...task.states },
+    // 轮次只记元数据；显式深拷贝，避免与内存任务共享条件引用。
+    rounds: trimRounds(roundsOf(task)).map(cloneRound),
     result: {
       ...task.result,
       sources: task.result.sources.map((source) => ({ ...source })),

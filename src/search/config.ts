@@ -44,6 +44,17 @@ export const DEFAULT_RETENTION_COUNT = 120
 /** 单任务结果上限。 */
 export const DEFAULT_TASK_MAX_PAPERS = 1500
 
+/** 单任务保留的检索轮数上限；只记元数据，超出后淘汰最旧的轮次。 */
+export const DEFAULT_TASK_MAX_ROUNDS = 30
+
+/**
+ * Host 侧「当前任务」记忆有效期（毫秒）。
+ *
+ * 工具执行上下文拿不到会话 id，只能用进程内最近使用的任务做降级；
+ * 超过该时长没有再使用就自动失效，避免隔了很久的新主题被误并进旧任务。
+ */
+export const CURRENT_TASK_TTL_MS = 15 * 60_000
+
 /** 各源默认最小请求间隔（毫秒）；PubMed/S2/arXiv 可由设置覆盖。 */
 export const DEFAULT_PUBMED_INTERVAL_MS = 350
 export const DEFAULT_S2_INTERVAL_MS = 3000

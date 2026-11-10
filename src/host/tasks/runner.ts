@@ -6,7 +6,7 @@
  * 每个上游请求；已拿到的结果保留，状态标 `canceled`。
  */
 
-import { MAX_LIMIT, getSettings } from '../../search/config.js'
+import { DEFAULT_TASK_MAX_ROUNDS, MAX_LIMIT, getSettings } from '../../search/config.js'
 import { searchSources } from '../../search/aggregate.js'
 import { mergeHits, type RankedHit } from '../../search/identity.js'
 import type {
@@ -16,7 +16,9 @@ import type {
   SourceStatus,
   TaskConditions,
   TaskLanguage,
+  TaskOrigin,
 } from '../../search/types.js'
+import { finishRound, startRound } from './rounds.js'
 import { countScreening, pruneStates } from './states.js'
 
 export interface RunnerHooks {
@@ -34,8 +36,16 @@ class RunCanceled extends Error {
 export class TaskRunner {
   private readonly controllers = new Map<string, AbortController>()
 
+  /** 正在执行的那一轮的完成 Promise，供「等待上一轮结束」使用。 */
+  private readonly running = new Map<string, Promise<void>>()
+
   isRunning(id: string): boolean {
     return this.controllers.has(id)
+  }
+
+  /** 返回当前这一轮的完成 Promise；空闲时立即 resolve。 */
+  wait(id: string): Promise<void> {
+    return this.running.get(id) ?? Promise.resolve()
   }
 
   /** 中止运行；返回是否确实有任务在跑。 */
@@ -50,24 +60,34 @@ export class TaskRunner {
     for (const controller of this.controllers.values()) controller.abort()
   }
 
-  /** 启动一次执行；controller 同步登记，因此调用方返回时 `isRunning` 已为 true。 */
-  start(task: SearchTask, hooks: RunnerHooks): Promise<void> {
+  /**
+   * 启动一次执行（= 任务内新开一轮）；controller 同步登记，因此调用方返回时
+   * `isRunning` 已为 true。`origin` 记录这一轮是谁发起的，用于历史时间轴。
+   */
+  start(task: SearchTask, hooks: RunnerHooks, origin: TaskOrigin = task.origin): Promise<void> {
     const controller = new AbortController()
     this.controllers.set(task.id, controller)
-    return this.execute(task, hooks, controller).finally(() => {
+    const done = this.execute(task, hooks, controller, origin).finally(() => {
       this.controllers.delete(task.id)
+      this.running.delete(task.id)
     })
+    this.running.set(task.id, done)
+    return done
   }
 
   private async execute(
     task: SearchTask,
     hooks: RunnerHooks,
     controller: AbortController,
+    origin: TaskOrigin,
   ): Promise<void> {
     const queries = task.conditions.queries.filter(
       (query) => query.enabled && query.text.trim() !== '',
     )
     if (queries.length === 0) throw new Error('没有启用的检索式')
+
+    // 开跑前先落一条轮次快照：条件是深拷贝，之后改条件不会影响历史。
+    const round = startRound(task, origin, DEFAULT_TASK_MAX_ROUNDS)
 
     task.status = 'running'
     task.error = undefined
@@ -178,6 +198,8 @@ export class TaskRunner {
       task.stats.screening = countScreening(task.result.papers, task.states)
       task.progress = undefined
     } finally {
+      // 无论成功 / 取消 / 异常都回填本轮元数据，时间轴不会留下「永远运行中」的轮次。
+      finishRound(round, task)
       touch(task, hooks)
       await hooks.persist(task)
     }

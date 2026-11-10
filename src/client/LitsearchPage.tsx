@@ -14,12 +14,16 @@ import type { SourceId, TaskSummary } from '../search/types'
 import { SOURCE_IDS } from '../search/types'
 import { createTask, deleteTask, listTasks, updateTask } from './api'
 import {
+  forgetTask,
   rememberTaskTitle,
   removePendingTask,
   usePendingTasks,
 } from './autoOpen'
 import { useHealth } from './health'
+import { IconButton, TaskListIcon } from './icons'
 import { tpl, type Translate } from './locales'
+import { TaskListDialog } from './TaskListDialog'
+import { notifyTaskListChanged, useTaskListVersion } from './taskListStore'
 import { newQuery, QueryEditor, toQueryBodies, type QueryDraft } from './QueryEditor'
 import { sourceSyntaxTitle, SyntaxHint } from './SyntaxHint'
 import {
@@ -51,6 +55,7 @@ function formatDate(value: string): string {
 export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   const health = useHealth()
   const pending = usePendingTasks()
+  const listVersion = useTaskListVersion()
 
   const [queryInputs, setQueryInputs] = useState<QueryDraft[]>([newQuery()])
   const [selected, setSelected] = useState<SourceId[]>([...SOURCE_IDS])
@@ -58,6 +63,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showTaskList, setShowTaskList] = useState(false)
   const initialized = useRef(false)
 
   // 默认源来自 /health；用户手动改过之后不再覆盖。
@@ -80,11 +86,12 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
     }
   }, [])
 
+  // 列表版本变化 = 别的 tab 里新建 / 改名 / 删除了任务，重拉一次保持同步。
   useEffect(() => {
     const controller = new AbortController()
     void loadHistory(controller.signal)
     return () => controller.abort()
-  }, [loadHistory])
+  }, [loadHistory, listVersion])
 
   const toggleSource = (id: SourceId): void => {
     initialized.current = true
@@ -111,6 +118,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
       rememberTaskTitle(detail.id, detail.title)
       onOpenTask(detail.id, detail.title)
       setQueryInputs([newQuery()])
+      notifyTaskListChanged()
       await loadHistory()
     } catch (err) {
       setError(errorMessage(err))
@@ -136,6 +144,8 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   const remove = async (id: string): Promise<void> => {
     try {
       await deleteTask(id)
+      forgetTask(id)
+      notifyTaskListChanged()
       await loadHistory()
     } catch (err) {
       setError(errorMessage(err))
@@ -145,6 +155,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   const togglePin = async (task: TaskSummary): Promise<void> => {
     try {
       await updateTask(task.id, { pinned: !task.pinned })
+      notifyTaskListChanged()
       await loadHistory()
     } catch (err) {
       setError(errorMessage(err))
@@ -163,6 +174,12 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
 
   return (
     <div style={panelStyle}>
+      <div style={pageHeaderStyle}>
+        <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.72 }}>{t('tab.title')}</span>
+        <IconButton label={t('taskList.open')} onClick={() => setShowTaskList(true)}>
+          <TaskListIcon />
+        </IconButton>
+      </div>
       <form
         style={searchFormStyle}
         onSubmit={(event) => {
@@ -290,9 +307,23 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
           </ul>
         )}
       </section>
+
+      <TaskListDialog
+        t={t}
+        open={showTaskList}
+        onClose={() => setShowTaskList(false)}
+        onOpenTask={onOpenTask}
+      />
     </div>
   )
 }
+
+const pageHeaderStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+} as const
 
 const searchFormStyle = {
   ...formStyle,

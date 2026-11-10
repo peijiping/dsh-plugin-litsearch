@@ -9,7 +9,12 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { MAX_LIMIT, PLUGIN_VERSION, getSettings } from '../../search/config.js'
+import {
+  CURRENT_TASK_TTL_MS,
+  MAX_LIMIT,
+  PLUGIN_VERSION,
+  getSettings,
+} from '../../search/config.js'
 import { SearchError } from '../../search/errors.js'
 import { cooldownUntil, sourceHealthList } from '../../search/health.js'
 import { PROVIDER_INFOS } from '../../search/providers/index.js'
@@ -35,6 +40,7 @@ import type {
   ProbeResult,
   QueryBlock,
   ResultsPage,
+  SearchRound,
   SearchTask,
   SortMode,
   SourceId,
@@ -69,7 +75,7 @@ import { TaskRunner } from './runner.js'
 import { computeStats } from './stats.js'
 import { applyAnnotations, countScreening, emptyState, normalizeGroups } from './states.js'
 import { TaskStore } from './store.js'
-import { toDetail, toSummary } from './summary.js'
+import { cloneRound, roundsOf, toDetail, toSummary } from './summary.js'
 
 const MAX_QUERIES = 20
 const MAX_TITLE = 120
@@ -140,6 +146,19 @@ export class TaskService {
   private readonly events = new TaskEvents()
 
   private readonly runner = new TaskRunner()
+
+  /**
+   * 进程内「当前任务」。
+   *
+   * 工具执行上下文没有会话 id（已核实 @deepseek-ai/dsh-tools 的
+   * ToolExecutionInput），只能用「最近使用的任务 + TTL」做降级：同一主题
+   * 的多次检索默认落在同一个任务里，从而从根上避免重复开 tab。
+   * 跨会话误并的风险由 TTL、工具返回里自报任务名、以及模型可显式
+   * `newTask` / `taskId` 覆盖来缓解。
+   */
+  private currentTaskId: string | undefined
+
+  private currentTaskAt = 0
 
   constructor() {
     this.ready = this.store
@@ -217,11 +236,76 @@ export class TaskService {
     await this.ready
     const task = this.store.cached(id) ?? (await this.store.loadTask(id))
     if (task === undefined) throw new SearchError('not_found', `任务不存在：${id}`)
+    // 旧版本落盘的任务没有 rounds，所有读路径统一补成数组。
+    if (!Array.isArray(task.rounds)) task.rounds = []
     return task
   }
 
   async getDetail(id: string): Promise<TaskDetail> {
     return toDetail(await this.get(id))
+  }
+
+  /** 任务内轮次历史（时间升序、深拷贝）。 */
+  async getRounds(id: string): Promise<SearchRound[]> {
+    return roundsOf(await this.get(id)).map(cloneRound)
+  }
+
+  /** 当前任务（TTL 内且仍存在）；模型不指定 taskId 时默认复用它。 */
+  async currentTask(): Promise<SearchTask | undefined> {
+    if (this.currentTaskId === undefined) return undefined
+    if (Date.now() - this.currentTaskAt > CURRENT_TASK_TTL_MS) {
+      this.currentTaskId = undefined
+      return undefined
+    }
+    const task = await this.tryGet(this.currentTaskId)
+    if (task === undefined) {
+      this.currentTaskId = undefined
+      return undefined
+    }
+    return task
+  }
+
+  /** 记住最近使用的任务（模型新建/复用后由工具层调用）。 */
+  setCurrentTask(id: string): void {
+    this.currentTaskId = id
+    this.currentTaskAt = Date.now()
+  }
+
+  /** 用户从任务列表点开某任务 = 进入该任务，之后的模型检索默认落在这里。 */
+  async activate(id: string): Promise<SearchTask> {
+    const task = await this.get(id)
+    this.setCurrentTask(task.id)
+    return task
+  }
+
+  /** 等待该任务当前这一轮结束；返回是否确实已空闲。 */
+  async waitUntilIdle(id: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+    if (!this.runner.isRunning(id)) return true
+    if (signal?.aborted === true) return false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let onAbort: (() => void) | undefined
+    try {
+      await Promise.race([
+        this.runner.wait(id),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, Math.max(0, timeoutMs))
+        }),
+        ...(signal === undefined
+          ? []
+          : [
+              new Promise<void>((resolve) => {
+                onAbort = () => resolve()
+                signal.addEventListener('abort', onAbort, { once: true })
+              }),
+            ]),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+      if (signal !== undefined && onAbort !== undefined) {
+        signal.removeEventListener('abort', onAbort)
+      }
+    }
+    return !this.runner.isRunning(id)
   }
 
   async create(input: CreateTaskInput): Promise<SearchTask> {
@@ -251,6 +335,7 @@ export class TaskService {
         screening: { unread: 0, read: 0, included: 0, excluded: 0 },
       },
       result: { papers: [], sources: [] },
+      rounds: [],
       states: inherited === undefined ? {} : inheritStates(inherited),
       ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
       ...(input.fromTaskId === undefined ? {} : { fromTaskId: input.fromTaskId }),
@@ -309,12 +394,39 @@ export class TaskService {
     this.runner.cancel(id)
     await this.store.remove(task.id)
     this.events.remove(task.id)
+    if (this.currentTaskId === task.id) this.currentTaskId = undefined
   }
 
-  /** 启动一次执行；返回的 Promise 在运行结束后 resolve 为最新任务。 */
-  async run(id: string, mode: 'new' | 'more' = 'new'): Promise<SearchTask> {
+  /** 启动一次执行（任务内新一轮）；返回的 Promise 在运行结束后 resolve 为最新任务。 */
+  async run(
+    id: string,
+    mode: 'new' | 'more' = 'new',
+    origin: TaskOrigin = 'panel',
+  ): Promise<SearchTask> {
     const task = await this.get(id)
-    return this.begin(task, mode)
+    return this.begin(task, mode, origin)
+  }
+
+  /**
+   * 在同一任务内开新一轮：全量替换检索条件后执行，**不新建任务、不新开 tab**。
+   *
+   * 与 `update` 的增量 patch 不同，这里按 CreateTaskInput 重算条件，缺省项回落到
+   * 当前设置而不是沿用旧值，保证「提交完整新条件」的语义明确。
+   */
+  async rerun(id: string, input: CreateTaskInput, origin: TaskOrigin): Promise<SearchTask> {
+    const task = await this.get(id)
+    if (this.runner.isRunning(id)) {
+      throw new SearchError('conflict', '任务正在运行，请等待当前轮次结束')
+    }
+    const nextTitle = input.title?.trim() ?? ''
+    if (nextTitle !== '') task.title = nextTitle.slice(0, MAX_TITLE)
+    task.conditions = this.readConditions(input, getSettings())
+    task.rev += 1
+    task.updatedAt = new Date().toISOString()
+    await this.store.save(task)
+    this.events.publish(toSummary(task))
+    this.setCurrentTask(task.id)
+    return this.begin(task, 'new', origin)
   }
 
   async cancel(id: string): Promise<SearchTask> {
@@ -723,7 +835,11 @@ export class TaskService {
     void this.store.flush()
   }
 
-  private begin(task: SearchTask, mode: 'new' | 'more'): Promise<SearchTask> {
+  private begin(
+    task: SearchTask,
+    mode: 'new' | 'more',
+    origin: TaskOrigin = task.origin,
+  ): Promise<SearchTask> {
     if (this.runner.isRunning(task.id)) {
       throw new SearchError('conflict', '任务正在运行')
     }
@@ -735,10 +851,14 @@ export class TaskService {
     )
     if (queries.length === 0) throw new SearchError('bad_request', '没有启用的检索式')
 
-    const done = this.runner.start(task, {
-      persist: (current) => this.store.save(current),
-      publish: (current) => this.events.publish(toSummary(current)),
-    })
+    const done = this.runner.start(
+      task,
+      {
+        persist: (current) => this.store.save(current),
+        publish: (current) => this.events.publish(toSummary(current)),
+      },
+      origin,
+    )
     return done.then(() => {
       if (getSettings().autoDownloadPdf) {
         void this.autoDownloadPdfs(task).catch((error: unknown) => {

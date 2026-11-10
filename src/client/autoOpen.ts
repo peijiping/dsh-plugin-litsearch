@@ -4,7 +4,9 @@
  * Host→Client 没有广播通道，这里按 `sinceRev` 轮询 `/events`：
  * - 首次轮询只对齐版本号，不把宿主启动前的历史任务全打开；
  * - 之后只对 `origin === 'model'` 的新任务调 `openResource`；
- * - `maxTaskTabs` 已满时不打开，改放进「待打开」队列，由主面板横幅提示；
+ * - 同一轮（2 分钟）最多自动打开 1 个 tab，其余进「待打开」队列，由主面板横幅提示；
+ * - `maxTaskTabs` 按「最近真的打开过的 tab」计数（带 30 分钟有效期），不再用
+ *   累计历史集合长度，关掉/删掉的任务不会永久占着名额；
  * - 宿主重启（`reset`）时重新对齐，不做任何打开动作。
  */
 
@@ -160,18 +162,91 @@ interface AutoOpenOptions {
   open(id: string, title: string): void
 }
 
-let opened: string[] = readOpened()
-
-function readOpened(): string[] {
-  const stored = readJson<unknown>(OPENED_KEY, [])
-  return Array.isArray(stored) ? stored.filter((entry): entry is string => typeof entry === 'string') : []
+/** 自动打开过的任务记录：id + 首次处理时间 + 是否真的开过 tab。 */
+interface OpenedEntry {
+  id: string
+  at: number
+  tab?: boolean
 }
 
-function rememberOpened(id: string): void {
-  if (opened.includes(id)) return
-  opened = [...opened, id]
+/** 一个 tab 名额的有效期；宿主没有「查询/关闭 tab」的 API，过期自动释放名额。 */
+const TAB_WINDOW_MS = 30 * 60_000
+/** 同一轮对话窗口：这段时间内最多自动打开 1 个 tab，其余进待打开队列。 */
+const ROUND_WINDOW_MS = 2 * 60_000
+
+let opened: OpenedEntry[] = readOpened()
+
+function readOpened(): OpenedEntry[] {
+  const stored = readJson<unknown>(OPENED_KEY, [])
+  if (!Array.isArray(stored)) return []
+  const result: OpenedEntry[] = []
+  for (const item of stored) {
+    // 旧版本存的是 string[]（累计历史）：当成「早就处理过」，不占 tab 名额。
+    if (typeof item === 'string') {
+      result.push({ id: item, at: 0 })
+      continue
+    }
+    if (item === null || typeof item !== 'object') continue
+    const record = item as { id?: unknown; at?: unknown; tab?: unknown }
+    if (typeof record.id !== 'string') continue
+    result.push({
+      id: record.id,
+      at: typeof record.at === 'number' ? record.at : 0,
+      ...(record.tab === true ? { tab: true } : {}),
+    })
+  }
+  return result
+}
+
+/**
+ * 记录「已处理过这个模型任务」。
+ *
+ * `openedTab=false` 表示这次没打开、只进了待打开队列；依然要记下来，否则
+ * 下一次事件轮询会反复尝试，窗口一过就突然弹出一排 tab。
+ */
+function rememberOpened(id: string, openedTab: boolean): void {
+  opened = [
+    ...opened.filter((entry) => entry.id !== id),
+    {
+      id,
+      at: Date.now(),
+      ...(openedTab ? { tab: true } : {}),
+    },
+  ]
   if (opened.length > MAX_REMEMBERED) opened = opened.slice(opened.length - MAX_REMEMBERED)
   writeJson(OPENED_KEY, opened)
+}
+
+/** 当前仍占着名额的 tab 数（只数真的打开过、且未过期的记录）。 */
+function activeTabCount(): number {
+  const cutoff = Date.now() - TAB_WINDOW_MS
+  return opened.filter((entry) => entry.tab === true && entry.at >= cutoff).length
+}
+
+function lastAutoOpenAt(): number {
+  const cutoff = Date.now() - TAB_WINDOW_MS
+  let last = 0
+  for (const entry of opened) {
+    if (entry.tab === true && entry.at >= cutoff && entry.at > last) last = entry.at
+  }
+  return last
+}
+
+/**
+ * 任务被删除后清掉本地缓存：否则它会一直占着自动打开的计数、留在待打开
+ * 队列里，标题缓存也会显示一个已经不存在的任务名。
+ */
+export function forgetTask(id: string): void {
+  if (opened.some((entry) => entry.id === id)) {
+    opened = opened.filter((entry) => entry.id !== id)
+    writeJson(OPENED_KEY, opened)
+  }
+  removePendingTask(id)
+  if (titles[id] !== undefined) {
+    delete titles[id]
+    writeJson(TITLES_KEY, titles)
+    for (const listener of titleListeners) listener()
+  }
 }
 
 /**
@@ -213,13 +288,19 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
 
     for (const task of page.tasks) {
       if (task.origin !== 'model') continue
-      if (opened.includes(task.id)) continue
-      rememberOpened(task.id)
+      // opened 是「已处理」集合，只用来去重，绝不再拿累计长度当当前 tab 数。
+      if (opened.some((entry) => entry.id === task.id)) continue
       rememberTaskTitle(task.id, task.title)
-      if (opened.length > maxTabs) {
+
+      const tooManyTabs = activeTabCount() >= maxTabs
+      const sameRound = Date.now() - lastAutoOpenAt() < ROUND_WINDOW_MS
+      if (tooManyTabs || sameRound) {
+        // 兜底：模型万一没复用任务，一轮也只弹一个 tab，其余交给用户从横幅打开。
+        rememberOpened(task.id, false)
         enqueuePending(task)
         continue
       }
+      rememberOpened(task.id, true)
       options.open(task.id, task.title)
     }
   }

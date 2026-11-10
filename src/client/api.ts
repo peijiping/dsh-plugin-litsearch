@@ -20,6 +20,7 @@ import type {
   PdfDownloadResult,
   ProbeResult,
   ResultsPage,
+  SearchRound,
   SortMode,
   SourceId,
   StorageProbeResult,
@@ -175,6 +176,16 @@ export function updateTask(
 
 export function deleteTask(id: string): Promise<{ id: string }> {
   return request<{ id: string }>(taskPath(id), writeInit('DELETE'))
+}
+
+/** 打开历史时间轴时刷新轮次（详情里也带 rounds，这里用于弹窗内独立刷新）。 */
+export function fetchRounds(id: string, signal?: AbortSignal): Promise<SearchRound[]> {
+  return request<SearchRound[]>(taskPath(id, '/rounds'), { signal })
+}
+
+/** 用户从任务列表点开某任务 = 进入该任务，之后的模型检索默认落在这里。 */
+export function activateTask(id: string): Promise<TaskDetail> {
+  return request<TaskDetail>(taskPath(id, '/activate'), writeInit('POST', {}))
 }
 
 export function runTask(id: string): Promise<TaskDetail> {

@@ -23,12 +23,15 @@ import { ConditionEditor } from './ConditionEditor'
 import { paperText, papersText } from './compose'
 import { FullTextTab } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
+import { HistoryIcon, IconButton, TaskListIcon } from './icons'
 import { insertBuilt, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
 import { NotesTab } from './NotesTab'
 import { OverviewTab } from './OverviewTab'
 import { PaperCard } from './PaperCard'
+import { RoundsDialog } from './RoundsDialog'
 import { TaskFilters, activeFilterCount } from './TaskFilters'
+import { TaskListDialog } from './TaskListDialog'
 import {
   ACCENT,
   ERROR,
@@ -64,6 +67,8 @@ interface Props {
   useTabInfo(): TabInfoLike
   inputActions?: InputActions
   onOpenPaper?: (taskId: string, paperId: string, title: string) => void
+  /** 从任务列表弹窗切换到另一个任务（宿主按地址去重，重复打开只聚焦）。 */
+  onOpenTask?: (id: string, title: string) => void
 }
 
 export function taskIdFromAddress(address: string): string | null {
@@ -86,7 +91,13 @@ function formatDate(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-export function TaskPane({ t, useTabInfo, inputActions, onOpenPaper }: Props): ReactElement {
+export function TaskPane({
+  t,
+  useTabInfo,
+  inputActions,
+  onOpenPaper,
+  onOpenTask,
+}: Props): ReactElement {
   const info = useTabInfo()
   const taskId = parseTaskId(info)
   const [filters, setFilters] = useState<ResultsQuery>({})
@@ -99,6 +110,8 @@ export function TaskPane({ t, useTabInfo, inputActions, onOpenPaper }: Props): R
     ids: readonly string[]
     message: string
   } | null>(null)
+  const [showRounds, setShowRounds] = useState(false)
+  const [showTaskList, setShowTaskList] = useState(false)
 
   const detail = view.detail
   const filterActive = useMemo(() => activeFilterCount(filters) > 0, [filters])
@@ -275,17 +288,30 @@ export function TaskPane({ t, useTabInfo, inputActions, onOpenPaper }: Props): R
   return (
     <div style={panelStyle}>
       <header>
-        <div style={{ ...titleStyle, fontSize: 14 }}>{detail.title}</div>
-        <div style={metaStyle}>
-          {tpl(t('task.meta'), {
-            origin: t(`task.origin.${detail.origin}`),
-            date: formatDate(detail.createdAt),
-          })}
+        <div style={HEADER_TOP_STYLE}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ ...titleStyle, fontSize: 14 }}>{detail.title}</div>
+            <div style={metaStyle}>
+              {tpl(t('task.meta'), {
+                origin: t(`task.origin.${detail.origin}`),
+                date: formatDate(detail.createdAt),
+              })}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <IconButton label={t('rounds.open')} onClick={() => setShowRounds(true)}>
+              <HistoryIcon />
+            </IconButton>
+            <IconButton label={t('taskList.open')} onClick={() => setShowTaskList(true)}>
+              <TaskListIcon />
+            </IconButton>
+          </div>
         </div>
         <div style={{ ...metaStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ ...statusChipStyle, color: statusColor(detail) }}>
             {t(`task.status.${detail.status}`)}
           </span>
+          <span>{tpl(t('rounds.badge'), { n: detail.roundCount ?? 0 })}</span>
           <span>{tpl(t('task.sourceCount'), { n: detail.conditions.sources.length })}</span>
           <span>{tpl(t('task.pageSize'), { n: detail.conditions.pageSize })}</span>
           <button
@@ -620,8 +646,35 @@ export function TaskPane({ t, useTabInfo, inputActions, onOpenPaper }: Props): R
           }}
         />
       )}
+
+      <RoundsDialog
+        t={t}
+        open={showRounds}
+        onClose={() => setShowRounds(false)}
+        taskId={taskId}
+        detail={detail}
+        busy={active}
+        onRerun={() => {
+          view.reload()
+          setToast(t('rounds.rerunStarted'))
+        }}
+      />
+      <TaskListDialog
+        t={t}
+        open={showTaskList}
+        onClose={() => setShowTaskList(false)}
+        currentTaskId={taskId}
+        onOpenTask={onOpenTask ?? (() => undefined)}
+      />
     </div>
   )
+}
+
+const HEADER_TOP_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 8,
 }
 
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']

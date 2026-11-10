@@ -13,6 +13,7 @@
 
 import { createElement, useEffect, type ComponentType, type ReactElement } from 'react'
 
+import { activateTask } from './api'
 import {
   ensureTaskTitle,
   rememberTaskTitle,
@@ -168,6 +169,9 @@ export function apply(ctx: ClientContext): void {
   const openTask = (id: string, title?: string): void => {
     const address = `${TASK_ADDRESS_PREFIX}${encodeURIComponent(id)}`
     if (title !== undefined && title !== '') rememberTaskTitle(id, title)
+    // 用户主动点开某任务 = 进入该任务，之后的模型检索默认落在这里。
+    // 自动打开路径也会调用，但 activate 是幂等的，不会改变已有语义。
+    void activateTask(id).catch(() => undefined)
     ctx.sidebarRight.openResource(
       address,
       title === undefined || title === '' ? undefined : { params: { title } },
@@ -207,6 +211,7 @@ export function apply(ctx: ClientContext): void {
       useTabInfo: props.useTabInfo,
       inputActions: props.inputActions,
       onOpenPaper: openPaper,
+      onOpenTask: (id: string, title: string) => openTask(id, title),
     })
 
   /** tab 标题：按地址里的任务 id 读缓存，缺了补取一次详情。 */

@@ -1,16 +1,19 @@
 /**
  * 模型侧工具：直接注册进 dsh 工具表（不经过外部 MCP）。
  *
- * - `literature_search`：创建并执行一个检索任务（origin=model），等待最多
- *   25 秒后把任务头部与前若干条结果交给模型；任务本身持久化，右侧栏可继续看。
+ * - `literature_search`：一个研究主题 = 一个任务 = 一个 tab。默认复用「当前任务」
+ *   并在其中开新一轮；主题变了才新建。等待最多 25 秒后把任务头部与前若干条结果
+ *   交给模型，并明确要求本轮到此为止、只给完善建议、不自行发起下一轮。
  * - `literature_sources`：列出已接入的数据源与能力，便于模型决定后续策略。
- * - `literature_task`：读取/修改已保存任务，写入筛读、分组与备注，做新老对比与统计。
+ * - `literature_task`：读取/修改已保存任务（含轮次历史），写入筛读、分组与备注，
+ *   做新老对比与统计。
  * - `literature_export`：把任务（按筛选）导出为 CSV / RIS / BibTeX / Markdown 并落盘。
  *
  * 参数在边界做一次校验（模型输出不可信），服务层仍会再兜底。
  */
 
 import { MAX_LIMIT } from '../search/config.js'
+import { SearchError } from '../search/errors.js'
 import { asRecord } from '../search/normalize.js'
 import { PROVIDER_INFOS } from '../search/providers/index.js'
 import type {
@@ -20,6 +23,8 @@ import type {
   PaperState,
   ResultsPage,
   Screening,
+  SearchRound,
+  SearchTask,
   SortMode,
   SourceId,
   TaskDetail,
@@ -38,6 +43,9 @@ const MODEL_WAIT_MS = 25_000
 /** 交给模型的条数（UI 走分页端点，不受此限制）。 */
 const TOOL_PAPER_LIMIT = 10
 
+/** 复用任务时，最多等多久让上一轮跑完；超时直接返回提示，绝不新建任务。 */
+const WAIT_PREVIOUS_MS = 12_000
+
 const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
 const LANGUAGES: readonly TaskLanguage[] = ['any', 'eng', 'chi']
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
@@ -47,10 +55,21 @@ const TASK_ACTIONS = [
   'get',
   'update',
   'run',
+  'rounds',
   'annotate',
   'compare',
   'stats',
 ] as const
+
+/**
+ * 每轮检索结束后的强约束尾句。
+ *
+ * 这是「模型可以建议完善检索、但不许自己立刻进入下一轮」的工具契约：
+ * 既写在工具 description 里，也附在每次返回末尾，覆盖 `literature_task run`
+ * 这条可能的旁路。
+ */
+const NO_AUTO_NEXT_ROUND =
+  '本轮到此结束：请基于上面的结果给用户一份「如何完善检索」的建议（例如收窄或扩展检索式、调整年份/类型/数据源），但【禁止】自行发起下一次检索，不要再次调用 literature_search，也不要用 literature_task run 绕过。只有当用户查看结果后明确要求调整（在对话框里说明，或在右侧栏改条件）时，才可在同一任务内发起下一轮，并保持 taskId 不变或省略以复用当前任务。'
 
 /** `ctx.tools` 的最小结构接口（真实类型由 dsh 装配，不在本包类型面内）。 */
 export interface ToolsService {
@@ -83,6 +102,21 @@ const TEXT_OUTPUT = {
 const SEARCH_PARAMETERS = {
   type: 'object',
   properties: {
+    title: {
+      type: 'string',
+      description:
+        '任务名称。仅新建任务时有效，请用能概括研究主题的短句自己命名（如「口臭治疗方案文献」）。复用已有任务时忽略。',
+    },
+    taskId: {
+      type: 'string',
+      description:
+        '要复用的已有任务 id。同一主题的后续检索必须复用同一个任务；通常省略即可自动复用「当前任务」，也可用 literature_task list 查到 id 后显式指定。指定后不会新建任务、不会新开 tab。',
+    },
+    newTask: {
+      type: 'boolean',
+      description:
+        '仅当研究主题与当前任务明显不同时才设为 true，强制新建一个任务（此时请同时给 title）。同一主题改检索式时绝对不要设 true。',
+    },
     query: {
       type: 'string',
       description: '单条检索关键词，支持英文或中文；英文主题词召回更好。与 queries 至少给一个。',
@@ -152,7 +186,7 @@ const TASK_PARAMETERS = {
       type: 'string',
       enum: [...TASK_ACTIONS],
       description:
-        'list 列任务；get 读条件与结果；update 改条件/笔记/分组；run 重跑；annotate 写筛读/备注；compare 与旧任务对比；stats 读语料统计。',
+        'list 列任务；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/备注；compare 与旧任务对比；stats 读语料统计。',
     },
     id: { type: 'string', description: '任务 id；除 list 外必填。' },
     withTaskId: { type: 'string', description: 'compare 时的基准任务 id。' },
@@ -283,6 +317,12 @@ interface ExportArgs {
 
 interface SearchArgs {
   query: string
+  /** 新建任务时的名称；复用时可选（传了会顺手改名）。 */
+  title?: string
+  /** 显式指定要复用的任务 id。 */
+  taskId?: string
+  /** 主题变了，强制新建任务。 */
+  newTask?: boolean
   queries?: QueryInput[]
   types?: string[]
   sources?: SourceId[]
@@ -300,16 +340,75 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_search',
       description:
-        '检索免费开放学术文献。并发查询 PubMed、Europe PMC、OpenAlex、Crossref、Semantic Scholar、arXiv、PubTator，跨源与跨检索式去重合并成一篇文献一条，返回标题、作者、年份、出处、DOI、被引次数、开放获取状态与摘要。支持一次提交多条检索式（queries）。每次检索会保存为可继续查看的任务（右侧栏「文献检索」），超过 25 秒仍在进行时会先返回当前进度。适合找论文、查某主题的代表作、补充参考文献。',
+        '检索免费开放学术文献。并发查询 PubMed、Europe PMC、OpenAlex、Crossref、Semantic Scholar、arXiv、PubTator，跨源与跨检索式去重合并成一篇文献一条，返回标题、作者、年份、出处、DOI、被引次数、开放获取状态与摘要，支持一次提交多条检索式（queries）。' +
+        '【任务模型】一个研究主题 = 一个任务 = 一个右侧栏 tab。默认复用「当前任务」并在同一任务内开新一轮：任务 id 不变、tab 不变，结果替换为最新一轮，已有的已读/纳入/排除/备注按文献身份保留；绝不会新建任务或新开 tab。仅当研究主题与当前任务明显不同时，才传 newTask=true 并用 title 自己给新任务起一个概括主题的名称；也可用 taskId 显式指定要复用的任务（先用 literature_task list 查 id）。每次调用请提交【完整】的新检索条件，缺省项回落到插件默认设置而非沿用旧条件。' +
+        '【轮次约束】本轮检索结束后，只给用户一份「如何完善检索」的建议，禁止自行发起下一轮、禁止重复调用本工具；必须等用户查看结果后，在右侧栏调整条件、或在对话里明确要求调整，才可在同一任务里再搜一次。' +
+        '超过 25 秒仍在进行时会先返回当前进度，任务会继续在右侧栏完成。适合找论文、查某主题的代表作、补充参考文献。',
       parameters: SEARCH_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args, exec): Promise<{ text: string }> {
         const input = readSearchArgs(args)
-        const task = await service.create({ ...input, origin: 'model', runNow: false })
-        const outcome = await runWithin(service, task.id, exec.signal)
+        const { title, taskId, newTask, ...conditions } = input
+        const createInput = { ...conditions, origin: 'model' as const, runNow: false }
+        let task: SearchTask | undefined
+        let reused = false
+
+        if (taskId !== undefined) {
+          task = await service.get(taskId)
+          reused = true
+        } else if (newTask !== true) {
+          const current = await service.currentTask()
+          if (current !== undefined) {
+            task = current
+            reused = true
+          }
+        }
+
+        if (task === undefined) {
+          task = await service.create({
+            ...createInput,
+            ...(title === undefined ? {} : { title }),
+          })
+          service.setCurrentTask(task.id)
+        } else {
+          // 上一轮还在跑时先等，绝不「换一个任务重搜」——那正是多开 tab 的根因。
+          const idle = await service.waitUntilIdle(task.id, WAIT_PREVIOUS_MS, exec.signal)
+          if (!idle) {
+            return {
+              text: [
+                `任务「${task.title}」（id: ${task.id}）的上一轮仍在检索中，本次调整未执行。`,
+                '请勿新建任务、请勿重复检索；可用 literature_task get 查看进度，等用户查看结果并明确要求后，再在【同一个任务】里发起下一轮。',
+                NO_AUTO_NEXT_ROUND,
+              ].join('\n'),
+            }
+          }
+        }
+
+        // 复用时不带 title：命名只属于新建任务，避免误改已有任务名。
+        const running = reused
+          ? service.rerun(task.id, createInput, 'model')
+          : service.run(task.id, 'new', 'model')
+        let outcome: 'done' | 'timeout'
+        try {
+          outcome = await runWithin(service, task.id, exec.signal, running)
+        } catch (error) {
+          if (
+            error instanceof SearchError &&
+            (error.code === 'conflict' || error.code === 'not_found')
+          ) {
+            return {
+              text: [
+                `任务「${task.title}」（id: ${task.id}）无法开新一轮：${error.message}`,
+                '请先用 literature_task list / get 确认任务状态；不要新建任务来绕过，也不要重复检索。',
+                NO_AUTO_NEXT_ROUND,
+              ].join('\n'),
+            }
+          }
+          throw error
+        }
         const detail = await service.getDetail(task.id)
         const page = await service.results(task.id, { limit: TOOL_PAPER_LIMIT })
-        return { text: formatTaskResult(detail, page, outcome) }
+        return { text: formatTaskResult(detail, page, outcome, reused) }
       },
     },
     {
@@ -325,7 +424,8 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_task',
       description:
-        '读取与推进已保存的检索任务。list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词过滤）；update 改标题、条件、任务笔记与分组；run 重跑；annotate 批量写入筛读状态、分组、必读顺序、备注与标签；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。适合在检索之后做筛选、整理与汇报。',
+        '读取与推进已保存的检索任务。list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词过滤）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态、分组、必读顺序、备注与标签；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
+        '注意：run 会在【同一任务】内开新一轮检索，与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。',
       parameters: TASK_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args, exec): Promise<{ text: string }> {
@@ -361,6 +461,18 @@ function readSearchArgs(args: unknown): SearchArgs {
 
   const input: SearchArgs = { query }
   if (queries !== undefined) input.queries = queries
+
+  const title = readText(record['title'], 'title')
+  if (title !== undefined) input.title = title.slice(0, 120)
+  const taskId = readText(record['taskId'], 'taskId')
+  if (taskId !== undefined) input.taskId = taskId
+  if (record['newTask'] !== undefined) {
+    if (typeof record['newTask'] !== 'boolean') throw new Error('newTask 必须是布尔值')
+    input.newTask = record['newTask']
+  }
+  if (input.newTask === true && input.taskId !== undefined) {
+    throw new Error('taskId 与 newTask 不能同时使用；要复用请只给 taskId，要新建请只给 newTask')
+  }
 
   const types = readTypes(record['types'])
   if (types !== undefined) input.types = types
@@ -460,14 +572,16 @@ function readInteger(value: unknown, name: string, max?: number): number | undef
 }
 
 /**
- * 启动任务并等待，最多 {@link MODEL_WAIT_MS}。
+ * 等待一次已在跑的执行，最多 {@link MODEL_WAIT_MS}。
  *
+ * `running` 由调用方启动（新建走 `service.run`，复用走 `service.rerun`）。
  * 超时不取消任务：模型先拿到当前结果，右侧栏继续跑完。调用方中止则取消任务。
  */
 async function runWithin(
   service: TaskService,
   id: string,
   signal: AbortSignal | undefined,
+  running: Promise<unknown>,
 ): Promise<'done' | 'timeout'> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<'timeout'>((resolve) => {
@@ -486,7 +600,7 @@ async function runWithin(
   })
 
   try {
-    return await Promise.race([service.run(id).then(() => 'done' as const), timeout, aborted])
+    return await Promise.race([running.then(() => 'done' as const), timeout, aborted])
   } finally {
     if (timer !== undefined) clearTimeout(timer)
     if (signal !== undefined && onAbort !== undefined) {
@@ -740,7 +854,14 @@ async function runTaskAction(
     }
     case 'run': {
       const id = requireId(args)
-      const outcome = await runWithin(service, id, signal)
+      await service.get(id)
+      service.setCurrentTask(id)
+      const outcome = await runWithin(
+        service,
+        id,
+        signal,
+        service.run(id, 'new', 'model'),
+      )
       const task = await service.get(id)
       const detail = await service.getDetail(id)
       const page = await service.results(id, {
@@ -748,7 +869,13 @@ async function runTaskAction(
         limit: args.limit ?? TOOL_PAPER_LIMIT,
         offset: args.offset ?? 0,
       })
-      return formatTaskDetail(detail, page, task.states, task.groups, outcome)
+      // 这条旁路同样附上「不自动下一轮」约束，避免模型绕过 literature_search。
+      return `${formatTaskDetail(detail, page, task.states, task.groups, outcome)}\n\n${NO_AUTO_NEXT_ROUND}`
+    }
+    case 'rounds': {
+      const id = requireId(args)
+      const task = await service.get(id)
+      return formatRounds(task.title, id, await service.getRounds(id), args.limit ?? 30)
     }
     case 'annotate': {
       const result = await service.annotate(requireId(args), args.papers ?? [])
@@ -814,7 +941,7 @@ function formatTaskList(tasks: readonly TaskSummary[], limit: number): string {
   for (const task of tasks.slice(0, limit)) {
     const screening = task.stats.screening
     lines.push(
-      `- ${task.id}｜${task.title}｜${statusLabel(task.status)}｜${task.updatedAt.slice(0, 10)}｜已加载 ${
+      `- ${task.id}｜${task.title}｜${statusLabel(task.status)}｜${task.roundCount ?? 0} 轮｜${task.updatedAt.slice(0, 10)}｜已加载 ${
         task.stats.deduped
       } 篇｜纳入 ${screening.included}、排除 ${screening.excluded}、待读 ${screening.unread}`,
     )
@@ -836,6 +963,7 @@ function formatTaskDetail(
       : `状态：${statusLabel(detail.status)}${detail.error === undefined ? '' : `（${detail.error}）`}`,
   )
 
+  lines.push(`检索轮次：共 ${detail.roundCount ?? 0} 轮（用 rounds 查看每轮条件与命中）`)
   const conditions = detail.conditions
   const queries = conditions.queries.map((query) => `${query.name}=「${query.text}」`).join('；')
   lines.push(`检索式：${queries}`)
@@ -987,8 +1115,14 @@ function formatTaskResult(
   detail: TaskDetail,
   page: ResultsPage,
   outcome: 'done' | 'timeout',
+  reused: boolean,
 ): string {
-  const lines = [`任务：${detail.title}（id: ${detail.id}）`]
+  const lines = [
+    `任务：${detail.title}（id: ${detail.id}）`,
+    `轮次：第 ${detail.roundCount ?? 0} 轮｜${
+      reused ? '复用已有任务，未新建任务、未新开 tab' : '新建任务'
+    }｜右侧栏历史图标可查看各轮条件与结果概览`,
+  ]
 
   if (outcome === 'timeout') {
     const progress = detail.progress
@@ -1030,6 +1164,7 @@ function formatTaskResult(
     } else {
       lines.push('没有检索到匹配文献。可尝试更短的关键词、英文主题词，或放宽年份与开放获取限制。')
     }
+    lines.push('', NO_AUTO_NEXT_ROUND)
     return lines.join('\n')
   }
 
@@ -1060,6 +1195,45 @@ function formatTaskResult(
     lines.push('', `仅列出前 ${page.papers.length} 篇；完整 ${page.total} 篇可在右侧栏任务里分页查看。`)
   }
   lines.push('', '提示：可用 DOI 或标题继续追问；需要全文时优先使用开放获取 PDF 链接。')
+  lines.push('', NO_AUTO_NEXT_ROUND)
+  return lines.join('\n')
+}
+
+/** 轮次历史：只给元数据，不回吐文献列表。 */
+function formatRounds(
+  title: string,
+  id: string,
+  rounds: readonly SearchRound[],
+  limit: number,
+): string {
+  if (rounds.length === 0) {
+    return `任务「${title}」（id: ${id}）还没有检索轮次。\n${NO_AUTO_NEXT_ROUND}`
+  }
+  const recent = rounds.slice(-Math.max(1, limit))
+  const lines = [
+    `任务「${title}」（id: ${id}）共 ${rounds.length} 轮检索${
+      rounds.length > recent.length ? `，列出最近 ${recent.length} 轮` : ''
+    }：`,
+  ]
+  for (const round of recent) {
+    const queries = round.conditions.queries
+      .map((query) => `「${query.text}」`)
+      .join('、')
+    const stats =
+      round.stats === undefined
+        ? '统计未回填'
+        : `原始 ${round.stats.rawHits}｜去重 ${round.stats.deduped}｜已加载 ${round.stats.loaded} 篇`
+    lines.push(
+      `- 第 ${round.index} 轮｜${round.createdAt.slice(0, 19).replace('T', ' ')}｜${
+        round.origin === 'model' ? '模型' : '面板'
+      }｜${round.status === undefined ? '进行中' : statusLabel(round.status)}｜${stats}${
+        round.error === undefined ? '' : `｜${round.error}`
+      }`,
+    )
+    lines.push(`  条件：${truncate(queries, 300)}｜每源 ${round.conditions.pageSize} 条｜源 ${round.conditions.sources.join('/')}`)
+  }
+  lines.push('', '提示：右侧栏历史时间轴可查看同样内容，并可一键回填某轮条件重跑。')
+  lines.push('', NO_AUTO_NEXT_ROUND)
   return lines.join('\n')
 }
 
