@@ -39,6 +39,11 @@ export const DEFAULT_RETENTION_COUNT = 120
 /** 单任务结果上限。 */
 export const DEFAULT_TASK_MAX_PAPERS = 1500
 
+/** 各源默认最小请求间隔（毫秒）；PubMed/S2/arXiv 可由设置覆盖。 */
+export const DEFAULT_PUBMED_INTERVAL_MS = 350
+export const DEFAULT_S2_INTERVAL_MS = 3000
+export const DEFAULT_ARXIV_INTERVAL_MS = 3000
+
 /** 持久化时单条摘要保留的字符数。 */
 export const MAX_ABSTRACT_CHARS = 800
 
@@ -57,7 +62,7 @@ export const ROUTE_PREFIX = '/dsh-litsearch/api/'
 export const ROUTE_MATCH = '/dsh-litsearch/api'
 
 export interface LitsearchSettings {
-  /** 联系邮箱，作为 OpenAlex / Crossref polite pool 标识；留空也可用。 */
+  /** 联系邮箱，作为 OpenAlex / Crossref polite pool 与 NCBI email 标识；留空也可用。 */
   contactEmail: string
   defaultPageSize: number
   requestTimeoutMs: number
@@ -69,6 +74,14 @@ export interface LitsearchSettings {
   taskRetentionDays: number
   taskRetentionCount: number
   taskMaxPapers: number
+  /** 可选 NCBI API Key；有 key 时 E-utilities 额度更高。 */
+  ncbiApiKey: string
+  /** 可选 Semantic Scholar API Key；提高配额。 */
+  s2ApiKey: string
+  /** 各源最小请求间隔覆盖值。 */
+  pubmedIntervalMs: number
+  s2IntervalMs: number
+  arxivIntervalMs: number
 }
 
 /** 默认读取器：入口未注入时回落到常量。 */
@@ -84,6 +97,11 @@ let readSettings = (): LitsearchSettings => ({
   taskRetentionDays: DEFAULT_RETENTION_DAYS,
   taskRetentionCount: DEFAULT_RETENTION_COUNT,
   taskMaxPapers: DEFAULT_TASK_MAX_PAPERS,
+  ncbiApiKey: '',
+  s2ApiKey: '',
+  pubmedIntervalMs: DEFAULT_PUBMED_INTERVAL_MS,
+  s2IntervalMs: DEFAULT_S2_INTERVAL_MS,
+  arxivIntervalMs: DEFAULT_ARXIV_INTERVAL_MS,
 })
 
 /** 由插件入口在 `apply` 时注入。 */

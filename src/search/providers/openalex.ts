@@ -5,7 +5,7 @@
  * 无需密钥；带 `mailto` 进入 polite pool，可获得更稳定的限流额度。
  */
 
-import { fetchJson } from '../http.js'
+import { limitedJson } from '../rate-limit.js'
 import { asArray, asNumber, asRecord, asString, doiUrl, normalizeDoi } from '../normalize.js'
 import type { PaperRecord, Provider } from '../types.js'
 
@@ -23,6 +23,9 @@ export const openalex: Provider = {
     label: 'OpenAlex',
     homepage: 'https://openalex.org',
     capabilities: { abstract: true, citationCount: true, openAccess: true, pdf: true },
+    rateLimit: '约 10 req/s；带邮箱进入 polite pool',
+    syntax: '自然语言；支持按年份与 OA 下推，不支持字段标签',
+    optionalKey: false,
   },
 
   async search(query, options): Promise<PaperRecord[]> {
@@ -39,9 +42,10 @@ export const openalex: Provider = {
     if (filters.length > 0) params.set('filter', filters.join(','))
     if (options.contactEmail !== '') params.set('mailto', options.contactEmail)
 
-    const payload = await fetchJson(`${ENDPOINT}?${params.toString()}`, {
+    const payload = await limitedJson('openalex', `${ENDPOINT}?${params.toString()}`, {
       timeoutMs: options.timeoutMs,
       signal: options.signal,
+      bypassCooldown: options.bypassCooldown === true,
       headers: {
         accept: 'application/json',
         'user-agent': userAgent(options.contactEmail),

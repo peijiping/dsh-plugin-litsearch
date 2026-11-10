@@ -5,17 +5,19 @@
  * 运行中的任务，完成即停。关闭 tab 时 `tab.signal` 中止请求。
  */
 
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
 
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { Paper, TaskDetail } from '../search/types'
-import { updateTask } from './api'
+import { updateTask, type ResultsQuery } from './api'
 import { rememberTaskTitle } from './autoOpen'
 import { paperText } from './compose'
 import { insertBuilt, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
+import { OverviewTab } from './OverviewTab'
 import { PaperCard } from './PaperCard'
+import { TaskFilters, activeFilterCount } from './TaskFilters'
 import {
   ACCENT,
   ERROR,
@@ -72,10 +74,13 @@ function formatDate(value: string): string {
 export function TaskPane({ t, useTabInfo, inputActions }: Props): ReactElement {
   const info = useTabInfo()
   const taskId = parseTaskId(info)
-  const view = useTask(taskId, info.tab.signal)
+  const [filters, setFilters] = useState<ResultsQuery>({})
+  const [tab, setTab] = useState<'results' | 'overview'>('results')
+  const view = useTask(taskId, info.tab.signal, undefined, filters)
   const [toast, setToast] = useState('')
 
   const detail = view.detail
+  const filterActive = useMemo(() => activeFilterCount(filters) > 0, [filters])
 
   useEffect(() => {
     if (detail !== null) rememberTaskTitle(detail.id, detail.title)
@@ -218,34 +223,79 @@ export function TaskPane({ t, useTabInfo, inputActions }: Props): ReactElement {
         <div style={{ ...statusStyle, color: ERROR }}>{view.error}</div>
       )}
 
-      {page !== null && page.papers.length > 0 ? (
+      <div style={TAB_ROW_STYLE}>
+        <button
+          type="button"
+          style={tab === 'results' ? TAB_ACTIVE_STYLE : TAB_STYLE}
+          onClick={() => setTab('results')}
+        >
+          {tpl(t('tab.results'), { n: page?.total ?? detail.result.totalLoaded })}
+        </button>
+        <button
+          type="button"
+          style={tab === 'overview' ? TAB_ACTIVE_STYLE : TAB_STYLE}
+          onClick={() => setTab('overview')}
+        >
+          {t('tab.overview')}
+        </button>
+      </div>
+
+      {tab === 'results' ? (
         <>
-          <ul style={listStyle}>
-            {page.papers.map((paper) => (
-              <li key={paper.paperId}>
-                <PaperCard paper={paper} t={t} onInsert={insert} />
-              </li>
-            ))}
-          </ul>
-          {page.papers.length < page.total && (
-            <div style={actionRowStyle}>
-              <Button
-                variant="outline"
-                size="sm"
-                type="button"
-                disabled={view.loadingMore}
-                onClick={() => {
-                  void view.loadMore()
-                }}
-              >
-                {tpl(t('task.loadMore'), { shown: page.papers.length, total: page.total })}
-              </Button>
-            </div>
+          <TaskFilters
+            t={t}
+            value={filters}
+            sources={detail.conditions.sources}
+            queries={detail.conditions.queries}
+            onChange={setFilters}
+          />
+
+          {page !== null && page.papers.length > 0 ? (
+            <>
+              <ul style={listStyle}>
+                {page.papers.map((paper) => (
+                  <li key={paper.paperId}>
+                    <PaperCard paper={paper} t={t} onInsert={insert} />
+                  </li>
+                ))}
+              </ul>
+              {page.papers.length < page.total && (
+                <div style={actionRowStyle}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    disabled={view.loadingMore}
+                    onClick={() => {
+                      void view.loadMore()
+                    }}
+                  >
+                    {tpl(t('task.loadMore'), { shown: page.papers.length, total: page.total })}
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : (
+            !view.loading &&
+            !active && (
+              <div style={statusStyle}>
+                {filterActive ? t('filter.noMatch') : t('task.empty')}
+              </div>
+            )
           )}
         </>
       ) : (
-        !view.loading &&
-        !active && <div style={statusStyle}>{t('task.empty')}</div>
+        <OverviewTab
+          t={t}
+          taskId={taskId}
+          rev={detail.rev}
+          filters={filters}
+          filterActive={filterActive}
+          onPick={(patch) => {
+            setFilters((previous) => ({ ...previous, ...patch }))
+            setTab('results')
+          }}
+        />
       )}
     </div>
   )
@@ -276,3 +326,25 @@ const statusChipStyle = {
   fontWeight: 600,
   fontSize: 12,
 } as const
+
+const TAB_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  gap: 4,
+  borderBottom: '1px solid rgba(127,127,127,0.18)',
+}
+const TAB_STYLE: CSSProperties = {
+  padding: '4px 8px',
+  border: 'none',
+  borderBottom: '2px solid transparent',
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: 12,
+  opacity: 0.66,
+  cursor: 'pointer',
+}
+const TAB_ACTIVE_STYLE: CSSProperties = {
+  ...TAB_STYLE,
+  opacity: 1,
+  fontWeight: 600,
+  borderBottomColor: ACCENT,
+}

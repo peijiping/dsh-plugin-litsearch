@@ -5,7 +5,7 @@
  * 非法草稿直接丢弃（与 dsh-plugin-zotero 的设置页同一套交互）。
  */
 
-import { useEffect, useRef, type CSSProperties, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 
 import {
   Pill,
@@ -13,13 +13,16 @@ import {
   Switch,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import { SOURCE_IDS } from '../search/types'
+import { SOURCE_IDS, type ProbeResult, type SourceId } from '../search/types'
+import { probeSource } from './api'
 import { getHealth, refreshHealth, useHealth } from './health'
-import type { Translate } from './locales'
+import { tpl, type Translate } from './locales'
 import {
   AUTO_OPEN_FIELD,
   LANGUAGE_FIELD,
   LANGUAGES,
+  NCBI_KEY_FIELD,
+  S2_KEY_FIELD,
   SOURCES_FIELD,
   SORT_FIELD,
   SORT_MODES,
@@ -34,6 +37,9 @@ const AUTOSAVE_DELAY_MS = 600
 const NUMBER_FIELD_NAMES = [
   'defaultPageSize',
   'requestTimeoutMs',
+  'pubmedIntervalMs',
+  's2IntervalMs',
+  'arxivIntervalMs',
   'maxTaskTabs',
   'taskRetentionDays',
   'taskRetentionCount',
@@ -67,8 +73,13 @@ export function SettingsSection(props: Props): ReactElement {
   /** 草稿指纹：任何字段改动都换字符串，防抖计时器才会重启。 */
   const draftKey = [
     state.contactEmail.text,
+    state.ncbiApiKey.text,
+    state.s2ApiKey.text,
     state.defaultPageSize.text,
     state.requestTimeoutMs.text,
+    state.pubmedIntervalMs.text,
+    state.s2IntervalMs.text,
+    state.arxivIntervalMs.text,
     state.defaultSources.text,
     state.defaultSort.text,
     state.defaultLanguage.text,
@@ -239,6 +250,41 @@ export function SettingsSection(props: Props): ReactElement {
       </section>
 
       <section style={GROUP_STYLE}>
+        <h4 style={GROUP_HEAD_STYLE}>{t('group.sources')}</h4>
+        <div style={HINT_STYLE}>{t('group.sourcesHint')}</div>
+
+        <SecretField
+          t={t}
+          id="plugin-config-litsearch-ncbiApiKey"
+          label={t('field.ncbiApiKey')}
+          hint={t('field.ncbiApiKeyHint')}
+          configured={state.ncbiApiKey.text.trim() !== ''}
+          disabled={locked}
+          onEdit={(value) => props.edit(NCBI_KEY_FIELD, value)}
+          onClear={() => props.edit(NCBI_KEY_FIELD, '')}
+        />
+        <SecretField
+          t={t}
+          id="plugin-config-litsearch-s2ApiKey"
+          label={t('field.s2ApiKey')}
+          hint={t('field.s2ApiKeyHint')}
+          configured={state.s2ApiKey.text.trim() !== ''}
+          disabled={locked}
+          onEdit={(value) => props.edit(S2_KEY_FIELD, value)}
+          onClear={() => props.edit(S2_KEY_FIELD, '')}
+        />
+
+        {renderNumberField('pubmedIntervalMs')}
+        {renderNumberField('s2IntervalMs')}
+        {renderNumberField('arxivIntervalMs')}
+      </section>
+
+      <section style={GROUP_STYLE}>
+        <h4 style={GROUP_HEAD_STYLE}>{t('group.diagnostics')}</h4>
+        <Diagnostics t={t} keys={health?.keys} health={health?.sourceHealth ?? []} />
+      </section>
+
+      <section style={GROUP_STYLE}>
         <h4 style={GROUP_HEAD_STYLE}>{t('group.tasks')}</h4>
 
         <div style={CHOICE_ROW_STYLE}>
@@ -258,7 +304,12 @@ export function SettingsSection(props: Props): ReactElement {
         </div>
 
         {NUMBER_FIELDS.filter(
-          (name) => name !== 'defaultPageSize' && name !== 'requestTimeoutMs',
+          (name) =>
+            name !== 'defaultPageSize' &&
+            name !== 'requestTimeoutMs' &&
+            name !== 'pubmedIntervalMs' &&
+            name !== 's2IntervalMs' &&
+            name !== 'arxivIntervalMs',
         ).map(renderNumberField)}
 
         <div style={STORAGE_ROW_STYLE}>
@@ -269,6 +320,189 @@ export function SettingsSection(props: Props): ReactElement {
       </section>
     </div>
   )
+}
+
+interface SecretFieldProps {
+  t: Translate
+  id: string
+  label: string
+  hint: string
+  configured: boolean
+  disabled: boolean
+  onEdit(value: string): void
+  onClear(): void
+}
+
+/** 密钥输入：只显示「已配置/未配置」，从不回显当前值。 */
+function SecretField({
+  t,
+  id,
+  label,
+  hint,
+  configured,
+  disabled,
+  onEdit,
+  onClear,
+}: SecretFieldProps): ReactElement {
+  const [draft, setDraft] = useState('')
+
+  const commit = (): void => {
+    const value = draft.trim()
+    if (value === '' || disabled) return
+    onEdit(value)
+    setDraft('')
+  }
+
+  return (
+    <div style={CHOICE_ROW_STYLE}>
+      <label style={CHOICE_LABEL_STYLE} htmlFor={id}>
+        {label}
+      </label>
+      <span style={CHOICE_HINT_STYLE}>{hint}</span>
+      <div style={INLINE_ROW_STYLE}>
+        <input
+          id={id}
+          type="password"
+          autoComplete="new-password"
+          style={{ ...SECRET_INPUT_STYLE, flex: 1 }}
+          value={draft}
+          disabled={disabled}
+          placeholder={
+            configured ? t('field.keyConfigured') : t('field.keyEmpty')
+          }
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              commit()
+            }
+          }}
+        />
+        <button
+          type="button"
+          style={SMALL_BUTTON_STYLE}
+          disabled={disabled || draft.trim() === ''}
+          onClick={commit}
+        >
+          {t('field.keySave')}
+        </button>
+        {configured && (
+          <button
+            type="button"
+            style={SMALL_BUTTON_STYLE}
+            disabled={disabled}
+            onClick={onClear}
+          >
+            {t('field.keyClear')}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+interface DiagnosticsProps {
+  t: Translate
+  keys: { ncbi: boolean; s2: boolean } | undefined
+  health: readonly { id: SourceId; lastOkAt?: string; lastError?: string; lastLatencyMs?: number; cooldownUntil?: string }[]
+}
+
+/** 逐源诊断：显示运行时健康状态，并可手动探活一次（不受冷却影响）。 */
+function Diagnostics({ t, keys, health }: DiagnosticsProps): ReactElement {
+  const [results, setResults] = useState<Record<string, { busy: boolean; text: string }>>({})
+  const byId = new Map(health.map((entry) => [entry.id, entry]))
+
+  const run = (source: SourceId): void => {
+    setResults((previous) => ({
+      ...previous,
+      [source]: { busy: true, text: previous[source]?.text ?? '' },
+    }))
+    void probeSource(source)
+      .then((result) => {
+        setResults((previous) => ({
+          ...previous,
+          [source]: { busy: false, text: probeText(t, result) },
+        }))
+        void refreshHealth()
+      })
+      .catch((error: unknown) => {
+        setResults((previous) => ({
+          ...previous,
+          [source]: {
+            busy: false,
+            text: tpl(t('diagnostics.fail'), {
+              message: error instanceof Error ? error.message : String(error),
+            }),
+          },
+        }))
+      })
+  }
+
+  return (
+    <div>
+      <div style={HINT_STYLE}>
+        {keys === undefined
+          ? t('diagnostics.loading')
+          : tpl(t('diagnostics.keys'), {
+              ncbi: keys.ncbi ? t('diagnostics.configured') : t('diagnostics.notConfigured'),
+              s2: keys.s2 ? t('diagnostics.configured') : t('diagnostics.notConfigured'),
+            })}
+      </div>
+      {SOURCE_IDS.map((id) => {
+        const entry = byId.get(id)
+        const result = results[id]
+        return (
+          <div key={id} style={DIAG_ROW_STYLE}>
+            <div style={DIAG_INFO_STYLE}>
+              <span style={CHOICE_LABEL_STYLE}>{t(`source.${id}`)}</span>
+              <span style={CHOICE_HINT_STYLE}>{healthText(t, entry)}</span>
+              {result !== undefined && result.text !== '' && (
+                <span style={result.busy ? CHOICE_HINT_STYLE : RESULT_STYLE}>{result.text}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              style={SMALL_BUTTON_STYLE}
+              disabled={result?.busy === true}
+              onClick={() => run(id)}
+            >
+              {result?.busy === true ? t('diagnostics.testing') : t('diagnostics.test')}
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function probeText(t: Translate, result: ProbeResult): string {
+  const base = result.ok
+    ? tpl(t('diagnostics.ok'), { ms: result.latencyMs, count: result.count })
+    : tpl(t('diagnostics.fail'), { message: result.error ?? '' })
+  if (result.cooldownUntil === undefined) return base
+  return `${base} ${tpl(t('diagnostics.cooldown'), { time: formatTime(result.cooldownUntil) })}`
+}
+
+function healthText(
+  t: Translate,
+  entry: { lastOkAt?: string; lastError?: string; lastLatencyMs?: number; cooldownUntil?: string } | undefined,
+): string {
+  if (entry === undefined) return t('diagnostics.unknown')
+  if (entry.cooldownUntil !== undefined) {
+    return tpl(t('diagnostics.cooldown'), { time: formatTime(entry.cooldownUntil) })
+  }
+  if (entry.lastError !== undefined) {
+    return tpl(t('diagnostics.lastError'), { message: entry.lastError })
+  }
+  if (entry.lastOkAt !== undefined) {
+    return tpl(t('diagnostics.lastOk'), { ms: entry.lastLatencyMs ?? 0 })
+  }
+  return t('diagnostics.unknown')
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString()
 }
 
 const FORM_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', paddingBottom: 8 }
@@ -321,4 +555,43 @@ const STORAGE_PATH_STYLE: CSSProperties = {
   background: 'rgba(127,127,127,0.1)',
   padding: '4px 6px',
   borderRadius: 4,
+}
+const INLINE_ROW_STYLE: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6 }
+const SECRET_INPUT_STYLE: CSSProperties = {
+  fontSize: 12,
+  padding: '4px 6px',
+  borderRadius: 4,
+  border: '1px solid rgba(127,127,127,0.28)',
+  background: 'transparent',
+  color: 'inherit',
+  minWidth: 0,
+}
+const SMALL_BUTTON_STYLE: CSSProperties = {
+  fontSize: 11,
+  padding: '3px 8px',
+  borderRadius: 4,
+  border: '1px solid rgba(127,127,127,0.3)',
+  background: 'transparent',
+  color: 'inherit',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+const DIAG_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  padding: '5px 0',
+  borderBottom: '1px solid rgba(127,127,127,0.12)',
+}
+const DIAG_INFO_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 1,
+  minWidth: 0,
+}
+const RESULT_STYLE: CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.5,
+  color: '#508cff',
 }

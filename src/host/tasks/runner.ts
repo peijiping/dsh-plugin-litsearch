@@ -10,10 +10,11 @@ import { MAX_LIMIT, getSettings } from '../../search/config.js'
 import { searchSources } from '../../search/aggregate.js'
 import { mergeHits, type RankedHit } from '../../search/identity.js'
 import type {
-  Paper,
+  PaperRecord,
   SearchTask,
   SourceId,
   SourceStatus,
+  TaskConditions,
   TaskLanguage,
 } from '../../search/types.js'
 
@@ -95,6 +96,7 @@ export class TaskRunner {
 
         const results = await searchSources({
           query: query.text,
+          perSource: query.perSource,
           sources: task.conditions.sources,
           limit: perSourceLimit,
           yearFrom: task.conditions.yearFrom,
@@ -107,12 +109,16 @@ export class TaskRunner {
         if (controller.signal.aborted) throw new RunCanceled()
 
         for (const result of results) {
+          const records = result.records.filter((record) =>
+            matchesConditions(record, task.conditions),
+          )
           const status = statusById.get(result.source) ?? {
             id: result.source,
             ok: true,
             count: 0,
           }
-          status.count += result.records.length
+          if (records.length < result.records.length) status.filtered = true
+          status.count += records.length
           if (!result.ok) {
             status.ok = false
             status.error = result.error
@@ -120,8 +126,8 @@ export class TaskRunner {
           statusById.set(result.source, status)
 
           task.stats.perQuery[query.id] =
-            (task.stats.perQuery[query.id] ?? 0) + result.records.length
-          result.records.forEach((record, position) => {
+            (task.stats.perQuery[query.id] ?? 0) + records.length
+          records.forEach((record, position) => {
             hits.push({
               record,
               source: result.source,
@@ -134,7 +140,7 @@ export class TaskRunner {
 
       const merged = mergeHits(hits)
       const papers = merged
-        .filter((paper) => matchesLanguage(paper, task.conditions.language))
+        .filter((paper) => matchesConditions(paper, task.conditions))
         .slice(0, getSettings().taskMaxPapers)
 
       task.result.papers = papers
@@ -182,7 +188,27 @@ function clampRequestLimit(pageSize: number): number {
   return Math.min(Math.max(Math.floor(base) * 2, 10), MAX_LIMIT)
 }
 
-function matchesLanguage(paper: Paper, language: TaskLanguage): boolean {
+function matchesConditions(
+  paper: PaperRecord,
+  conditions: TaskConditions,
+): boolean {
+  if (conditions.yearFrom !== undefined && (paper.year ?? 0) < conditions.yearFrom) return false
+  if (
+    conditions.yearTo !== undefined &&
+    (paper.year ?? Number.MAX_SAFE_INTEGER) > conditions.yearTo
+  ) {
+    return false
+  }
+  if (conditions.openAccessOnly && !paper.openAccess) return false
+  if (!matchesLanguage(paper, conditions.language)) return false
+  if (conditions.types !== undefined && conditions.types.length > 0) {
+    const type = paper.type.toLowerCase()
+    if (!conditions.types.some((wanted) => wanted.toLowerCase() === type)) return false
+  }
+  return true
+}
+
+function matchesLanguage(paper: PaperRecord, language: TaskLanguage): boolean {
   if (language === 'any') return true
   const value = (paper.language ?? '').toLowerCase()
   if (language === 'chi') return value.startsWith('chi') || value.startsWith('zh')

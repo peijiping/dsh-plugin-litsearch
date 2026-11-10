@@ -19,7 +19,7 @@ import type {
   TaskLanguage,
 } from '../search/types.js'
 import { SOURCE_IDS } from '../search/types.js'
-import type { TaskService } from './tasks/service.js'
+import type { QueryInput, TaskService } from './tasks/service.js'
 
 /** 模型侧最多等多久；超时后任务继续跑，只返回当前进度与已有结果。 */
 const MODEL_WAIT_MS = 25_000
@@ -63,12 +63,39 @@ const SEARCH_PARAMETERS = {
   properties: {
     query: {
       type: 'string',
-      description: '检索关键词，支持英文或中文；英文主题词召回更好。',
+      description: '单条检索关键词，支持英文或中文；英文主题词召回更好。与 queries 至少给一个。',
+    },
+    queries: {
+      type: 'array',
+      maxItems: 20,
+      description:
+        '多条具名检索式：一次跑完、跨式去重，适合把主题拆成同义词/子问题。提供时忽略 query。',
+      items: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '检索式文本。' },
+          name: { type: 'string', description: '检索式名称，用于进度与贡献统计。' },
+          enabled: { type: 'boolean', description: '是否启用，默认 true。' },
+          perSource: {
+            type: 'object',
+            additionalProperties: { type: 'string' },
+            description: '按数据源覆写检索式语法（key 为数据源 id）。',
+          },
+        },
+        required: ['text'],
+        additionalProperties: false,
+      },
+    },
+    types: {
+      type: 'array',
+      maxItems: 20,
+      items: { type: 'string' },
+      description: '文献类型过滤（如 journal-article、review、preprint），精确匹配。',
     },
     sources: {
       type: 'array',
       items: { type: 'string', enum: [...SOURCE_IDS] },
-      description: '要查询的数据源；省略表示全部。',
+      description: `要查询的数据源：${SOURCE_IDS.join(', ')}；省略表示全部。`,
     },
     limit: {
       type: 'integer',
@@ -93,12 +120,13 @@ const SEARCH_PARAMETERS = {
       description: '排序：relevance 相关度、citations 被引次数、year 出版年份。',
     },
   },
-  required: ['query'],
   additionalProperties: false,
 }
 
 interface SearchArgs {
   query: string
+  queries?: QueryInput[]
+  types?: string[]
   sources?: SourceId[]
   pageSize?: number
   yearFrom?: number
@@ -114,7 +142,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_search',
       description:
-        '检索免费开放学术文献。并发查询 OpenAlex、Crossref，跨源去重合并成一篇文献一条，返回标题、作者、年份、出处、DOI、被引次数、开放获取状态与摘要。每次检索会保存为可继续查看的任务（右侧栏「文献检索」），超过 25 秒仍在进行时会先返回当前进度。适合找论文、查某主题的代表作、补充参考文献。',
+        '检索免费开放学术文献。并发查询 PubMed、Europe PMC、OpenAlex、Crossref、Semantic Scholar、arXiv、PubTator，跨源与跨检索式去重合并成一篇文献一条，返回标题、作者、年份、出处、DOI、被引次数、开放获取状态与摘要。支持一次提交多条检索式（queries）。每次检索会保存为可继续查看的任务（右侧栏「文献检索」），超过 25 秒仍在进行时会先返回当前进度。适合找论文、查某主题的代表作、补充参考文献。',
       parameters: SEARCH_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args, exec): Promise<{ text: string }> {
@@ -128,7 +156,8 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     },
     {
       name: 'literature_sources',
-      description: '列出本插件已接入的免费文献数据源及其能力（摘要、被引次数、开放获取、PDF 链接）。',
+      description:
+        '列出本插件已接入的免费文献数据源：能力（摘要、被引次数、开放获取、PDF 链接）、限流额度、检索式语法与是否需要可选 API Key。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: TEXT_OUTPUT,
       async execute(): Promise<{ text: string }> {
@@ -142,12 +171,21 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
 function readSearchArgs(args: unknown): SearchArgs {
   const record = asRecord(args)
 
-  const query = record['query']
-  if (typeof query !== 'string' || query.trim() === '') {
-    throw new Error('query 必须是非空字符串')
+  const queryRaw = record['query']
+  if (queryRaw !== undefined && typeof queryRaw !== 'string') {
+    throw new Error('query 必须是字符串')
+  }
+  const query = typeof queryRaw === 'string' ? queryRaw.trim() : ''
+  const queries = readQueries(record['queries'])
+  if (query === '' && queries === undefined) {
+    throw new Error('query 与 queries 至少提供一项')
   }
 
-  const input: SearchArgs = { query: query.trim() }
+  const input: SearchArgs = { query }
+  if (queries !== undefined) input.queries = queries
+
+  const types = readTypes(record['types'])
+  if (types !== undefined) input.types = types
 
   const sourcesRaw = record['sources']
   if (sourcesRaw !== undefined) {
@@ -185,6 +223,53 @@ function readSearchArgs(args: unknown): SearchArgs {
   }
 
   return input
+}
+
+function readQueries(value: unknown): QueryInput[] | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('queries 必须是非空数组')
+  }
+  if (value.length > 20) throw new Error('queries 最多 20 条')
+  return value.map((entry, index) => {
+    const record = asRecord(entry)
+    const text = record['text']
+    if (typeof text !== 'string' || text.trim() === '') {
+      throw new Error(`第 ${index + 1} 条检索式缺少 text`)
+    }
+    const input: QueryInput = { text: text.trim() }
+    const name = record['name']
+    if (typeof name === 'string' && name.trim() !== '') input.name = name.trim().slice(0, 80)
+    if (record['enabled'] !== undefined) {
+      if (typeof record['enabled'] !== 'boolean') throw new Error('enabled 必须是布尔值')
+      input.enabled = record['enabled']
+    }
+    const perSource = record['perSource']
+    if (perSource !== undefined && perSource !== null) {
+      const overrides: Partial<Record<SourceId, string>> = {}
+      for (const [key, raw] of Object.entries(asRecord(perSource))) {
+        if (!(SOURCE_IDS as readonly string[]).includes(key)) {
+          throw new Error(`未知数据源：${key}；可选 ${SOURCE_IDS.join(', ')}`)
+        }
+        if (typeof raw !== 'string') throw new Error(`perSource.${key} 必须是字符串`)
+        overrides[key as SourceId] = raw
+      }
+      input.perSource = overrides
+    }
+    return input
+  })
+}
+
+function readTypes(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new Error('types 必须是字符串数组')
+  }
+  const types = value
+    .map((item) => item.trim().slice(0, 40))
+    .filter((item) => item !== '')
+    .slice(0, 20)
+  return types.length === 0 ? undefined : types
 }
 
 function readInteger(value: unknown, name: string, max?: number): number | undefined {
@@ -233,7 +318,7 @@ async function runWithin(
 }
 
 function formatSources(): string {
-  const lines = ['已接入的免费文献数据源（无需 API Key）：']
+  const lines = ['已接入的免费文献数据源（无需付费；部分支持可选 Key 提高额度）：']
   for (const info of PROVIDER_INFOS) {
     const caps = [
       info.capabilities.abstract ? '摘要' : '',
@@ -241,7 +326,9 @@ function formatSources(): string {
       info.capabilities.openAccess ? '开放获取' : '',
       info.capabilities.pdf ? 'PDF' : '',
     ].filter((cap) => cap !== '')
-    lines.push(`- ${info.id}（${info.label}）：${caps.join('、')}｜${info.homepage}`)
+    lines.push(`- ${info.id}（${info.label}）：${caps.join('、') || '仅题录'}`)
+    lines.push(`  限流：${info.rateLimit}｜语法：${info.syntax}｜${info.optionalKey ? '可选 Key' : '无需 Key'}`)
+    lines.push(`  首页：${info.homepage}`)
   }
   return lines.join('\n')
 }
@@ -273,6 +360,12 @@ function formatTaskResult(
       okSources === '' ? '' : `（${okSources}）`
     }`,
   )
+  if (detail.conditions.queries.length > 1) {
+    const contributions = detail.conditions.queries
+      .map((query) => `${query.name} ${detail.stats.perQuery[query.id] ?? 0} 条`)
+      .join('；')
+    lines.push(`检索式原始命中：${contributions}`)
+  }
   if (failed.length > 0) {
     lines.push(
       `失败的数据源：${failed

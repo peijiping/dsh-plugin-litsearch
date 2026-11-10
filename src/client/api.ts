@@ -9,11 +9,13 @@ import { WRITE_HEADER } from '../search/config'
 import type {
   EventsPage,
   HealthInfo,
+  ProbeResult,
   ResultsPage,
   SortMode,
   SourceId,
   TaskDetail,
   TaskLanguage,
+  TaskStatsReport,
   TaskSummary,
 } from '../search/types'
 
@@ -67,8 +69,16 @@ function taskPath(id: string, suffix = ''): string {
   return `/tasks/${encodeURIComponent(id)}${suffix}`
 }
 
+export interface QueryBody {
+  name?: string
+  text: string
+  enabled?: boolean
+  perSource?: Partial<Record<SourceId, string>>
+}
+
 export interface CreateTaskBody {
-  query: string
+  query?: string
+  queries?: QueryBody[]
   title?: string
   sources?: SourceId[]
   pageSize?: number
@@ -76,6 +86,7 @@ export interface CreateTaskBody {
   yearTo?: number
   openAccessOnly?: boolean
   language?: TaskLanguage
+  types?: string[]
   sort?: SortMode
 }
 
@@ -96,6 +107,10 @@ export interface ResultsQuery {
   openAccessOnly?: boolean
   q?: string
   screening?: 'unread' | 'read' | 'included' | 'excluded'
+  queryId?: string
+  type?: string
+  language?: TaskLanguage
+  hasPdf?: boolean
 }
 
 export function fetchHealth(signal?: AbortSignal): Promise<HealthInfo> {
@@ -138,11 +153,7 @@ export function cancelTask(id: string): Promise<TaskDetail> {
   return request<TaskDetail>(taskPath(id, '/cancel'), writeInit('POST', {}))
 }
 
-export function fetchResults(
-  id: string,
-  query: ResultsQuery = {},
-  signal?: AbortSignal,
-): Promise<ResultsPage> {
+function resultParams(query: ResultsQuery): URLSearchParams {
   const params = new URLSearchParams()
   if (query.offset !== undefined) params.set('offset', String(query.offset))
   if (query.limit !== undefined) params.set('limit', String(query.limit))
@@ -153,8 +164,39 @@ export function fetchResults(
   if (query.openAccessOnly === true) params.set('openAccessOnly', '1')
   if (query.q !== undefined && query.q !== '') params.set('q', query.q)
   if (query.screening !== undefined) params.set('screening', query.screening)
-  const suffix = params.toString()
+  if (query.queryId !== undefined && query.queryId !== '') params.set('queryId', query.queryId)
+  if (query.type !== undefined && query.type !== '') params.set('type', query.type)
+  if (query.language !== undefined) params.set('language', query.language)
+  if (query.hasPdf === true) params.set('hasPdf', '1')
+  return params
+}
+
+export function fetchResults(
+  id: string,
+  query: ResultsQuery = {},
+  signal?: AbortSignal,
+): Promise<ResultsPage> {
+  const suffix = resultParams(query).toString()
   return request<ResultsPage>(taskPath(id, `/results${suffix === '' ? '' : `?${suffix}`}`), {
+    signal,
+  })
+}
+
+export function fetchStats(
+  id: string,
+  query: ResultsQuery = {},
+  scope: 'task' | 'filtered' = 'task',
+  signal?: AbortSignal,
+): Promise<TaskStatsReport> {
+  const params = resultParams(query)
+  params.set('scope', scope)
+  return request<TaskStatsReport>(taskPath(id, `/stats?${params.toString()}`), { signal })
+}
+
+/** 设置页「逐源测试」：固定短查询探测连通性与延迟。 */
+export function probeSource(source: SourceId, signal?: AbortSignal): Promise<ProbeResult> {
+  return request<ProbeResult>('/settings/probe', {
+    ...writeInit('POST', { source }),
     signal,
   })
 }

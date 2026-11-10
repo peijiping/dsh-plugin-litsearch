@@ -7,12 +7,22 @@
 
 import type { Provider, ProviderInfo, SourceId } from '../types.js'
 import { SOURCE_IDS } from '../types.js'
+import { arxiv } from './arxiv.js'
 import { crossref } from './crossref.js'
+import { europepmc } from './europepmc.js'
 import { openalex } from './openalex.js'
+import { pubmed } from './pubmed.js'
+import { pubtator } from './pubtator.js'
+import { semanticscholar } from './semanticscholar.js'
 
 export const PROVIDERS: Record<SourceId, Provider> = {
+  pubmed,
+  europepmc,
   openalex,
   crossref,
+  semanticscholar,
+  arxiv,
+  pubtator,
 }
 
 /** 注册顺序即聚合展示顺序。 */

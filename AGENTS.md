@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-DSH 文献检索插件，基于 cordis 框架（`@deepseek-ai/cordis`）。聚合免费文献 API（当前为 OpenAlex、Crossref），同时提供：
+DSH 文献检索插件，基于 cordis 框架（`@deepseek-ai/cordis`）。聚合七家免费文献 API（PubMed、Europe PMC、OpenAlex、Crossref、Semantic Scholar、arXiv、PubTator），同时提供：
 
 - **模型侧工具**：Host 直接调用上游 API，以 `literature_search` / `literature_sources` 注册进 dsh 工具表。
 - **人侧界面**：右侧栏「文献检索」面板，相同检索能力，可把结果插入会话草稿。

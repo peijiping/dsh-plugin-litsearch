@@ -9,14 +9,15 @@ import { randomUUID } from 'node:crypto'
 
 import { MAX_LIMIT, PLUGIN_VERSION, getSettings } from '../../search/config.js'
 import { SearchError } from '../../search/errors.js'
+import { cooldownUntil, sourceHealthList } from '../../search/health.js'
 import { PROVIDER_INFOS } from '../../search/providers/index.js'
+import { searchSources } from '../../search/aggregate.js'
 import type {
   EventsPage,
   HealthInfo,
-  Paper,
+  ProbeResult,
   QueryBlock,
   ResultsPage,
-  Screening,
   SearchTask,
   SortMode,
   SourceId,
@@ -24,17 +25,22 @@ import type {
   TaskDetail,
   TaskLanguage,
   TaskOrigin,
+  TaskStatsReport,
   TaskSummary,
 } from '../../search/types.js'
 import { SOURCE_IDS } from '../../search/types.js'
 import { TaskEvents } from '../events.js'
+import { filterPapers, type PaperFilter } from './filter.js'
 import { TaskRunner } from './runner.js'
+import { computeStats } from './stats.js'
 import { TaskStore } from './store.js'
 import { toDetail, toSummary } from './summary.js'
 
 const MAX_QUERIES = 20
 const MAX_TITLE = 120
 const MAX_PAGE_LIMIT = 200
+const MAX_TYPES = 20
+const PROBE_QUERY = 'machine learning'
 
 export interface QueryInput {
   name?: string
@@ -53,6 +59,7 @@ export interface CreateTaskInput {
   yearTo?: number
   openAccessOnly?: boolean
   language?: TaskLanguage
+  types?: string[]
   sort?: SortMode
   origin: TaskOrigin
   sessionId?: string
@@ -72,20 +79,15 @@ export interface TaskPatch {
     yearTo?: number | null
     openAccessOnly?: boolean
     language?: TaskLanguage
+    types?: string[] | null
     sort?: SortMode
   }
 }
 
-export interface ResultsFilter {
+export interface ResultsFilter extends PaperFilter {
   offset?: number
   limit?: number
   sort?: SortMode
-  source?: SourceId
-  yearFrom?: number
-  yearTo?: number
-  openAccessOnly?: boolean
-  q?: string
-  screening?: Screening
 }
 
 export interface TaskListFilter {
@@ -132,6 +134,8 @@ export class TaskService {
       ok: true,
       globalRev: this.events.currentRev,
       sources: [...PROVIDER_INFOS],
+      sourceHealth: sourceHealthList(),
+      keys: { ncbi: settings.ncbiApiKey !== '', s2: settings.s2ApiKey !== '' },
       settings: {
         defaultSources: [...settings.defaultSources],
         defaultPageSize: settings.defaultPageSize,
@@ -264,32 +268,13 @@ export class TaskService {
     const task = await this.get(id)
     const limit = clampInt(filter.limit ?? task.conditions.pageSize, 1, MAX_PAGE_LIMIT)
     const offset = clampInt(filter.offset ?? 0, 0, Number.MAX_SAFE_INTEGER)
-    const needle = filter.q?.trim().toLowerCase() ?? ''
-
-    let papers = task.result.papers.filter((paper) => {
-      if (filter.source !== undefined && !paper.hitSources.some((hit) => hit.source === filter.source)) {
-        return false
-      }
-      if (filter.yearFrom !== undefined && (paper.year ?? 0) < filter.yearFrom) return false
-      if (filter.yearTo !== undefined && (paper.year ?? Number.MAX_SAFE_INTEGER) > filter.yearTo) {
-        return false
-      }
-      if (filter.openAccessOnly === true && !paper.openAccess) return false
-      if (filter.screening !== undefined && paperScreening(task, paper) !== filter.screening) {
-        return false
-      }
-      if (needle !== '') {
-        const haystack = `${paper.title}\n${paper.abstract}`.toLowerCase()
-        if (!haystack.includes(needle)) return false
-      }
-      return true
-    })
+    const papers = filterPapers(task, filter)
 
     const sort = filter.sort ?? task.conditions.sort
     if (sort === 'citations') {
-      papers = [...papers].sort((a, b) => (b.citedBy ?? -1) - (a.citedBy ?? -1))
+      papers.sort((a, b) => (b.citedBy ?? -1) - (a.citedBy ?? -1))
     } else if (sort === 'year') {
-      papers = [...papers].sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+      papers.sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
     }
 
     return {
@@ -300,6 +285,48 @@ export class TaskService {
       limit,
       papers: papers.slice(offset, offset + limit),
     }
+  }
+
+  async stats(
+    id: string,
+    filter: PaperFilter = {},
+    scope: 'task' | 'filtered' = 'task',
+  ): Promise<TaskStatsReport> {
+    return computeStats(await this.get(id), filter, scope)
+  }
+
+  /** 单源诊断：用固定短查询测一次连通性与延迟（不受冷却影响）。 */
+  async probe(source: SourceId): Promise<ProbeResult> {
+    if (!SOURCE_IDS.includes(source)) {
+      throw new SearchError('bad_request', `未知数据源：${source}`)
+    }
+    const settings = getSettings()
+    const started = Date.now()
+    const result: ProbeResult = { target: source, ok: false, latencyMs: 0, count: 0 }
+    try {
+      const [outcome] = await searchSources({
+        query: PROBE_QUERY,
+        sources: [source],
+        limit: 1,
+        openAccessOnly: false,
+        contactEmail: settings.contactEmail,
+        timeoutMs: Math.min(settings.requestTimeoutMs, 20_000),
+        bypassCooldown: true,
+      })
+      result.latencyMs = Date.now() - started
+      if (outcome === undefined || !outcome.ok) {
+        result.error = outcome?.error ?? '未返回结果'
+      } else {
+        result.ok = true
+        result.count = outcome.records.length
+      }
+    } catch (error) {
+      result.latencyMs = Date.now() - started
+      result.error = error instanceof Error ? error.message : String(error)
+    }
+    const until = cooldownUntil(source)
+    if (until > Date.now()) result.cooldownUntil = new Date(until).toISOString()
+    return result
   }
 
   dispose(): void {
@@ -342,6 +369,8 @@ export class TaskService {
     }
     if (input.yearFrom !== undefined) condition.yearFrom = input.yearFrom
     if (input.yearTo !== undefined) condition.yearTo = input.yearTo
+    const types = normalizeTypes(input.types)
+    if (types !== undefined) condition.types = types
     if (condition.yearFrom !== undefined && condition.yearTo !== undefined && condition.yearFrom > condition.yearTo) {
       throw new SearchError('bad_request', '起始年份不能晚于结束年份')
     }
@@ -366,6 +395,12 @@ function mergeConditions(
   else if (patch.yearFrom !== undefined) next.yearFrom = patch.yearFrom
   if (patch.yearTo === null) delete next.yearTo
   else if (patch.yearTo !== undefined) next.yearTo = patch.yearTo
+  if (patch.types === null) delete next.types
+  else if (patch.types !== undefined) {
+    const types = normalizeTypes(patch.types)
+    if (types === undefined) delete next.types
+    else next.types = types
+  }
   if (next.yearFrom !== undefined && next.yearTo !== undefined && next.yearFrom > next.yearTo) {
     throw new SearchError('bad_request', '起始年份不能晚于结束年份')
   }
@@ -404,6 +439,17 @@ function normalizeSources(
   return valid.length === 0 ? [...SOURCE_IDS] : valid
 }
 
+function normalizeTypes(values: readonly string[] | undefined): string[] | undefined {
+  if (values === undefined) return undefined
+  const seen = new Set<string>()
+  for (const raw of values) {
+    const value = raw.trim().slice(0, 40)
+    if (value !== '') seen.add(value)
+    if (seen.size >= MAX_TYPES) break
+  }
+  return seen.size === 0 ? undefined : [...seen]
+}
+
 function readTitle(title: string | undefined, conditions: TaskConditions): string {
   const explicit = title?.trim() ?? ''
   if (explicit !== '') return explicit.slice(0, MAX_TITLE)
@@ -411,10 +457,6 @@ function readTitle(title: string | undefined, conditions: TaskConditions): strin
   const suffix = conditions.queries.length > 1 ? ` 等 ${conditions.queries.length} 条` : ''
   const base = first.length > 60 ? `${first.slice(0, 60)}…` : first
   return `${base}${suffix}`.slice(0, MAX_TITLE)
-}
-
-function paperScreening(task: SearchTask, paper: Paper): Screening {
-  return task.states[paper.paperId]?.screening ?? 'unread'
 }
 
 function clampInt(value: number, min: number, max: number): number {

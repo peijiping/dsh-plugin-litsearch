@@ -171,6 +171,23 @@ function readSourcesValue(value: unknown): SourceId[] | undefined {
   return value as SourceId[]
 }
 
+function readStringArray(
+  value: unknown,
+  name: string,
+  maxItems: number,
+  maxLength: number,
+): string[] | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new SearchError('bad_request', `${name} 必须是字符串数组`)
+  }
+  if (value.length > maxItems) {
+    throw new SearchError('bad_request', `${name} 最多 ${maxItems} 项`)
+  }
+  return value.map((item) => item.trim().slice(0, maxLength)).filter((item) => item !== '')
+}
+
 function readQueriesValue(value: unknown): QueryInput[] | undefined {
   if (value === undefined || value === null) return undefined
   if (!Array.isArray(value)) throw new SearchError('bad_request', 'queries 必须是数组')
@@ -245,6 +262,8 @@ function readCreateInput(body: Record<string, unknown>): Omit<CreateTaskInput, '
   }
   const language = readEnum(body['language'], 'language', LANGUAGES)
   if (language !== undefined) input.language = language
+  const types = readStringArray(body['types'], 'types', 20, 40)
+  if (types !== undefined && types !== null) input.types = types
   const sort = readEnum(body['sort'], 'sort', SORT_MODES)
   if (sort !== undefined) input.sort = sort
   if (body['runNow'] !== undefined) {
@@ -301,6 +320,8 @@ function readPatch(body: Record<string, unknown>): TaskPatch {
     }
     const language = readEnum(record['language'], 'language', LANGUAGES)
     if (language !== undefined) conditions.language = language
+    const types = readStringArray(record['types'], 'types', 20, 40)
+    if (types !== undefined) conditions.types = types
     const sort = readEnum(record['sort'], 'sort', SORT_MODES)
     if (sort !== undefined) conditions.sort = sort
     patch.conditions = conditions
@@ -357,6 +378,14 @@ function readResultsFilter(params: URLSearchParams): ResultsFilter {
   if (q !== '') filter.q = q
   const screening = readEnum(params.get('screening') ?? undefined, 'screening', SCREENINGS)
   if (screening !== undefined) filter.screening = screening
+  const queryId = params.get('queryId')?.trim() ?? ''
+  if (queryId !== '') filter.queryId = queryId
+  const type = params.get('type')?.trim() ?? ''
+  if (type !== '') filter.type = type
+  const language = readEnum(params.get('language') ?? undefined, 'language', LANGUAGES)
+  if (language !== undefined) filter.language = language
+  const hasPdf = params.get('hasPdf')
+  if (hasPdf === '1' || hasPdf === 'true') filter.hasPdf = true
   return filter
 }
 
@@ -425,6 +454,16 @@ async function handleTasks(
       return
     }
     ok(res, await service.results(id, readResultsFilter(params)))
+    return
+  }
+
+  if (action === 'stats') {
+    if (req.method !== 'GET') {
+      fail(res, 405, 'bad_request', 'stats 仅支持 GET')
+      return
+    }
+    const scope = params.get('scope') === 'filtered' ? 'filtered' : 'task'
+    ok(res, await service.stats(id, readResultsFilter(params), scope))
     return
   }
 
@@ -499,6 +538,19 @@ export function createHandler(
         const raw = url.searchParams.get('sinceRev') ?? '0'
         const sinceRev = Number(raw)
         ok(res, await service.eventsSince(Number.isFinite(sinceRev) ? sinceRev : 0))
+        return
+      }
+
+      if (head === 'settings') {
+        if (seg[1] === 'probe' && req.method === 'POST') {
+          const source = readString((await readJsonBody(req))['source'], 'source', 40)
+          if (source === undefined || !isSourceId(source)) {
+            throw new SearchError('bad_request', `未知数据源：${source ?? ''}`)
+          }
+          ok(res, await service.probe(source))
+          return
+        }
+        fail(res, 404, 'not_found', `未知设置端点 ${seg[1] ?? ''}`)
         return
       }
 

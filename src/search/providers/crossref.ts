@@ -5,7 +5,7 @@
  * 无需密钥；带 `mailto` 可进入 polite pool。
  */
 
-import { fetchJson } from '../http.js'
+import { limitedJson } from '../rate-limit.js'
 import {
   asArray,
   asNumber,
@@ -47,6 +47,9 @@ export const crossref: Provider = {
     label: 'Crossref',
     homepage: 'https://www.crossref.org',
     capabilities: { abstract: true, citationCount: true, openAccess: false, pdf: true },
+    rateLimit: '约 1 req/s（保守自限）；带邮箱进入 polite pool',
+    syntax: '自然语言；按年份下推，OA 由许可证粗略判断',
+    optionalKey: false,
   },
 
   async search(query, options): Promise<PaperRecord[]> {
@@ -62,9 +65,10 @@ export const crossref: Provider = {
     if (filters.length > 0) params.set('filter', filters.join(','))
     if (options.contactEmail !== '') params.set('mailto', options.contactEmail)
 
-    const payload = await fetchJson(`${ENDPOINT}?${params.toString()}`, {
+    const payload = await limitedJson('crossref', `${ENDPOINT}?${params.toString()}`, {
       timeoutMs: options.timeoutMs,
       signal: options.signal,
+      bypassCooldown: options.bypassCooldown === true,
       headers: {
         accept: 'application/json',
         'user-agent': userAgent(options.contactEmail),

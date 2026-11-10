@@ -9,6 +9,7 @@
 import { MAX_LIMIT, getSettings } from './config.js'
 import { SearchError } from './errors.js'
 import { PROVIDERS, resolveSources } from './providers/index.js'
+import { adaptQuery } from './query-adapter.js'
 import type { PaperRecord, SearchOptions, SourceId } from './types.js'
 
 export interface SourceRunResult {
@@ -37,8 +38,10 @@ export async function searchSources(options: SearchOptions): Promise<SourceRunRe
   const timeoutMs = options.timeoutMs > 0 ? options.timeoutMs : settings.requestTimeoutMs
 
   const settled = await Promise.allSettled(
-    sources.map((id) =>
-      PROVIDERS[id].search(query, {
+    sources.map((id) => {
+      const adapted = adaptQuery(id, { text: query, perSource: options.perSource })
+      if (adapted === '') return Promise.resolve<PaperRecord[]>([])
+      return PROVIDERS[id].search(adapted, {
         limit,
         yearFrom: options.yearFrom,
         yearTo: options.yearTo,
@@ -46,8 +49,11 @@ export async function searchSources(options: SearchOptions): Promise<SourceRunRe
         contactEmail,
         timeoutMs,
         signal: options.signal,
-      }),
-    ),
+        bypassCooldown: options.bypassCooldown === true,
+        ncbiApiKey: settings.ncbiApiKey,
+        s2ApiKey: settings.s2ApiKey,
+      })
+    }),
   )
 
   return settled.map((outcome, index): SourceRunResult => {

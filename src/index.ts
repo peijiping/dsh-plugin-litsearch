@@ -20,12 +20,15 @@ import { createHandler, type WebServerLike } from './host/router.js'
 import { literatureTools, type ToolsService } from './host/tools.js'
 import { TaskService } from './host/tasks/service.js'
 import {
+  DEFAULT_ARXIV_INTERVAL_MS,
   DEFAULT_AUTO_OPEN,
   DEFAULT_LANGUAGE,
   DEFAULT_MAX_TASK_TABS,
   DEFAULT_PAGE_SIZE,
+  DEFAULT_PUBMED_INTERVAL_MS,
   DEFAULT_RETENTION_COUNT,
   DEFAULT_RETENTION_DAYS,
+  DEFAULT_S2_INTERVAL_MS,
   DEFAULT_SORT,
   DEFAULT_TASK_MAX_PAPERS,
   MAX_LIMIT,
@@ -45,15 +48,31 @@ export const name = 'dsh-plugin-litsearch'
  * 唤醒引用，条目本身不重挂，因此改配置无需重启 dsh。
  */
 export const Config = Schema.object({
-  /** 作为 OpenAlex / Crossref 的 polite pool 标识；留空也可用。 */
+  /** 作为 OpenAlex / Crossref / NCBI 的联系邮箱；留空也可用。 */
   contactEmail: Schema.string().default('').volatile(),
+  /** 可选 NCBI API Key（E-utilities 额度从 3 req/s 提升到 10 req/s）。 */
+  ncbiApiKey: Schema.string().default('').role('secret').volatile(),
+  /** 可选 Semantic Scholar API Key。 */
+  s2ApiKey: Schema.string().default('').role('secret').volatile(),
+  /** 各源最小请求间隔（毫秒）。 */
+  pubmedIntervalMs: Schema.number().default(DEFAULT_PUBMED_INTERVAL_MS).volatile(),
+  s2IntervalMs: Schema.number().default(DEFAULT_S2_INTERVAL_MS).volatile(),
+  arxivIntervalMs: Schema.number().default(DEFAULT_ARXIV_INTERVAL_MS).volatile(),
   /** 默认每次加载条数。 */
   defaultPageSize: Schema.number().default(DEFAULT_PAGE_SIZE).volatile(),
   /** 单次上游请求超时（毫秒）。 */
   requestTimeoutMs: Schema.number().default(REQUEST_TIMEOUT_MS).volatile(),
   /** 默认数据源。 */
   defaultSources: Schema.array(
-    Schema.union([Schema.const('openalex'), Schema.const('crossref')]),
+    Schema.union([
+      Schema.const('pubmed'),
+      Schema.const('europepmc'),
+      Schema.const('openalex'),
+      Schema.const('crossref'),
+      Schema.const('semanticscholar'),
+      Schema.const('arxiv'),
+      Schema.const('pubtator'),
+    ]),
   )
     .default([...SOURCE_IDS])
     .volatile(),
@@ -82,6 +101,16 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
   // 每次读取都走 volatile 引用，始终拿到最新值。
   setSettingsReader(() => ({
     contactEmail: config.contactEmail.get().trim(),
+    ncbiApiKey: config.ncbiApiKey.get().trim(),
+    s2ApiKey: config.s2ApiKey.get().trim(),
+    pubmedIntervalMs: clampInt(
+      config.pubmedIntervalMs.get(),
+      50,
+      10_000,
+      DEFAULT_PUBMED_INTERVAL_MS,
+    ),
+    s2IntervalMs: clampInt(config.s2IntervalMs.get(), 50, 60_000, DEFAULT_S2_INTERVAL_MS),
+    arxivIntervalMs: clampInt(config.arxivIntervalMs.get(), 50, 60_000, DEFAULT_ARXIV_INTERVAL_MS),
     defaultPageSize: clampInt(config.defaultPageSize.get(), 1, MAX_LIMIT, DEFAULT_PAGE_SIZE),
     requestTimeoutMs: clampInt(
       config.requestTimeoutMs.get(),

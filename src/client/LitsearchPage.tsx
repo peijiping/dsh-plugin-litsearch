@@ -50,7 +50,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   const health = useHealth()
   const pending = usePendingTasks()
 
-  const [query, setQuery] = useState('')
+  const [queryInputs, setQueryInputs] = useState<string[]>([''])
   const [selected, setSelected] = useState<SourceId[]>([...SOURCE_IDS])
   const [creating, setCreating] = useState(false)
   const [tasks, setTasks] = useState<TaskSummary[]>([])
@@ -94,25 +94,45 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
     })
   }
 
+  const texts = queryInputs.map((text) => text.trim()).filter((text) => text !== '')
+
   const run = async (): Promise<void> => {
-    const q = query.trim()
-    if (q === '' || creating) return
+    if (texts.length === 0 || creating) return
     setCreating(true)
     setError(null)
     try {
       const detail = await createTask({
-        query: q,
+        ...(texts.length === 1
+          ? { query: texts[0] }
+          : {
+              queries: texts.map((text, index) => ({
+                text,
+                name: `检索式 ${index + 1}`,
+              })),
+            }),
         sources: selected.length === 0 ? undefined : selected,
       })
       rememberTaskTitle(detail.id, detail.title)
       onOpenTask(detail.id, detail.title)
-      setQuery('')
+      setQueryInputs([''])
       await loadHistory()
     } catch (err) {
       setError(errorMessage(err))
     } finally {
       setCreating(false)
     }
+  }
+
+  const setQueryAt = (index: number, text: string): void => {
+    setQueryInputs((previous) => previous.map((value, i) => (i === index ? text : value)))
+  }
+
+  const addQuery = (): void => {
+    setQueryInputs((previous) => [...previous, ''])
+  }
+
+  const removeQuery = (index: number): void => {
+    setQueryInputs((previous) => previous.filter((_, i) => i !== index))
   }
 
   const remove = async (id: string): Promise<void> => {
@@ -152,13 +172,47 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
           void run()
         }}
       >
-        <Input
-          value={query}
-          placeholder={t('search.placeholder')}
-          aria-label={t('search.placeholder')}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <Button type="submit" variant="primary" size="sm" disabled={creating || query.trim() === ''}>
+        <div style={queryListStyle}>
+          {queryInputs.map((value, index) => (
+            <div key={index} style={queryRowStyle}>
+              <Input
+                value={value}
+                placeholder={
+                  index === 0
+                    ? t('search.placeholder')
+                    : tpl(t('search.queryPlaceholder'), { n: index + 1 })
+                }
+                aria-label={
+                  index === 0
+                    ? t('search.placeholder')
+                    : tpl(t('search.queryPlaceholder'), { n: index + 1 })
+                }
+                onChange={(event) => setQueryAt(index, event.target.value)}
+              />
+              {queryInputs.length > 1 && (
+                <button
+                  type="button"
+                  style={linkButtonStyle}
+                  title={t('search.removeQuery')}
+                  onClick={() => removeQuery(index)}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 10, fontSize: 12 }}>
+            <button type="button" style={linkButtonStyle} onClick={addQuery}>
+              {t('search.addQuery')}
+            </button>
+          </div>
+        </div>
+        <Button
+          type="submit"
+          variant="primary"
+          size="sm"
+          disabled={creating || texts.length === 0}
+        >
           {creating ? t('search.searching') : t('search.button')}
         </Button>
       </form>
@@ -248,6 +302,20 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
     </div>
   )
 }
+
+const queryListStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  flex: 1,
+  minWidth: 0,
+} as const
+
+const queryRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+} as const
 
 const sectionTitleStyle = {
   fontSize: 12,

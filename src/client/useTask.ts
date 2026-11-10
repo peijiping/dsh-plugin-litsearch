@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ResultsPage, TaskDetail } from '../search/types'
 import { cancelTask, fetchResults, fetchTask, runTask } from './api'
+import type { ResultsQuery } from './api'
 
 const POLL_MS = 1500
 
@@ -42,6 +43,7 @@ export function useTask(
   id: string | null,
   signal: AbortSignal | undefined,
   fallbackLimit = 20,
+  filters: ResultsQuery = {},
 ): TaskView {
   const [state, setState] = useState<TaskState>(INITIAL)
   const [nonce, setNonce] = useState(0)
@@ -52,11 +54,18 @@ export function useTask(
   const revRef = useRef(-1)
   const limitRef = useRef(fallbackLimit)
   const seq = useRef(0)
+  const filtersRef = useRef(filters)
+  filtersRef.current = filters
+  const filterKey = JSON.stringify(filters)
 
   const load = useCallback(
     async (current: string, pageLimit: number): Promise<TaskDetail | null> => {
       const detail = await fetchTask(current, signal)
-      const page = await fetchResults(current, { limit: pageLimit }, signal)
+      const page = await fetchResults(
+        current,
+        { ...filtersRef.current, limit: pageLimit },
+        signal,
+      )
       statusRef.current = detail.status
       revRef.current = detail.rev
       limitRef.current = Math.max(pageLimit, detail.conditions.pageSize)
@@ -99,7 +108,7 @@ export function useTask(
           if (changed) {
             const page = await fetchResults(
               id,
-              { limit: Math.max(limitRef.current, detail.conditions.pageSize) },
+              { ...filtersRef.current, limit: Math.max(limitRef.current, detail.conditions.pageSize) },
               signal,
             )
             if (seq.current !== current) return
@@ -115,7 +124,7 @@ export function useTask(
     return () => {
       clearInterval(timer)
     }
-  }, [id, nonce, fallbackLimit, load, signal])
+  }, [id, nonce, fallbackLimit, load, signal, filterKey])
 
   const reload = useCallback(() => {
     setNonce((value) => value + 1)
@@ -130,7 +139,7 @@ export function useTask(
     try {
       const next = await fetchResults(
         id,
-        { offset: page.papers.length, limit: Math.max(limitRef.current, 20) },
+        { ...filtersRef.current, offset: page.papers.length, limit: Math.max(limitRef.current, 20) },
         signal,
       )
       setState((previous) => {

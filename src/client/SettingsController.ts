@@ -24,6 +24,11 @@ export const ROW_ID = 'dsh-plugin-litsearch'
 /** 可配置字段名，与 Host `Config` schema 一一对应。 */
 export type FieldName =
   | 'contactEmail'
+  | 'ncbiApiKey'
+  | 's2ApiKey'
+  | 'pubmedIntervalMs'
+  | 's2IntervalMs'
+  | 'arxivIntervalMs'
   | 'defaultPageSize'
   | 'requestTimeoutMs'
   | 'defaultSources'
@@ -36,6 +41,8 @@ export type FieldName =
   | 'taskMaxPapers'
 
 export const TEXT_FIELD = 'contactEmail' as const
+export const NCBI_KEY_FIELD = 'ncbiApiKey' as const
+export const S2_KEY_FIELD = 's2ApiKey' as const
 export const SOURCES_FIELD: FieldName = 'defaultSources'
 export const SORT_FIELD: FieldName = 'defaultSort'
 export const LANGUAGE_FIELD: FieldName = 'defaultLanguage'
@@ -44,6 +51,9 @@ export const AUTO_OPEN_FIELD: FieldName = 'autoOpenTaskTab'
 const NUMBER_FIELDS: readonly FieldName[] = [
   'defaultPageSize',
   'requestTimeoutMs',
+  'pubmedIntervalMs',
+  's2IntervalMs',
+  'arxivIntervalMs',
   'maxTaskTabs',
   'taskRetentionDays',
   'taskRetentionCount',
@@ -123,6 +133,11 @@ export function readSourceList(text: string): SourceId[] {
 /** 卡片快照：表单整体状态 + 逐字段状态。 */
 export interface SettingsState extends SettingsFormState {
   contactEmail: SettingsFieldState
+  ncbiApiKey: SettingsFieldState
+  s2ApiKey: SettingsFieldState
+  pubmedIntervalMs: SettingsFieldState
+  s2IntervalMs: SettingsFieldState
+  arxivIntervalMs: SettingsFieldState
   defaultPageSize: SettingsFieldState
   requestTimeoutMs: SettingsFieldState
   defaultSources: SettingsFieldState
@@ -148,6 +163,8 @@ export class LitsearchSettingsController {
   constructor(scope: unknown) {
     this.form = new SettingsFormModel(scope, [
       settingsTextField(TEXT_FIELD),
+      settingsTextField(NCBI_KEY_FIELD),
+      settingsTextField(S2_KEY_FIELD),
       ...NUMBER_FIELDS.map((field): SettingsFieldSpec => settingsNumberField(field)),
       sourcesField(SOURCES_FIELD),
       enumField(SORT_FIELD, SORT_MODES, 'relevance'),
@@ -161,6 +178,11 @@ export class LitsearchSettingsController {
     return {
       ...this.form.shell(),
       contactEmail: this.form.field('contactEmail'),
+      ncbiApiKey: this.form.field(NCBI_KEY_FIELD),
+      s2ApiKey: this.form.field(S2_KEY_FIELD),
+      pubmedIntervalMs: this.form.field('pubmedIntervalMs'),
+      s2IntervalMs: this.form.field('s2IntervalMs'),
+      arxivIntervalMs: this.form.field('arxivIntervalMs'),
       defaultPageSize: this.form.field('defaultPageSize'),
       requestTimeoutMs: this.form.field('requestTimeoutMs'),
       defaultSources: this.form.field(SOURCES_FIELD),

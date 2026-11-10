@@ -11,10 +11,15 @@
 import type { Paper, PaperHit, PaperIds, PaperRecord, SourceId } from './types.js'
 import { SOURCE_IDS } from './types.js'
 
-/** 各源权重（与方案一致；未列出的源按 1 处理）。 */
+/** 各源权重（与方案一致）。 */
 const RRF_WEIGHTS: Record<SourceId, number> = {
+  pubmed: 1.1,
+  europepmc: 1.0,
   openalex: 1.0,
   crossref: 0.95,
+  semanticscholar: 0.9,
+  arxiv: 0.85,
+  pubtator: 0.7,
 }
 
 /** RRF 平滑常数。 */

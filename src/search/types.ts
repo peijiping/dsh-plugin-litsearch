@@ -5,7 +5,15 @@
  */
 
 /** 已接入的免费数据源 id；顺序即聚合展示顺序。 */
-export const SOURCE_IDS = ['openalex', 'crossref'] as const
+export const SOURCE_IDS = [
+  'pubmed',
+  'europepmc',
+  'openalex',
+  'crossref',
+  'semanticscholar',
+  'arxiv',
+  'pubtator',
+] as const
 
 export type SourceId = (typeof SOURCE_IDS)[number]
 
@@ -74,11 +82,19 @@ export interface ProviderInfo {
   label: string
   homepage: string
   capabilities: ProviderCapabilities
+  /** 面向用户/模型的限流说明。 */
+  rateLimit: string
+  /** 检索式语法特点。 */
+  syntax: string
+  /** 是否需要（可选）密钥才能获得更高额度。 */
+  optionalKey: boolean
 }
 
 /** 单次检索的请求参数（任务执行器使用）。 */
 export interface SearchOptions {
   query: string
+  /** 单源语法覆写（来自 QueryBlock.perSource）。 */
+  perSource?: Partial<Record<SourceId, string>>
   sources: SourceId[]
   limit: number
   yearFrom?: number | undefined
@@ -87,6 +103,8 @@ export interface SearchOptions {
   contactEmail: string
   timeoutMs: number
   signal?: AbortSignal | undefined
+  /** 诊断测试用：忽略限流冷却，仍走队列与最小间隔。 */
+  bypassCooldown?: boolean
 }
 
 /** provider 实现拿到的已解析参数。 */
@@ -98,6 +116,11 @@ export interface ProviderSearchOptions {
   contactEmail: string
   timeoutMs: number
   signal?: AbortSignal | undefined
+  /** 诊断测试用：忽略限流冷却。 */
+  bypassCooldown?: boolean
+  /** 可选密钥；provider 只用于请求参数/请求头，不得写日志。 */
+  ncbiApiKey?: string
+  s2ApiKey?: string
 }
 
 export interface Provider {
@@ -244,6 +267,92 @@ export interface ResultsPage {
   papers: Paper[]
 }
 
+/** 概览统计的计数项。 */
+export interface CountEntry {
+  key: string
+  count: number
+  included: number
+}
+
+export interface SourceStat {
+  id: SourceId
+  hits: number
+  uniqueOnly: number
+  oa: number
+  withPdf: number
+}
+
+export interface QueryContribution {
+  queryId: string
+  name: string
+  hits: number
+  uniqueOnly: number
+  /** 与其它检索式的两两重叠计数（key = queryId）。 */
+  overlap: Record<string, number>
+}
+
+export interface YearStat {
+  year: number
+  count: number
+  included: number
+}
+
+/** `/tasks/:id/stats` 的统计口径与结果。 */
+export interface TaskStatsReport {
+  taskId: string
+  rev: number
+  scope: 'task' | 'filtered'
+  /** 参与统计的已加载篇数。 */
+  loaded: number
+  /** 任务已加载总数（未筛选）。 */
+  totalHint: number
+  funnel: {
+    rawHits: number
+    deduped: number
+    filtered: number
+    included: number
+    excluded: number
+    unread: number
+    read: number
+  }
+  bySource: SourceStat[]
+  byQuery: QueryContribution[]
+  byYear: YearStat[]
+  byType: CountEntry[]
+  byLanguage: CountEntry[]
+  topVenues: CountEntry[]
+  topAuthors: CountEntry[]
+  metrics: {
+    oaRate: number
+    pdfRate: number
+    htmlOnlyRate: number
+    medianCitations: number
+    topCited: string[]
+    latest: string[]
+  }
+  screeningProgress: { included: number; excluded: number; pending: number }
+  unavailableFullText: { paywalled: number; blocked: number; failed: number }
+}
+
+/** 单个数据源的运行时健康状态（/health 与设置页诊断使用）。 */
+export interface SourceHealth {
+  id: SourceId
+  lastOkAt?: string
+  lastError?: string
+  lastLatencyMs?: number
+  cooldownUntil?: string
+}
+
+/** 单源诊断结果。 */
+export interface ProbeResult {
+  target: SourceId
+  ok: boolean
+  latencyMs: number
+  count: number
+  error?: string
+  cooldownUntil?: string
+}
+
 /** `/events` 的响应；`reset` 表示客户端的 sinceRev 比服务端新（宿主重启）。 */
 export interface EventsPage {
   rev: number
@@ -256,6 +365,9 @@ export interface HealthInfo {
   ok: boolean
   globalRev: number
   sources: ProviderInfo[]
+  sourceHealth: SourceHealth[]
+  /** 密钥是否已配置（只给布尔值，绝不返回密钥）。 */
+  keys: { ncbi: boolean; s2: boolean }
   settings: {
     defaultSources: SourceId[]
     defaultPageSize: number
