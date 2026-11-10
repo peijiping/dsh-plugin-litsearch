@@ -6,7 +6,7 @@
  * - 落盘时摘要截到 {@link MAX_ABSTRACT_CHARS} 字符，任务数按保留策略裁剪。
  */
 
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -117,6 +117,21 @@ export class TaskStore {
 
   async flush(): Promise<void> {
     await this.chain
+  }
+
+  /** 手动清理：删除所有未置顶任务，返回条数与释放的字节数。 */
+  async cleanupUnpinned(): Promise<{ removed: number; freedBytes: number }> {
+    const targets = this.list().filter((summary) => !summary.pinned)
+    let freedBytes = 0
+    for (const summary of targets) {
+      try {
+        freedBytes += (await stat(this.taskFile(summary.id))).size
+      } catch {
+        // 文件已丢失时仍继续移除索引项。
+      }
+      await this.remove(summary.id)
+    }
+    return { removed: targets.length, freedBytes }
   }
 
   private taskFile(id: string): string {

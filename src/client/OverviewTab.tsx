@@ -7,11 +7,21 @@
 
 import { useEffect, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 
-import type { CountEntry, SourceStat, TaskStatsReport, YearStat } from '../search/types'
+import type { SourceStat, TaskStatsReport, YearStat } from '../search/types'
 import { fetchStats, type ResultsQuery } from './api'
 import { tpl, type Translate } from './locales'
 
 const YEAR_BARS = 14
+
+const FULLTEXT_STATUSES = [
+  { status: 'unknown', key: 'unknown' },
+  { status: 'available', key: 'available' },
+  { status: 'downloaded', key: 'downloaded' },
+  { status: 'html-only', key: 'htmlOnly' },
+  { status: 'paywalled', key: 'paywalled' },
+  { status: 'blocked', key: 'blocked' },
+  { status: 'failed', key: 'failed' },
+] as const
 
 interface Props {
   t: Translate
@@ -97,6 +107,28 @@ export function OverviewTab({
           <Metric label={t('overview.oaRate')} value={percent(metrics.oaRate)} />
           <Metric label={t('overview.pdfRate')} value={percent(metrics.pdfRate)} />
           <Metric label={t('overview.medianCited')} value={String(metrics.medianCitations)} />
+          {metrics.newVsBase !== undefined && (
+            <Metric label={t('overview.newVsBase')} value={String(metrics.newVsBase)} />
+          )}
+        </div>
+      </Section>
+
+      <Section title={t('overview.fulltext')}>
+        <div style={CHIP_ROW_STYLE}>
+          {FULLTEXT_STATUSES.map((entry) => (
+            <span key={entry.key} style={CHIP_STYLE}>
+              {t(`pdf.status.${entry.status}`)} {report.fullText[entry.key]}
+            </span>
+          ))}
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <button
+            type="button"
+            style={CHIP_BUTTON_STYLE}
+            onClick={() => onPick({ missingFullText: true })}
+          >
+            {t('overview.missingFullText')}
+          </button>
         </div>
       </Section>
 
@@ -152,15 +184,72 @@ export function OverviewTab({
         </Section>
       )}
 
+      {report.byLanguage.length > 0 && (
+        <Section title={t('overview.languages')}>
+          <div style={CHIP_ROW_STYLE}>
+            {report.byLanguage.slice(0, 8).map((entry) => {
+              const language = languageFilter(entry.key)
+              return (
+                <button
+                  key={entry.key}
+                  type="button"
+                  style={CHIP_BUTTON_STYLE}
+                  title={language === undefined ? entry.key : t('overview.clickToFilter')}
+                  disabled={language === undefined}
+                  onClick={() => {
+                    if (language !== undefined) onPick({ language })
+                  }}
+                >
+                  {entry.key} {entry.count}
+                </button>
+              )
+            })}
+          </div>
+        </Section>
+      )}
+
       {report.topVenues.length > 0 && (
         <Section title={t('overview.venues')}>
           {report.topVenues.slice(0, 8).map((entry) => (
-            <CountRow key={entry.key} entry={entry} />
+            <button
+              key={entry.key}
+              type="button"
+              style={ROW_BUTTON_STYLE}
+              title={t('overview.clickToFilter')}
+              onClick={() => onPick({ venue: entry.key })}
+            >
+              <span style={ROW_NAME_STYLE}>{entry.key}</span>
+              <span style={ROW_VALUE_STYLE}>{entry.count}</span>
+            </button>
+          ))}
+        </Section>
+      )}
+
+      {report.topAuthors.length > 0 && (
+        <Section title={t('overview.authors')}>
+          {report.topAuthors.slice(0, 10).map((entry) => (
+            <button
+              key={entry.key}
+              type="button"
+              style={ROW_BUTTON_STYLE}
+              title={t('overview.clickToFilter')}
+              onClick={() => onPick({ author: entry.key })}
+            >
+              <span style={ROW_NAME_STYLE}>{entry.key}</span>
+              <span style={ROW_VALUE_STYLE}>{entry.count}</span>
+            </button>
           ))}
         </Section>
       )}
     </div>
   )
+}
+
+function languageFilter(key: string): 'eng' | 'chi' | undefined {
+  const value = key.toLowerCase()
+  if (value.startsWith('eng') || value.startsWith('en')) return 'eng'
+  if (value.startsWith('chi') || value.startsWith('zh')) return 'chi'
+  return undefined
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }): ReactElement {
@@ -248,17 +337,6 @@ function SourceRow({
   )
 }
 
-function CountRow({ entry }: { entry: CountEntry }): ReactElement {
-  return (
-    <div style={FUNNEL_ROW_STYLE}>
-      <span style={{ ...TEXT_STYLE, opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {entry.key}
-      </span>
-      <span style={TEXT_STYLE}>{entry.count}</span>
-    </div>
-  )
-}
-
 function percent(value: number): string {
   return `${Math.round(value * 100)}%`
 }
@@ -325,6 +403,12 @@ const ROW_BUTTON_STYLE: CSSProperties = {
 const ROW_NAME_STYLE: CSSProperties = { fontWeight: 600 }
 const ROW_VALUE_STYLE: CSSProperties = { opacity: 0.72, fontSize: 11 }
 const CHIP_ROW_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 }
+const CHIP_STYLE: CSSProperties = {
+  fontSize: 11,
+  padding: '1px 6px',
+  borderRadius: 4,
+  border: '1px solid rgba(127,127,127,0.28)',
+}
 const CHIP_BUTTON_STYLE: CSSProperties = {
   fontSize: 11,
   padding: '1px 6px',

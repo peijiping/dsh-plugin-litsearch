@@ -7,8 +7,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { ResultsPage, TaskDetail } from '../search/types'
-import { cancelTask, fetchResults, fetchTask, runTask } from './api'
+import type { AnnotationInput, ResultsPage, TaskDetail } from '../search/types'
+import { annotateTask, cancelTask, fetchResults, fetchTask, runTask } from './api'
 import type { ResultsQuery } from './api'
 
 const POLL_MS = 1500
@@ -27,6 +27,7 @@ export interface TaskView extends TaskState {
   loadMore(): Promise<void>
   rerun(): Promise<void>
   cancel(): Promise<void>
+  annotate(papers: readonly AnnotationInput[]): Promise<void>
 }
 
 const INITIAL: TaskState = { detail: null, page: null, loading: true, error: null }
@@ -94,7 +95,7 @@ export function useTask(
       if (seq.current !== current || signal?.aborted === true) return
       setState({ detail: null, page: null, loading: false, error: errorMessage(error) })
     })
-    const timer = setInterval(() => {
+    const poll = (): void => {
       if (document.hidden || signal?.aborted === true) return
       if (!isActive(statusRef.current)) return
       void (async () => {
@@ -119,10 +120,17 @@ export function useTask(
           // 单次轮询失败不打断：下一拍继续。
         }
       })()
-    }, POLL_MS)
+    }
+
+    const timer = setInterval(poll, POLL_MS)
+    const onVisible = (): void => {
+      if (!document.hidden) poll()
+    }
+    document.addEventListener('visibilitychange', onVisible)
 
     return () => {
       clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [id, nonce, fallbackLimit, load, signal, filterKey])
 
@@ -188,6 +196,22 @@ export function useTask(
     }
   }, [id, busy])
 
+  const annotate = useCallback(
+    async (papers: readonly AnnotationInput[]): Promise<void> => {
+      if (id === null || papers.length === 0) return
+      setBusy(true)
+      try {
+        await annotateTask(id, papers)
+        setNonce((value) => value + 1)
+      } catch (error) {
+        setState((previous) => ({ ...previous, error: errorMessage(error) }))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [id],
+  )
+
   return {
     ...state,
     loadingMore,
@@ -196,5 +220,6 @@ export function useTask(
     loadMore,
     rerun,
     cancel,
+    annotate,
   }
 }

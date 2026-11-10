@@ -44,6 +44,17 @@ export const DEFAULT_PUBMED_INTERVAL_MS = 350
 export const DEFAULT_S2_INTERVAL_MS = 3000
 export const DEFAULT_ARXIV_INTERVAL_MS = 3000
 
+/** 全文下载默认设置。 */
+export const DEFAULT_PDF_MAX_MB = 30
+export const DEFAULT_AUTO_DOWNLOAD_PDF = false
+export const DEFAULT_ENABLE_EPMC_FULLTEXT = true
+
+/** Zotero connector 默认设置。 */
+export const DEFAULT_ZOTERO_ENABLED = true
+export const DEFAULT_ZOTERO_BASE_URL = 'http://127.0.0.1:23119'
+export const DEFAULT_ZOTERO_ATTACH_PDF = true
+export const DEFAULT_ZOTERO_TAG = 'dsh-litsearch'
+
 /** 持久化时单条摘要保留的字符数。 */
 export const MAX_ABSTRACT_CHARS = 800
 
@@ -82,6 +93,15 @@ export interface LitsearchSettings {
   pubmedIntervalMs: number
   s2IntervalMs: number
   arxivIntervalMs: number
+  /** PDF 下载根目录；空串由 Host 回落到 ~/Downloads/dsh-litsearch。 */
+  pdfRoot: string
+  pdfMaxMb: number
+  autoDownloadPdf: boolean
+  enableEpmcFulltext: boolean
+  zoteroEnabled: boolean
+  zoteroBaseUrl: string
+  zoteroAttachPdf: boolean
+  zoteroTag: string
 }
 
 /** 默认读取器：入口未注入时回落到常量。 */
@@ -102,6 +122,14 @@ let readSettings = (): LitsearchSettings => ({
   pubmedIntervalMs: DEFAULT_PUBMED_INTERVAL_MS,
   s2IntervalMs: DEFAULT_S2_INTERVAL_MS,
   arxivIntervalMs: DEFAULT_ARXIV_INTERVAL_MS,
+  pdfRoot: '',
+  pdfMaxMb: DEFAULT_PDF_MAX_MB,
+  autoDownloadPdf: DEFAULT_AUTO_DOWNLOAD_PDF,
+  enableEpmcFulltext: DEFAULT_ENABLE_EPMC_FULLTEXT,
+  zoteroEnabled: DEFAULT_ZOTERO_ENABLED,
+  zoteroBaseUrl: DEFAULT_ZOTERO_BASE_URL,
+  zoteroAttachPdf: DEFAULT_ZOTERO_ATTACH_PDF,
+  zoteroTag: DEFAULT_ZOTERO_TAG,
 })
 
 /** 由插件入口在 `apply` 时注入。 */

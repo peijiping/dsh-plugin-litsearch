@@ -39,6 +39,14 @@ export type FieldName =
   | 'taskRetentionDays'
   | 'taskRetentionCount'
   | 'taskMaxPapers'
+  | 'pdfRoot'
+  | 'pdfMaxMb'
+  | 'autoDownloadPdf'
+  | 'enableEpmcFulltext'
+  | 'zoteroEnabled'
+  | 'zoteroBaseUrl'
+  | 'zoteroAttachPdf'
+  | 'zoteroTag'
 
 export const TEXT_FIELD = 'contactEmail' as const
 export const NCBI_KEY_FIELD = 'ncbiApiKey' as const
@@ -47,6 +55,13 @@ export const SOURCES_FIELD: FieldName = 'defaultSources'
 export const SORT_FIELD: FieldName = 'defaultSort'
 export const LANGUAGE_FIELD: FieldName = 'defaultLanguage'
 export const AUTO_OPEN_FIELD: FieldName = 'autoOpenTaskTab'
+export const PDF_ROOT_FIELD: FieldName = 'pdfRoot'
+export const AUTO_DOWNLOAD_FIELD: FieldName = 'autoDownloadPdf'
+export const EPMC_FULLTEXT_FIELD: FieldName = 'enableEpmcFulltext'
+export const ZOTERO_ENABLED_FIELD: FieldName = 'zoteroEnabled'
+export const ZOTERO_BASE_URL_FIELD: FieldName = 'zoteroBaseUrl'
+export const ZOTERO_ATTACH_FIELD: FieldName = 'zoteroAttachPdf'
+export const ZOTERO_TAG_FIELD: FieldName = 'zoteroTag'
 
 const NUMBER_FIELDS: readonly FieldName[] = [
   'defaultPageSize',
@@ -58,6 +73,22 @@ const NUMBER_FIELDS: readonly FieldName[] = [
   'taskRetentionDays',
   'taskRetentionCount',
   'taskMaxPapers',
+  'pdfMaxMb',
+]
+
+const TEXT_FIELDS: readonly FieldName[] = [
+  TEXT_FIELD,
+  PDF_ROOT_FIELD,
+  ZOTERO_BASE_URL_FIELD,
+  ZOTERO_TAG_FIELD,
+]
+
+const BOOLEAN_FIELDS: readonly FieldName[] = [
+  AUTO_OPEN_FIELD,
+  AUTO_DOWNLOAD_FIELD,
+  EPMC_FULLTEXT_FIELD,
+  ZOTERO_ENABLED_FIELD,
+  ZOTERO_ATTACH_FIELD,
 ]
 
 export const SORT_MODES = ['relevance', 'citations', 'year'] as const
@@ -148,6 +179,14 @@ export interface SettingsState extends SettingsFormState {
   taskRetentionDays: SettingsFieldState
   taskRetentionCount: SettingsFieldState
   taskMaxPapers: SettingsFieldState
+  pdfRoot: SettingsFieldState
+  pdfMaxMb: SettingsFieldState
+  autoDownloadPdf: SettingsFieldState
+  enableEpmcFulltext: SettingsFieldState
+  zoteroEnabled: SettingsFieldState
+  zoteroBaseUrl: SettingsFieldState
+  zoteroAttachPdf: SettingsFieldState
+  zoteroTag: SettingsFieldState
 }
 
 /** 席位注册时经 `inject()` 下发给组件的面。 */
@@ -162,14 +201,14 @@ export class LitsearchSettingsController {
 
   constructor(scope: unknown) {
     this.form = new SettingsFormModel(scope, [
-      settingsTextField(TEXT_FIELD),
+      ...TEXT_FIELDS.map((field): SettingsFieldSpec => settingsTextField(field)),
       settingsTextField(NCBI_KEY_FIELD),
       settingsTextField(S2_KEY_FIELD),
       ...NUMBER_FIELDS.map((field): SettingsFieldSpec => settingsNumberField(field)),
       sourcesField(SOURCES_FIELD),
       enumField(SORT_FIELD, SORT_MODES, 'relevance'),
       enumField(LANGUAGE_FIELD, LANGUAGES, 'any'),
-      booleanField(AUTO_OPEN_FIELD),
+      ...BOOLEAN_FIELDS.map((field): SettingsFieldSpec => booleanField(field)),
     ])
     this.store = this.form.bind(() => this.projection())
   }
@@ -193,6 +232,14 @@ export class LitsearchSettingsController {
       taskRetentionDays: this.form.field('taskRetentionDays'),
       taskRetentionCount: this.form.field('taskRetentionCount'),
       taskMaxPapers: this.form.field('taskMaxPapers'),
+      pdfRoot: this.form.field(PDF_ROOT_FIELD),
+      pdfMaxMb: this.form.field('pdfMaxMb'),
+      autoDownloadPdf: this.form.field(AUTO_DOWNLOAD_FIELD),
+      enableEpmcFulltext: this.form.field(EPMC_FULLTEXT_FIELD),
+      zoteroEnabled: this.form.field(ZOTERO_ENABLED_FIELD),
+      zoteroBaseUrl: this.form.field(ZOTERO_BASE_URL_FIELD),
+      zoteroAttachPdf: this.form.field(ZOTERO_ATTACH_FIELD),
+      zoteroTag: this.form.field(ZOTERO_TAG_FIELD),
     }
   }
 

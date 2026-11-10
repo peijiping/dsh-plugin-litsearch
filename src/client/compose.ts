@@ -32,6 +32,11 @@ export function paperText(t: Translate, paper: Paper): string {
   return lines.join('\n')
 }
 
+/** 批量插入：一次捕获后按编号拼接，避免多篇文本重复占用草稿。 */
+export function papersText(t: Translate, papers: readonly Paper[]): string {
+  return papers.map((paper, index) => `${index + 1}. ${paperText(t, paper)}`).join('\n\n')
+}
+
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max)}…`
 }

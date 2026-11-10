@@ -8,6 +8,7 @@
 
 import type {
   CountEntry,
+  FullTextCoverage,
   Paper,
   QueryContribution,
   SearchTask,
@@ -16,7 +17,7 @@ import type {
   TaskStatsReport,
   YearStat,
 } from '../../search/types.js'
-import { filterKey, filterPapers, screeningOf, type PaperFilter } from './filter.js'
+import { filterKey, filterPapers, pdfStatusOf, screeningOf, type PaperFilter } from './filter.js'
 
 const CACHE_TTL_MS = 30_000
 const CACHE_MAX = 16
@@ -34,12 +35,13 @@ export function computeStats(
   task: SearchTask,
   filter: PaperFilter,
   scope: 'task' | 'filtered',
+  base?: { paperIds: ReadonlySet<string>; rev: number },
 ): TaskStatsReport {
-  const key = `${task.id}:${task.rev}:${scope}:${filterKey(filter)}`
+  const key = `${task.id}:${task.rev}:${scope}:${filterKey(filter)}:${base?.rev ?? ''}`
   const cached = cache.get(key)
   if (cached !== undefined && Date.now() - cached.at < CACHE_TTL_MS) return cached.report
 
-  const report = buildReport(task, filter, scope)
+  const report = buildReport(task, filter, scope, base)
   cache.set(key, { at: Date.now(), report })
   if (cache.size > CACHE_MAX) {
     const oldest = cache.keys().next().value
@@ -52,6 +54,7 @@ function buildReport(
   task: SearchTask,
   filter: PaperFilter,
   scope: 'task' | 'filtered',
+  base?: { paperIds: ReadonlySet<string>; rev: number },
 ): TaskStatsReport {
   const all = task.result.papers
   const papers = scope === 'filtered' ? filterPapers(task, filter) : all
@@ -60,6 +63,7 @@ function buildReport(
   const excluded = papers.filter((paper) => screeningOf(task, paper) === 'excluded').length
   const read = papers.filter((paper) => screeningOf(task, paper) === 'read').length
   const unread = papers.length - included - excluded - read
+  const fullText = countFullText(task, papers)
 
   return {
     taskId: task.id,
@@ -78,15 +82,43 @@ function buildReport(
     },
     bySource: buildSourceStats(task, papers),
     byQuery: buildQueryStats(task, papers),
-    byYear: buildYearStats(papers),
+    byYear: buildYearStats(task, papers),
     byType: countBy(task, papers, (paper) => paper.type),
     byLanguage: countBy(task, papers, (paper) => paper.language ?? ''),
     topVenues: topBy(task, papers, (paper) => (paper.venue === '' ? [] : [paper.venue])),
     topAuthors: topBy(task, papers, (paper) => paper.authors),
-    metrics: buildMetrics(papers),
+    metrics: buildMetrics(papers, base),
     screeningProgress: { included, excluded, pending: unread },
-    unavailableFullText: { paywalled: 0, blocked: 0, failed: 0 },
+    unavailableFullText: {
+      paywalled: fullText.paywalled,
+      blocked: fullText.blocked,
+      failed: fullText.failed,
+    },
+    fullText,
   }
+}
+
+function countFullText(task: SearchTask, papers: readonly Paper[]): FullTextCoverage {
+  const coverage: FullTextCoverage = {
+    unknown: 0,
+    available: 0,
+    downloaded: 0,
+    htmlOnly: 0,
+    paywalled: 0,
+    blocked: 0,
+    failed: 0,
+  }
+  for (const paper of papers) {
+    const status = pdfStatusOf(task, paper)
+    if (status === 'html-only') coverage.htmlOnly += 1
+    else if (status === 'available') coverage.available += 1
+    else if (status === 'downloaded') coverage.downloaded += 1
+    else if (status === 'paywalled') coverage.paywalled += 1
+    else if (status === 'blocked') coverage.blocked += 1
+    else if (status === 'failed') coverage.failed += 1
+    else coverage.unknown += 1
+  }
+  return coverage
 }
 
 function buildSourceStats(task: SearchTask, papers: Paper[]): SourceStat[] {
@@ -141,12 +173,13 @@ function buildQueryStats(task: SearchTask, papers: Paper[]): QueryContribution[]
   })
 }
 
-function buildYearStats(papers: Paper[]): YearStat[] {
+function buildYearStats(task: SearchTask, papers: Paper[]): YearStat[] {
   const years = new Map<number, { count: number; included: number }>()
   for (const paper of papers) {
     if (paper.year === null) continue
     const entry = years.get(paper.year) ?? { count: 0, included: 0 }
     entry.count += 1
+    if (screeningOf(task, paper) === 'included') entry.included += 1
     years.set(paper.year, entry)
   }
   return [...years.entries()]
@@ -196,7 +229,10 @@ function topBy(
     .slice(0, TOP_LIST)
 }
 
-function buildMetrics(papers: Paper[]): TaskStatsReport['metrics'] {
+function buildMetrics(
+  papers: Paper[],
+  base?: { paperIds: ReadonlySet<string>; rev: number },
+): TaskStatsReport['metrics'] {
   const total = papers.length
   const oa = papers.filter((paper) => paper.openAccess).length
   const pdf = papers.filter((paper) => paper.pdfUrl !== '').length
@@ -228,6 +264,9 @@ function buildMetrics(papers: Paper[]): TaskStatsReport['metrics'] {
       .sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
       .slice(0, TOP_PAPERS)
       .map((paper) => paper.paperId),
+    ...(base === undefined
+      ? {}
+      : { newVsBase: papers.filter((paper) => !base.paperIds.has(paper.paperId)).length }),
   }
 }
 

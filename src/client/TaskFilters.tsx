@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 
-import type { QueryBlock, SortMode, SourceId, TaskLanguage } from '../search/types'
+import type { QueryBlock, SortMode, SourceId, TaskGroup, TaskLanguage } from '../search/types'
 import type { ResultsQuery } from './api'
 import { tpl, type Translate } from './locales'
 
@@ -25,6 +25,8 @@ interface Draft {
   yearFrom: string
   yearTo: string
   type: string
+  venue: string
+  author: string
 }
 
 interface Props {
@@ -32,6 +34,7 @@ interface Props {
   value: ResultsQuery
   sources: readonly SourceId[]
   queries: readonly QueryBlock[]
+  groups?: readonly TaskGroup[]
   onChange(next: ResultsQuery): void
 }
 
@@ -41,6 +44,8 @@ function toDraft(value: ResultsQuery): Draft {
     yearFrom: value.yearFrom === undefined ? '' : String(value.yearFrom),
     yearTo: value.yearTo === undefined ? '' : String(value.yearTo),
     type: value.type ?? '',
+    venue: value.venue ?? '',
+    author: value.author ?? '',
   }
 }
 
@@ -49,6 +54,8 @@ function mergeDraft(base: ResultsQuery, draft: Draft): ResultsQuery {
   // 保留原始文本（服务端会 trim），避免防抖回写把用户刚敲的空格吃掉、光标跳动。
   next.q = draft.q === '' ? undefined : draft.q
   next.type = draft.type === '' ? undefined : draft.type
+  next.venue = draft.venue === '' ? undefined : draft.venue
+  next.author = draft.author === '' ? undefined : draft.author
   const yearFrom = Number(draft.yearFrom)
   next.yearFrom =
     draft.yearFrom.trim() === '' || !Number.isFinite(yearFrom) || yearFrom <= 0
@@ -70,15 +77,27 @@ export function activeFilterCount(value: ResultsQuery): number {
   if (value.yearFrom !== undefined || value.yearTo !== undefined) count += 1
   if (value.openAccessOnly === true) count += 1
   if (value.hasPdf === true) count += 1
+  if (value.missingFullText === true) count += 1
   if (value.screening !== undefined) count += 1
   if (value.language !== undefined) count += 1
   if (value.queryId !== undefined) count += 1
   if (value.type !== undefined) count += 1
   if (value.sort !== undefined) count += 1
+  if (value.groupId !== undefined) count += 1
+  if (value.venue !== undefined) count += 1
+  if (value.author !== undefined) count += 1
+  if (value.newOnly === true) count += 1
   return count
 }
 
-export function TaskFilters({ t, value, sources, queries, onChange }: Props): ReactElement {
+export function TaskFilters({
+  t,
+  value,
+  sources,
+  queries,
+  groups = [],
+  onChange,
+}: Props): ReactElement {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<Draft>(() => toDraft(value))
   const latest = useRef({ value, onChange })
@@ -111,6 +130,10 @@ export function TaskFilters({ t, value, sources, queries, onChange }: Props): Re
     value.queryId === undefined
       ? ''
       : (queries.find((query) => query.id === value.queryId)?.name ?? value.queryId)
+  const groupName =
+    value.groupId === undefined
+      ? ''
+      : (groups.find((group) => group.id === value.groupId)?.name ?? value.groupId)
 
   const setDraftValue = (key: keyof Draft, text: string): void => {
     setDraft((previous) => ({ ...previous, [key]: text }))
@@ -138,6 +161,30 @@ export function TaskFilters({ t, value, sources, queries, onChange }: Props): Re
           <ActiveChip
             label={tpl(t('filter.queryChip'), { value: queryName })}
             onRemove={() => patch({ queryId: undefined })}
+          />
+        )}
+        {value.groupId !== undefined && (
+          <ActiveChip
+            label={tpl(t('filter.groupChip'), { value: groupName })}
+            onRemove={() => patch({ groupId: undefined })}
+          />
+        )}
+        {value.venue !== undefined && (
+          <ActiveChip
+            label={tpl(t('filter.venueChip'), { value: value.venue })}
+            onRemove={() => patch({ venue: undefined })}
+          />
+        )}
+        {value.author !== undefined && (
+          <ActiveChip
+            label={tpl(t('filter.authorChip'), { value: value.author })}
+            onRemove={() => patch({ author: undefined })}
+          />
+        )}
+        {value.newOnly === true && (
+          <ActiveChip
+            label={t('filter.newChip')}
+            onRemove={() => patch({ newOnly: undefined })}
           />
         )}
       </div>
@@ -218,6 +265,24 @@ export function TaskFilters({ t, value, sources, queries, onChange }: Props): Re
           </label>
 
           <label style={FIELD_STYLE}>
+            <span>{t('filter.group')}</span>
+            <select
+              style={INPUT_STYLE}
+              value={value.groupId ?? ''}
+              onChange={(event) =>
+                patch({ groupId: event.target.value === '' ? undefined : event.target.value })
+              }
+            >
+              <option value="">{t('filter.any')}</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={FIELD_STYLE}>
             <span>{t('filter.language')}</span>
             <select
               style={INPUT_STYLE}
@@ -271,6 +336,17 @@ export function TaskFilters({ t, value, sources, queries, onChange }: Props): Re
             {t('filter.hasPdf')}
           </label>
 
+          <label style={CHECK_STYLE}>
+            <input
+              type="checkbox"
+              checked={value.missingFullText === true}
+              onChange={(event) =>
+                patch({ missingFullText: event.target.checked ? true : undefined })
+              }
+            />
+            {t('filter.missingFullText')}
+          </label>
+
           <label style={FIELD_STYLE}>
             <span>{t('filter.type')}</span>
             <input
@@ -278,6 +354,26 @@ export function TaskFilters({ t, value, sources, queries, onChange }: Props): Re
               value={draft.type}
               placeholder={t('filter.typePlaceholder')}
               onChange={(event) => setDraftValue('type', event.target.value)}
+            />
+          </label>
+
+          <label style={FIELD_STYLE}>
+            <span>{t('filter.venue')}</span>
+            <input
+              style={INPUT_STYLE}
+              value={draft.venue}
+              placeholder={t('filter.venuePlaceholder')}
+              onChange={(event) => setDraftValue('venue', event.target.value)}
+            />
+          </label>
+
+          <label style={FIELD_STYLE}>
+            <span>{t('filter.author')}</span>
+            <input
+              style={INPUT_STYLE}
+              value={draft.author}
+              placeholder={t('filter.authorPlaceholder')}
+              onChange={(event) => setDraftValue('author', event.target.value)}
             />
           </label>
         </div>

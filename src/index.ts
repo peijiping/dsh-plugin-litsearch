@@ -15,22 +15,31 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 import { createHandler, type WebServerLike } from './host/router.js'
 import { literatureTools, type ToolsService } from './host/tools.js'
 import { TaskService } from './host/tasks/service.js'
 import {
   DEFAULT_ARXIV_INTERVAL_MS,
+  DEFAULT_AUTO_DOWNLOAD_PDF,
   DEFAULT_AUTO_OPEN,
+  DEFAULT_ENABLE_EPMC_FULLTEXT,
   DEFAULT_LANGUAGE,
   DEFAULT_MAX_TASK_TABS,
   DEFAULT_PAGE_SIZE,
+  DEFAULT_PDF_MAX_MB,
   DEFAULT_PUBMED_INTERVAL_MS,
   DEFAULT_RETENTION_COUNT,
   DEFAULT_RETENTION_DAYS,
   DEFAULT_S2_INTERVAL_MS,
   DEFAULT_SORT,
   DEFAULT_TASK_MAX_PAPERS,
+  DEFAULT_ZOTERO_ATTACH_PDF,
+  DEFAULT_ZOTERO_BASE_URL,
+  DEFAULT_ZOTERO_ENABLED,
+  DEFAULT_ZOTERO_TAG,
   MAX_LIMIT,
   REQUEST_TIMEOUT_MS,
   ROUTE_MATCH,
@@ -95,6 +104,19 @@ export const Config = Schema.object({
   taskRetentionCount: Schema.number().default(DEFAULT_RETENTION_COUNT).volatile(),
   /** 单任务结果上限。 */
   taskMaxPapers: Schema.number().default(DEFAULT_TASK_MAX_PAPERS).volatile(),
+  /** PDF 下载根目录。 */
+  pdfRoot: Schema.string().default(join(homedir(), 'Downloads', 'dsh-litsearch')).volatile(),
+  /** 单个 PDF 最大体积（MB）。 */
+  pdfMaxMb: Schema.number().default(DEFAULT_PDF_MAX_MB).volatile(),
+  /** 检索完成后自动下载缺失 PDF。 */
+  autoDownloadPdf: Schema.boolean().default(DEFAULT_AUTO_DOWNLOAD_PDF).volatile(),
+  /** 无 PDF 时用 Europe PMC HTML 全文兜底。 */
+  enableEpmcFulltext: Schema.boolean().default(DEFAULT_ENABLE_EPMC_FULLTEXT).volatile(),
+  /** Zotero 入口开关。 */
+  zoteroEnabled: Schema.boolean().default(DEFAULT_ZOTERO_ENABLED).volatile(),
+  zoteroBaseUrl: Schema.string().default(DEFAULT_ZOTERO_BASE_URL).volatile(),
+  zoteroAttachPdf: Schema.boolean().default(DEFAULT_ZOTERO_ATTACH_PDF).volatile(),
+  zoteroTag: Schema.string().default(DEFAULT_ZOTERO_TAG).volatile(),
 })
 
 export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): void {
@@ -131,6 +153,14 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
       DEFAULT_RETENTION_COUNT,
     ),
     taskMaxPapers: clampInt(config.taskMaxPapers.get(), 10, 10_000, DEFAULT_TASK_MAX_PAPERS),
+    pdfRoot: config.pdfRoot.get().trim(),
+    pdfMaxMb: clampInt(config.pdfMaxMb.get(), 1, 200, DEFAULT_PDF_MAX_MB),
+    autoDownloadPdf: config.autoDownloadPdf.get(),
+    enableEpmcFulltext: config.enableEpmcFulltext.get(),
+    zoteroEnabled: config.zoteroEnabled.get(),
+    zoteroBaseUrl: normalizeBaseUrl(config.zoteroBaseUrl.get()),
+    zoteroAttachPdf: config.zoteroAttachPdf.get(),
+    zoteroTag: config.zoteroTag.get().trim().slice(0, 40) || DEFAULT_ZOTERO_TAG,
   }))
 
   // 任务状态是模型工具与 HTTP 路由的唯一事实源。
@@ -175,4 +205,9 @@ function normalizeSort(value: string): SortMode {
 
 function normalizeLanguage(value: string): TaskLanguage {
   return value === 'eng' || value === 'chi' ? value : 'any'
+}
+
+function normalizeBaseUrl(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/u, '')
+  return /^https?:\/\//u.test(trimmed) ? trimmed : DEFAULT_ZOTERO_BASE_URL
 }

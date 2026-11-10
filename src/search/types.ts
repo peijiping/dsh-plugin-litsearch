@@ -169,6 +169,16 @@ export interface TaskConditions {
   pageSize: number
 }
 
+/** 全文获取状态；`unknown` 表示尚未尝试。 */
+export type PdfStatus =
+  | 'unknown'
+  | 'available'
+  | 'downloaded'
+  | 'html-only'
+  | 'paywalled'
+  | 'blocked'
+  | 'failed'
+
 /** 论文级人工筛选状态。 */
 export interface PaperState {
   screening: Screening
@@ -176,6 +186,11 @@ export interface PaperState {
   shortlistOrder?: number
   note?: string
   tags?: string[]
+  pdfStatus?: PdfStatus
+  /** 失败原因（面向用户的一句话）。 */
+  pdfError?: string
+  /** 已下载到用户目录的绝对路径。 */
+  pdfFile?: string
 }
 
 export interface TaskGroup {
@@ -250,6 +265,10 @@ export interface TaskDetail extends TaskSummary {
   conditions: TaskConditions
   notes: string
   groups: TaskGroup[]
+  /** paperId → 筛读状态；只含有过人工操作或继承的条目。 */
+  states: Record<string, PaperState>
+  /** 建立任务时继承筛读状态的来源任务。 */
+  fromTaskId?: string
   result: {
     totalLoaded: number
     sources: SourceStatus[]
@@ -329,9 +348,165 @@ export interface TaskStatsReport {
     medianCitations: number
     topCited: string[]
     latest: string[]
+    /** 相对 `fromTaskId` 的新增篇数；无基准任务时缺省。 */
+    newVsBase?: number
   }
   screeningProgress: { included: number; excluded: number; pending: number }
   unavailableFullText: { paywalled: number; blocked: number; failed: number }
+  /** 全文覆盖：与台账同一口径。 */
+  fullText: FullTextCoverage
+}
+
+/** 全文获取覆盖计数。 */
+export interface FullTextCoverage {
+  unknown: number
+  available: number
+  downloaded: number
+  htmlOnly: number
+  paywalled: number
+  blocked: number
+  failed: number
+}
+
+// ---- P3：筛读、分组、对比与导出 -------------------------------------------
+
+/** 单篇论文的批量注解输入（`POST /tasks/:id/annotate`）。 */
+export interface AnnotationInput {
+  paperId: string
+  screening?: Screening
+  /** `null` 表示移出分组。 */
+  groupId?: string | null
+  /** `null` 表示清除必读顺序。 */
+  shortlistOrder?: number | null
+  note?: string
+  tags?: string[]
+  /** 全文状态由 Host 下载/同步流程写入，面板也可显示与筛选。 */
+  pdfStatus?: PdfStatus
+  pdfError?: string
+  pdfFile?: string
+}
+
+/** 单篇 PDF 下载结果。 */
+export interface PdfDownloadResult {
+  paperId: string
+  status: PdfStatus
+  bytes: number
+  /** 用户目录中的可读文件名。 */
+  filename?: string
+  path?: string
+  url?: string
+  error?: string
+}
+
+/** Zotero connector 探测结果。 */
+export interface ZoteroProbeResult {
+  ok: boolean
+  version?: string
+  collection?: {
+    id: number | string
+    name: string
+    libraryID?: number
+    filesEditable?: boolean
+  }
+  error?: string
+}
+
+/** Zotero 批量同步结果。 */
+export interface ZoteroSyncResult {
+  ok: boolean
+  saved: number
+  attached: number
+  failed: number
+  messages: string[]
+}
+
+/** 下载目录可写性测试结果。 */
+export interface StorageProbeResult {
+  ok: boolean
+  root: string
+  writable: boolean
+  error?: string
+}
+
+export interface AnnotationResult {
+  taskId: string
+  rev: number
+  updated: number
+}
+
+/** 单篇论文详情（独立论文页使用）。 */
+export interface PaperDetail {
+  taskId: string
+  taskTitle: string
+  rev: number
+  paper: Paper
+  state?: PaperState
+  groups: TaskGroup[]
+}
+
+/** PubTator 标注的单个实体（按标识符与原文去重）。 */
+export interface PaperEntity {
+  text: string
+  type: string
+  identifier: string
+  database: string
+  name: string
+  /** 同一实体在标题/摘要/全文中出现的次数。 */
+  count: number
+}
+
+/** 单篇论文的 PubTator 实体结果。 */
+export interface PaperEntities {
+  paperId: string
+  pmid: string
+  entities: PaperEntity[]
+  fetchedAt: string
+}
+
+/** 对比视图里的轻量论文投影。 */
+export interface ComparePaper {
+  paperId: string
+  title: string
+  authors: string[]
+  year: number | null
+  venue: string
+  doi: string
+  openAccess: boolean
+}
+
+export interface CompareResult {
+  taskId: string
+  rev: number
+  withTaskId: string
+  withTitle: string
+  counts: {
+    added: number
+    common: number
+    missing: number
+    total: number
+    baseTotal: number
+  }
+  /** 当前任务有、基准任务没有的论文。 */
+  added: ComparePaper[]
+  /** 基准任务有、当前任务没有的论文。 */
+  missing: ComparePaper[]
+}
+
+export type ExportFormat = 'csv' | 'ris' | 'bibtex' | 'md'
+
+export interface ExportFile {
+  filename: string
+  mime: string
+  content: string
+}
+
+export type CleanupScope = 'tasks' | 'pdf' | 'all'
+
+export interface CleanupResult {
+  scope: CleanupScope
+  removed: number
+  freedBytes: number
+  remaining: number
 }
 
 /** 单个数据源的运行时健康状态（/health 与设置页诊断使用）。 */
@@ -375,6 +550,18 @@ export interface HealthInfo {
     defaultLanguage: TaskLanguage
     autoOpenTaskTab: boolean
     maxTaskTabs: number
+  }
+  fullText: {
+    pdfRoot: string
+    pdfMaxMb: number
+    autoDownload: boolean
+    epmcFulltext: boolean
+  }
+  zotero: {
+    enabled: boolean
+    baseUrl: string
+    attachPdf: boolean
+    tag: string
   }
   /** 任务文件存放目录（设置页只读展示）。 */
   storageDir: string

@@ -6,33 +6,68 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import { MAX_LIMIT, PLUGIN_VERSION, getSettings } from '../../search/config.js'
 import { SearchError } from '../../search/errors.js'
 import { cooldownUntil, sourceHealthList } from '../../search/health.js'
 import { PROVIDER_INFOS } from '../../search/providers/index.js'
 import { searchSources } from '../../search/aggregate.js'
+import { fullTextHtml, jatsToHtml, epmcXmlUrl } from '../../search/oa.js'
+import { fetchPubtatorEntities } from '../../search/pubtator-entities.js'
 import type {
+  AnnotationInput,
+  AnnotationResult,
+  CleanupResult,
+  CleanupScope,
+  CompareResult,
   EventsPage,
+  ExportFile,
+  ExportFormat,
   HealthInfo,
+  Paper,
+  PaperDetail,
+  PaperEntities,
+  PaperState,
+  PdfDownloadResult,
+  PdfStatus,
   ProbeResult,
   QueryBlock,
   ResultsPage,
   SearchTask,
   SortMode,
   SourceId,
+  StorageProbeResult,
   TaskConditions,
   TaskDetail,
+  TaskGroup,
   TaskLanguage,
   TaskOrigin,
   TaskStatsReport,
   TaskSummary,
+  ZoteroProbeResult,
+  ZoteroSyncResult,
 } from '../../search/types.js'
 import { SOURCE_IDS } from '../../search/types.js'
 import { TaskEvents } from '../events.js'
+import { buildExport, type ExportContext } from '../export/index.js'
+import {
+  cleanupPdfCache,
+  epmcFullTextAvailable,
+  persistPdf,
+  probePdfRoot,
+  readLocalPdf,
+  readableFilename,
+  resolvePdf,
+  resolvePdfRoot,
+} from '../pdf/store.js'
+import { ZoteroConnector } from '../zotero/connector.js'
+import { compareTasks } from './compare.js'
 import { filterPapers, type PaperFilter } from './filter.js'
 import { TaskRunner } from './runner.js'
 import { computeStats } from './stats.js'
+import { applyAnnotations, countScreening, emptyState, normalizeGroups } from './states.js'
 import { TaskStore } from './store.js'
 import { toDetail, toSummary } from './summary.js'
 
@@ -71,6 +106,7 @@ export interface TaskPatch {
   title?: string
   notes?: string
   pinned?: boolean
+  groups?: TaskGroup[]
   conditions?: {
     queries?: QueryInput[]
     sources?: SourceId[]
@@ -144,6 +180,18 @@ export class TaskService {
         autoOpenTaskTab: settings.autoOpenTaskTab,
         maxTaskTabs: settings.maxTaskTabs,
       },
+      fullText: {
+        pdfRoot: resolvePdfRoot(),
+        pdfMaxMb: settings.pdfMaxMb,
+        autoDownload: settings.autoDownloadPdf,
+        epmcFulltext: settings.enableEpmcFulltext,
+      },
+      zotero: {
+        enabled: settings.zoteroEnabled,
+        baseUrl: settings.zoteroBaseUrl,
+        attachPdf: settings.zoteroAttachPdf,
+        tag: settings.zoteroTag,
+      },
       storageDir: this.store.root,
       version: PLUGIN_VERSION,
     }
@@ -181,6 +229,8 @@ export class TaskService {
     const settings = getSettings()
     const conditions = this.readConditions(input, settings)
     const title = readTitle(input.title, conditions)
+    const inherited =
+      input.fromTaskId === undefined ? undefined : await this.get(input.fromTaskId)
     const now = new Date().toISOString()
     const task: SearchTask = {
       id: `t${Date.now().toString(36)}${randomUUID().slice(0, 6)}`,
@@ -201,7 +251,7 @@ export class TaskService {
         screening: { unread: 0, read: 0, included: 0, excluded: 0 },
       },
       result: { papers: [], sources: [] },
-      states: {},
+      states: inherited === undefined ? {} : inheritStates(inherited),
       ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
       ...(input.fromTaskId === undefined ? {} : { fromTaskId: input.fromTaskId }),
     }
@@ -234,6 +284,15 @@ export class TaskService {
     }
     if (patch.notes !== undefined) task.notes = patch.notes
     if (patch.pinned !== undefined) task.pinned = patch.pinned
+    if (patch.groups !== undefined) {
+      const groups = normalizeGroups(patch.groups) ?? []
+      task.groups = groups
+      // 删除分组后，原来归入它的论文回到未分组，而不是指向不存在的 id。
+      const ids = new Set(groups.map((group) => group.id))
+      for (const state of Object.values(task.states)) {
+        if (state.groupId !== undefined && !ids.has(state.groupId)) delete state.groupId
+      }
+    }
     if (patch.conditions !== undefined) {
       task.conditions = mergeConditions(task.conditions, patch.conditions)
     }
@@ -268,7 +327,7 @@ export class TaskService {
     const task = await this.get(id)
     const limit = clampInt(filter.limit ?? task.conditions.pageSize, 1, MAX_PAGE_LIMIT)
     const offset = clampInt(filter.offset ?? 0, 0, Number.MAX_SAFE_INTEGER)
-    const papers = filterPapers(task, filter)
+    const papers = filterPapers(task, await this.withBaseFilter(task, filter))
 
     const sort = filter.sort ?? task.conditions.sort
     if (sort === 'citations') {
@@ -292,7 +351,309 @@ export class TaskService {
     filter: PaperFilter = {},
     scope: 'task' | 'filtered' = 'task',
   ): Promise<TaskStatsReport> {
-    return computeStats(await this.get(id), filter, scope)
+    const task = await this.get(id)
+    const base = await this.baseInfo(task)
+    const resolved = base === undefined ? filter : await this.withBaseFilter(task, filter)
+    return computeStats(task, resolved, scope, base)
+  }
+
+  /** 写入筛读 / 分组 / 必读 / 备注；返回新的 rev 与命中条数。 */
+  async annotate(
+    id: string,
+    inputs: readonly AnnotationInput[],
+    expectedRev?: number,
+  ): Promise<AnnotationResult> {
+    const task = await this.get(id)
+    if (expectedRev !== undefined && expectedRev !== task.rev) {
+      throw new SearchError('conflict', `任务已被更新（当前 rev=${task.rev}），请刷新后重试`)
+    }
+    const outcome = applyAnnotations(task, inputs)
+    task.states = outcome.states
+    task.stats.screening = countScreening(task.result.papers, task.states)
+    task.rev += 1
+    task.updatedAt = new Date().toISOString()
+    await this.store.save(task)
+    this.events.publish(toSummary(task))
+    return { taskId: task.id, rev: task.rev, updated: outcome.updated }
+  }
+
+  async compare(id: string, withTaskId: string): Promise<CompareResult> {
+    if (withTaskId.trim() === '') throw new SearchError('bad_request', '缺少对比任务 id')
+    if (withTaskId === id) throw new SearchError('bad_request', '不能与自身对比')
+    const task = await this.get(id)
+    const base = await this.get(withTaskId)
+    return compareTasks(task, base)
+  }
+
+  /** 生成导出内容；`paperIds` 为空表示按当前筛选导出全部。 */
+  async export(
+    id: string,
+    format: ExportFormat,
+    filter: PaperFilter = {},
+    paperIds?: readonly string[],
+  ): Promise<ExportFile> {
+    const task = await this.get(id)
+    const resolved = await this.withBaseFilter(task, filter)
+    let papers = filterPapers(task, resolved)
+    if (paperIds !== undefined && paperIds.length > 0) {
+      const wanted = new Set(paperIds)
+      papers = papers.filter((paper) => wanted.has(paper.paperId))
+    }
+    const base = task.fromTaskId === undefined ? undefined : await this.tryGet(task.fromTaskId)
+    const context: ExportContext = { task, papers, generatedAt: new Date() }
+    if (base !== undefined) context.base = base
+    return buildExport(context, format)
+  }
+
+  /** 把导出内容写到 `<storage>/out/<taskId>/`，供模型工具返回落盘路径。 */
+  async exportToDisk(
+    id: string,
+    format: ExportFormat,
+    filter: PaperFilter = {},
+    paperIds?: readonly string[],
+  ): Promise<{ path: string; file: ExportFile; count: number }> {
+    const task = await this.get(id)
+    const file = await this.export(id, format, filter, paperIds)
+    const dir = join(this.store.root, 'out', task.id)
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, file.filename)
+    await writeFile(path, file.content, 'utf8')
+    let papers = filterPapers(task, await this.withBaseFilter(task, filter))
+    if (paperIds !== undefined && paperIds.length > 0) {
+      const wanted = new Set(paperIds)
+      papers = papers.filter((paper) => wanted.has(paper.paperId))
+    }
+    return { path, file, count: papers.length }
+  }
+
+  /** 设置页清理：任务文件与 PDF 缓存。 */
+  async cleanup(scope: CleanupScope): Promise<CleanupResult> {
+    if (scope === 'pdf') {
+      const outcome = await cleanupPdfCache(this.store.root)
+      return {
+        scope,
+        removed: outcome.removed,
+        freedBytes: outcome.freedBytes,
+        remaining: this.store.list().length,
+      }
+    }
+    const tasks = await this.store.cleanupUnpinned()
+    const pdf =
+      scope === 'all' ? await cleanupPdfCache(this.store.root) : { removed: 0, freedBytes: 0 }
+    return {
+      scope,
+      removed: tasks.removed + pdf.removed,
+      freedBytes: tasks.freedBytes + pdf.freedBytes,
+      remaining: this.store.list().length,
+    }
+  }
+
+  /** 下载单篇 PDF；失败时写入失败状态，若有 EPMC 全文则降级为 html-only。 */
+  async downloadPdf(id: string, paperId: string): Promise<PdfDownloadResult> {
+    const task = await this.get(id)
+    const paper = findPaper(task, paperId)
+    const settings = getSettings()
+    const resolution = await resolvePdf(paper)
+    if (!resolution.ok || resolution.buffer === undefined) {
+      const fallback =
+        settings.enableEpmcFulltext && epmcFullTextAvailable(paper) ? 'html-only' : resolution.status
+      await this.setPdfState(task, paperId, {
+        pdfStatus: fallback,
+        pdfError: resolution.error ?? '下载失败',
+      })
+      const result: PdfDownloadResult = {
+        paperId,
+        status: fallback,
+        bytes: 0,
+        error: resolution.error ?? '下载失败',
+      }
+      return result
+    }
+
+    const saved = await persistPdf(resolution.buffer, this.store.root, paper)
+    await this.setPdfState(task, paperId, {
+      pdfStatus: 'downloaded',
+      pdfFile: saved.filePath,
+    })
+    const result: PdfDownloadResult = {
+      paperId,
+      status: 'downloaded',
+      bytes: resolution.buffer.length,
+      filename: saved.filename,
+      path: saved.filePath,
+    }
+    if (resolution.url !== undefined) result.url = resolution.url
+    return result
+  }
+
+  /** PDF 预览：优先用已落地文件；没有则临时抓取一次但不落盘。 */
+  async previewPdf(id: string, paperId: string): Promise<{ buffer: Buffer; filename: string }> {
+    const task = await this.get(id)
+    const paper = findPaper(task, paperId)
+    const filename = readableFilename(paper)
+    const local = await readLocalPdf(paper)
+    if (local !== null) return { buffer: local, filename }
+    const resolution = await resolvePdf(paper)
+    if (!resolution.ok || resolution.buffer === undefined) {
+      throw new SearchError('not_found', resolution.error ?? '没有可预览的 PDF')
+    }
+    return { buffer: resolution.buffer, filename }
+  }
+
+  /** Europe PMC 全文（JATS → 只含安全标签的 HTML）。 */
+  async fullText(id: string, paperId: string): Promise<string> {
+    const task = await this.get(id)
+    const paper = findPaper(task, paperId)
+    const settings = getSettings()
+    if (!settings.enableEpmcFulltext) {
+      throw new SearchError('not_found', 'Europe PMC 全文兜底已在设置中关闭')
+    }
+    const url = epmcXmlUrl(paper)
+    if (url === null) throw new SearchError('not_found', '这篇文献没有 Europe PMC 全文')
+    // EPMC 的 JATS 全文经常 10s+，通用搜索超时对单篇阅读过紧。
+    const xml = await fetchEpmcXml(url, Math.max(settings.requestTimeoutMs, 30_000))
+    const html = fullTextHtml(paper, jatsToHtml(xml), 'Europe PMC')
+    const recorded = task.states[paperId]?.pdfStatus
+    if (paper.pdfUrl === '' && (recorded === undefined || recorded === 'unknown' || recorded === 'failed')) {
+      await this.setPdfState(task, paperId, { pdfStatus: 'html-only' }).catch(() => undefined)
+    }
+    return html
+  }
+
+  /** 单篇论文详情：独立论文页使用，含任务标题与分组。 */
+  async paperDetail(id: string, paperId: string): Promise<PaperDetail> {
+    const task = await this.get(id)
+    const paper = findPaper(task, paperId)
+    const detail: PaperDetail = {
+      taskId: task.id,
+      taskTitle: task.title,
+      rev: task.rev,
+      paper,
+      groups: task.groups,
+    }
+    const state = task.states[paperId]
+    if (state !== undefined) detail.state = state
+    return detail
+  }
+
+  /** PubTator3 实体标注；无 PMID 时明确告知不可标注。 */
+  async entities(id: string, paperId: string, signal?: AbortSignal): Promise<PaperEntities> {
+    const task = await this.get(id)
+    const paper = findPaper(task, paperId)
+    const pmid = paper.ids.pmid
+    if (pmid === '') {
+      throw new SearchError('not_found', '这篇文献没有 PMID，PubTator 无法标注')
+    }
+    const settings = getSettings()
+    // 全文标注的 BioC JSON 可能较大，沿用全文的 30s 下限。
+    const entities = await fetchPubtatorEntities(
+      pmid,
+      Math.max(settings.requestTimeoutMs, 30_000),
+      signal,
+    )
+    return { paperId, pmid, entities, fetchedAt: new Date().toISOString() }
+  }
+
+  /** 测试 Zotero connector 是否可达，并返回当前选中的分类。 */
+  async zoteroProbe(): Promise<ZoteroProbeResult> {
+    const settings = getSettings()
+    try {
+      return await new ZoteroConnector(settings.zoteroBaseUrl).probe()
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 把选中论文同步到 Zotero（含本地 PDF 附件）。 */
+  async zoteroSync(
+    id: string,
+    paperIds?: readonly string[],
+  ): Promise<ZoteroSyncResult> {
+    const settings = getSettings()
+    if (!settings.zoteroEnabled) throw new SearchError('bad_request', 'Zotero 同步已在设置中关闭')
+    const task = await this.get(id)
+    const wanted =
+      paperIds === undefined || paperIds.length === 0
+        ? task.result.papers.slice(0, 50)
+        : paperIds.map((paperId) => findPaper(task, paperId))
+    if (wanted.length === 0) throw new SearchError('bad_request', '没有可同步的文献')
+
+    const connector = new ZoteroConnector(settings.zoteroBaseUrl)
+    const probe = await connector.probe()
+    if (!probe.ok) {
+      throw new SearchError(
+        'network_error',
+        `Zotero 未运行或 connector 不可达：${probe.error ?? settings.zoteroBaseUrl}`,
+      )
+    }
+
+    const readOnlyAttachments =
+      settings.zoteroAttachPdf && probe.collection?.filesEditable === false
+    const attachPdf = settings.zoteroAttachPdf && !readOnlyAttachments
+    const inputs: { paper: Paper; tags: string[]; pdfPath?: string }[] = []
+    for (const paper of wanted) {
+      const tags = task.states[paper.paperId]?.tags ?? []
+      const pdfPath = attachPdf ? await this.ensureLocalPdf(paper) : undefined
+      inputs.push({ paper, tags, ...(pdfPath === undefined ? {} : { pdfPath }) })
+    }
+
+    try {
+      const result = await connector.sync(inputs, {
+        baseUrl: settings.zoteroBaseUrl,
+        attachPdf,
+        tag: settings.zoteroTag,
+      })
+      if (probe.collection === undefined) {
+        result.messages.unshift('Zotero 当前未选择分类，条目已保存到「我的文库」')
+      } else if (readOnlyAttachments) {
+        result.messages.unshift('当前分类不可写附件，已只保存条目；可在 Zotero 中换一个可写分类后重试')
+      }
+      return result
+    } catch (error) {
+      throw new SearchError(
+        'upstream_error',
+        error instanceof Error ? error.message : String(error),
+      )
+    }
+  }
+
+  /** 下载目录可写性测试（设置页）。 */
+  async storageProbe(): Promise<StorageProbeResult> {
+    const outcome = await probePdfRoot()
+    if (outcome.writable) return { ok: true, root: outcome.root, writable: true }
+    return {
+      ok: false,
+      root: outcome.root,
+      writable: false,
+      ...(outcome.error === undefined ? {} : { error: outcome.error }),
+    }
+  }
+
+  private async ensureLocalPdf(paper: Paper): Promise<string | undefined> {
+    const local = await readLocalPdf(paper)
+    if (local !== null) return join(resolvePdfRoot(), readableFilename(paper))
+    const resolution = await resolvePdf(paper).catch(() => null)
+    if (resolution === null || !resolution.ok || resolution.buffer === undefined) return undefined
+    const saved = await persistPdf(resolution.buffer, this.store.root, paper)
+    return saved.filePath
+  }
+
+  private async setPdfState(
+    task: SearchTask,
+    paperId: string,
+    patch: { pdfStatus: PdfStatus; pdfError?: string; pdfFile?: string },
+  ): Promise<void> {
+    const current = task.states[paperId] ?? emptyState()
+    const next: PaperState = { ...current, pdfStatus: patch.pdfStatus }
+    if (patch.pdfError === undefined) delete next.pdfError
+    else next.pdfError = patch.pdfError.slice(0, 300)
+    if (patch.pdfFile === undefined) delete next.pdfFile
+    else next.pdfFile = patch.pdfFile.slice(0, 1024)
+    task.states[paperId] = next
+    task.rev += 1
+    task.updatedAt = new Date().toISOString()
+    await this.store.save(task)
+    this.events.publish(toSummary(task))
   }
 
   /** 单源诊断：用固定短查询测一次连通性与延迟（不受冷却影响）。 */
@@ -329,6 +690,34 @@ export class TaskService {
     return result
   }
 
+  private async tryGet(id: string): Promise<SearchTask | undefined> {
+    try {
+      return await this.get(id)
+    } catch {
+      return undefined
+    }
+  }
+
+  private async baseInfo(
+    task: SearchTask,
+  ): Promise<{ paperIds: ReadonlySet<string>; rev: number } | undefined> {
+    if (task.fromTaskId === undefined) return undefined
+    const base = await this.tryGet(task.fromTaskId)
+    if (base === undefined) return undefined
+    return { paperIds: new Set(base.result.papers.map((paper) => paper.paperId)), rev: base.rev }
+  }
+
+  /** `newOnly` 需要基准任务的论文集合；基准已删除时忽略该条件。 */
+  private async withBaseFilter<T extends PaperFilter>(task: SearchTask, filter: T): Promise<T> {
+    if (filter.newOnly !== true || task.fromTaskId === undefined) return filter
+    const base = await this.tryGet(task.fromTaskId)
+    if (base === undefined) return filter
+    return {
+      ...filter,
+      newPaperIds: new Set(base.result.papers.map((paper) => paper.paperId)),
+    }
+  }
+
   dispose(): void {
     this.runner.cancelAll()
     void this.store.flush()
@@ -350,7 +739,43 @@ export class TaskService {
       persist: (current) => this.store.save(current),
       publish: (current) => this.events.publish(toSummary(current)),
     })
-    return done.then(() => task)
+    return done.then(() => {
+      if (getSettings().autoDownloadPdf) {
+        void this.autoDownloadPdfs(task).catch((error: unknown) => {
+          console.warn('[dsh-plugin-litsearch] 自动下载 PDF 失败：', error)
+        })
+      }
+      return task
+    })
+  }
+
+  /** 任务完成后按设置自动下载少量开放获取 PDF（上限 10 篇，避免长时间占用网络）。 */
+  private async autoDownloadPdfs(task: SearchTask): Promise<void> {
+    const targets = task.result.papers
+      .filter((paper) => paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '')
+      .slice(0, 10)
+    for (const paper of targets) {
+      if (task.states[paper.paperId]?.pdfStatus === 'downloaded') continue
+      const resolution = await resolvePdf(paper).catch(() => null)
+      if (resolution === null || !resolution.ok || resolution.buffer === undefined) {
+        if (resolution !== null) {
+          const fallback =
+            getSettings().enableEpmcFulltext && epmcFullTextAvailable(paper)
+              ? 'html-only'
+              : resolution.status
+          await this.setPdfState(task, paper.paperId, {
+            pdfStatus: fallback,
+            pdfError: resolution.error ?? '下载失败',
+          }).catch(() => undefined)
+        }
+        continue
+      }
+      const saved = await persistPdf(resolution.buffer, this.store.root, paper)
+      await this.setPdfState(task, paper.paperId, {
+        pdfStatus: 'downloaded',
+        pdfFile: saved.filePath,
+      }).catch(() => undefined)
+    }
   }
 
   private readConditions(
@@ -459,7 +884,64 @@ function readTitle(title: string | undefined, conditions: TaskConditions): strin
   return `${base}${suffix}`.slice(0, MAX_TITLE)
 }
 
+function inheritStates(base: SearchTask): Record<string, PaperState> {
+  const states: Record<string, PaperState> = {}
+  for (const [paperId, state] of Object.entries(base.states)) {
+    // 分组是任务内概念，继承时只带筛读、必读顺序、备注与标签。
+    const next: PaperState = { screening: state.screening }
+    if (state.shortlistOrder !== undefined) next.shortlistOrder = state.shortlistOrder
+    if (state.note !== undefined) next.note = state.note
+    if (state.tags !== undefined) next.tags = [...state.tags]
+    states[paperId] = next
+  }
+  return states
+}
+
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min
   return Math.min(Math.max(Math.floor(value), min), max)
+}
+
+function findPaper(task: SearchTask, paperId: string): Paper {
+  const paper = task.result.papers.find((entry) => entry.paperId === paperId)
+  if (paper === undefined) throw new SearchError('not_found', `任务里没有这篇文献：${paperId}`)
+  return paper
+}
+
+async function fetchEpmcXml(url: string, timeoutMs: number): Promise<string> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), Math.max(5_000, timeoutMs))
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { accept: 'application/xml,text/xml;q=0.9,*/*;q=0.5' },
+    })
+    if (!response.ok) {
+      const code = response.status === 404 ? 'not_found' : 'upstream_error'
+      throw new SearchError(code, `Europe PMC 返回 HTTP ${response.status}`)
+    }
+    const declared = Number(response.headers.get('content-length') ?? '0')
+    if (Number.isFinite(declared) && declared > 6 * 1024 * 1024) {
+      throw new SearchError('bad_request', 'Europe PMC 全文超过 6 MB，已跳过')
+    }
+    const text = await response.text()
+    if (text.length > 6 * 1024 * 1024) {
+      throw new SearchError('bad_request', 'Europe PMC 全文超过 6 MB，已跳过')
+    }
+    if (!text.includes('<body')) {
+      throw new SearchError('not_found', 'Europe PMC 没有可用的全文 XML')
+    }
+    return text
+  } catch (error) {
+    if (error instanceof SearchError) throw error
+    if (controller.signal.aborted) {
+      throw new SearchError('timeout', 'Europe PMC 全文请求超时')
+    }
+    throw new SearchError(
+      'network_error',
+      error instanceof Error ? error.message : String(error),
+    )
+  } finally {
+    clearTimeout(timer)
+  }
 }

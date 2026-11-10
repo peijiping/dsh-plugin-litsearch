@@ -7,16 +7,29 @@
 
 import { WRITE_HEADER } from '../search/config'
 import type {
+  AnnotationInput,
+  AnnotationResult,
+  CleanupResult,
+  CleanupScope,
+  CompareResult,
   EventsPage,
+  ExportFormat,
   HealthInfo,
+  PaperDetail,
+  PaperEntities,
+  PdfDownloadResult,
   ProbeResult,
   ResultsPage,
   SortMode,
   SourceId,
+  StorageProbeResult,
   TaskDetail,
+  TaskGroup,
   TaskLanguage,
   TaskStatsReport,
   TaskSummary,
+  ZoteroProbeResult,
+  ZoteroSyncResult,
 } from '../search/types'
 
 const BASE = '/dsh-litsearch/api'
@@ -90,10 +103,24 @@ export interface CreateTaskBody {
   sort?: SortMode
 }
 
+export interface TaskConditionsPatch {
+  queries?: QueryBody[]
+  sources?: SourceId[]
+  pageSize?: number
+  yearFrom?: number | null
+  yearTo?: number | null
+  openAccessOnly?: boolean
+  language?: TaskLanguage
+  types?: string[]
+  sort?: SortMode
+}
+
 export interface TaskPatchBody {
   title?: string
   notes?: string
   pinned?: boolean
+  groups?: TaskGroup[]
+  conditions?: TaskConditionsPatch
   rev?: number
 }
 
@@ -111,6 +138,11 @@ export interface ResultsQuery {
   type?: string
   language?: TaskLanguage
   hasPdf?: boolean
+  missingFullText?: boolean
+  groupId?: string
+  venue?: string
+  author?: string
+  newOnly?: boolean
 }
 
 export function fetchHealth(signal?: AbortSignal): Promise<HealthInfo> {
@@ -168,6 +200,11 @@ function resultParams(query: ResultsQuery): URLSearchParams {
   if (query.type !== undefined && query.type !== '') params.set('type', query.type)
   if (query.language !== undefined) params.set('language', query.language)
   if (query.hasPdf === true) params.set('hasPdf', '1')
+  if (query.missingFullText === true) params.set('missingFullText', '1')
+  if (query.groupId !== undefined && query.groupId !== '') params.set('groupId', query.groupId)
+  if (query.venue !== undefined && query.venue !== '') params.set('venue', query.venue)
+  if (query.author !== undefined && query.author !== '') params.set('author', query.author)
+  if (query.newOnly === true) params.set('new', '1')
   return params
 }
 
@@ -199,4 +236,110 @@ export function probeSource(source: SourceId, signal?: AbortSignal): Promise<Pro
     ...writeInit('POST', { source }),
     signal,
   })
+}
+
+/** 批量写入筛读 / 分组 / 必读顺序 / 备注 / 标签。 */
+export function annotateTask(
+  id: string,
+  papers: readonly AnnotationInput[],
+  rev?: number,
+  signal?: AbortSignal,
+): Promise<AnnotationResult> {
+  const body: { papers: readonly AnnotationInput[]; rev?: number } = { papers }
+  if (rev !== undefined) body.rev = rev
+  return request<AnnotationResult>(taskPath(id, '/annotate'), {
+    ...writeInit('POST', body),
+    signal,
+  })
+}
+
+/** 单篇论文详情（独立论文页）。 */
+export function fetchPaper(
+  taskId: string,
+  paperId: string,
+  signal?: AbortSignal,
+): Promise<PaperDetail> {
+  return request<PaperDetail>(
+    taskPath(taskId, `/papers/${encodeURIComponent(paperId)}`),
+    { signal },
+  )
+}
+
+/** PubTator3 实体标注。 */
+export function fetchPaperEntities(
+  taskId: string,
+  paperId: string,
+  signal?: AbortSignal,
+): Promise<PaperEntities> {
+  return request<PaperEntities>(
+    taskPath(taskId, `/papers/${encodeURIComponent(paperId)}/entities`),
+    { signal },
+  )
+}
+
+export function fetchCompare(
+  id: string,
+  withTaskId: string,
+  signal?: AbortSignal,
+): Promise<CompareResult> {
+  const params = new URLSearchParams({ with: withTaskId })
+  return request<CompareResult>(taskPath(id, `/compare?${params.toString()}`), { signal })
+}
+
+export function cleanupSettings(scope: CleanupScope): Promise<CleanupResult> {
+  return request<CleanupResult>('/settings/cleanup', writeInit('POST', { scope }))
+}
+
+/** 测试下载目录是否可写。 */
+export function probeStorage(): Promise<StorageProbeResult> {
+  return request<StorageProbeResult>('/settings/storage', writeInit('POST', {}))
+}
+
+/** 测试 Zotero connector 连通性。 */
+export function probeZotero(): Promise<ZoteroProbeResult> {
+  return request<ZoteroProbeResult>('/settings/zotero', writeInit('POST', {}))
+}
+
+/** 下载单篇 PDF 到用户目录。 */
+export function downloadPaperPdf(
+  taskId: string,
+  paperId: string,
+  signal?: AbortSignal,
+): Promise<PdfDownloadResult> {
+  return request<PdfDownloadResult>(
+    taskPath(taskId, `/papers/${encodeURIComponent(paperId)}/download`),
+    { ...writeInit('POST', {}), signal },
+  )
+}
+
+export function syncZotero(
+  taskId: string,
+  paperIds: readonly string[],
+): Promise<ZoteroSyncResult> {
+  return request<ZoteroSyncResult>(taskPath(taskId, '/zotero'), writeInit('POST', { paperIds }))
+}
+
+/** 内联 PDF 预览地址（支持 Range）。 */
+export function paperPdfUrl(taskId: string, paperId: string): string {
+  return `${BASE}/tasks/${encodeURIComponent(taskId)}/papers/${encodeURIComponent(paperId)}/pdf`
+}
+
+/** Europe PMC 全文 HTML 地址（用于 iframe）。 */
+export function paperFullTextUrl(taskId: string, paperId: string): string {
+  return `${BASE}/tasks/${encodeURIComponent(taskId)}/papers/${encodeURIComponent(paperId)}/fulltext`
+}
+
+/** 导出下载地址（GET，浏览器直接保存文件）。 */
+export function exportUrl(
+  id: string,
+  format: ExportFormat,
+  query: ResultsQuery = {},
+  ids?: readonly string[],
+): string {
+  const params = resultParams({ ...query, offset: undefined, limit: undefined })
+  params.set('taskId', id)
+  params.set('format', format)
+  if (ids !== undefined && ids.length > 0) params.set('ids', ids.join(','))
+  const suffix = params.toString()
+  return `${BASE}/export${suffix === '' ? '' : `?${suffix}`}`
 }

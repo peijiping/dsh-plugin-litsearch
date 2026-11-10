@@ -21,11 +21,17 @@ export function toSummary(task: SearchTask): TaskSummary {
 }
 
 export function toDetail(task: SearchTask): TaskDetail {
+  const states: TaskDetail['states'] = {}
+  for (const [paperId, state] of Object.entries(task.states)) {
+    states[paperId] = { ...state, ...(state.tags === undefined ? {} : { tags: [...state.tags] }) }
+  }
   return {
     ...toSummary(task),
     conditions: cloneConditions(task),
     notes: task.notes,
     groups: task.groups.map((group) => ({ ...group })),
+    states,
+    ...(task.fromTaskId === undefined ? {} : { fromTaskId: task.fromTaskId }),
     result: {
       totalLoaded: task.result.papers.length,
       sources: task.result.sources.map((source) => ({ ...source })),

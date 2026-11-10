@@ -14,20 +14,28 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import { SOURCE_IDS, type ProbeResult, type SourceId } from '../search/types'
-import { probeSource } from './api'
+import { cleanupSettings, probeSource, probeStorage, probeZotero } from './api'
 import { getHealth, refreshHealth, useHealth } from './health'
 import { tpl, type Translate } from './locales'
 import {
+  AUTO_DOWNLOAD_FIELD,
   AUTO_OPEN_FIELD,
+  EPMC_FULLTEXT_FIELD,
   LANGUAGE_FIELD,
   LANGUAGES,
   NCBI_KEY_FIELD,
+  PDF_ROOT_FIELD,
   S2_KEY_FIELD,
   SOURCES_FIELD,
   SORT_FIELD,
   SORT_MODES,
   TEXT_FIELD,
+  ZOTERO_ATTACH_FIELD,
+  ZOTERO_BASE_URL_FIELD,
+  ZOTERO_ENABLED_FIELD,
+  ZOTERO_TAG_FIELD,
   readSourceList,
+  type FieldName,
   type SettingsState,
 } from './SettingsController'
 
@@ -44,6 +52,7 @@ const NUMBER_FIELD_NAMES = [
   'taskRetentionDays',
   'taskRetentionCount',
   'taskMaxPapers',
+  'pdfMaxMb',
 ] as const
 
 type NumberFieldName = (typeof NUMBER_FIELD_NAMES)[number]
@@ -88,6 +97,14 @@ export function SettingsSection(props: Props): ReactElement {
     state.taskRetentionDays.text,
     state.taskRetentionCount.text,
     state.taskMaxPapers.text,
+    state.pdfRoot.text,
+    state.pdfMaxMb.text,
+    state.autoDownloadPdf.text,
+    state.enableEpmcFulltext.text,
+    state.zoteroEnabled.text,
+    state.zoteroBaseUrl.text,
+    state.zoteroAttachPdf.text,
+    state.zoteroTag.text,
   ].join('\u0000')
 
   useEffect(() => {
@@ -158,7 +175,7 @@ export function SettingsSection(props: Props): ReactElement {
     />
   )
 
-  const renderText = (name: 'contactEmail'): ReactElement => (
+  const renderText = (name: FieldName): ReactElement => (
     <SettingsValueField
       id={`plugin-config-litsearch-${name}`}
       label={t(`field.${name}`)}
@@ -172,6 +189,25 @@ export function SettingsSection(props: Props): ReactElement {
       onReset={() => props.resetField(name)}
     />
   )
+
+  const renderToggle = (name: FieldName): ReactElement => {
+    const on = state[name].text === 'true'
+    return (
+      <div style={CHOICE_ROW_STYLE} key={name}>
+        <div style={TOGGLE_INFO_STYLE}>
+          <span style={CHOICE_LABEL_STYLE}>{t(`field.${name}`)}</span>
+          <span style={CHOICE_HINT_STYLE}>{t(`field.${name}Hint`)}</span>
+        </div>
+        <Switch
+          checked={on}
+          disabled={locked}
+          label={t(`field.${name}`)}
+          title={on ? t('settings.on') : t('settings.off')}
+          onChange={(next) => props.edit(name, next ? 'true' : 'false')}
+        />
+      </div>
+    )
+  }
 
   return (
     <div style={FORM_STYLE}>
@@ -309,7 +345,8 @@ export function SettingsSection(props: Props): ReactElement {
             name !== 'requestTimeoutMs' &&
             name !== 'pubmedIntervalMs' &&
             name !== 's2IntervalMs' &&
-            name !== 'arxivIntervalMs',
+            name !== 'arxivIntervalMs' &&
+            name !== 'pdfMaxMb',
         ).map(renderNumberField)}
 
         <div style={STORAGE_ROW_STYLE}>
@@ -317,6 +354,37 @@ export function SettingsSection(props: Props): ReactElement {
           <code style={STORAGE_PATH_STYLE}>{health?.storageDir ?? '—'}</code>
           <span style={CHOICE_HINT_STYLE}>{t('field.storageDirHint')}</span>
         </div>
+
+        <CleanupRow t={t} disabled={locked} />
+      </section>
+
+      <section style={GROUP_STYLE}>
+        <h4 style={GROUP_HEAD_STYLE}>{t('group.fulltext')}</h4>
+        <div style={HINT_STYLE}>{t('group.fulltextHint')}</div>
+        {renderText(PDF_ROOT_FIELD)}
+        {renderNumberField('pdfMaxMb')}
+        {renderToggle(AUTO_DOWNLOAD_FIELD)}
+        {renderToggle(EPMC_FULLTEXT_FIELD)}
+        <StorageProbeRow t={t} disabled={locked} />
+        <CleanupRow
+          t={t}
+          disabled={locked}
+          scope="pdf"
+          label={t('field.cleanupPdf')}
+          hint={t('field.cleanupPdfHint')}
+          buttonLabel={t('cleanup.pdf')}
+          confirmText={t('cleanup.pdfConfirm')}
+        />
+      </section>
+
+      <section style={GROUP_STYLE}>
+        <h4 style={GROUP_HEAD_STYLE}>{t('group.zotero')}</h4>
+        <div style={HINT_STYLE}>{t('group.zoteroHint')}</div>
+        {renderToggle(ZOTERO_ENABLED_FIELD)}
+        {renderText(ZOTERO_BASE_URL_FIELD)}
+        {renderToggle(ZOTERO_ATTACH_FIELD)}
+        {renderText(ZOTERO_TAG_FIELD)}
+        <ZoteroProbeRow t={t} disabled={locked} />
       </section>
     </div>
   )
@@ -399,6 +467,194 @@ function SecretField({
       </div>
     </div>
   )
+}
+
+/** 清理任务文件 / PDF 缓存：二次确认后删除，结果就地反馈。 */
+function CleanupRow({
+  t,
+  disabled,
+  scope = 'tasks',
+  label = t('field.cleanup'),
+  hint = t('field.cleanupHint'),
+  buttonLabel = t('cleanup.tasks'),
+  confirmText = t('cleanup.confirm'),
+}: {
+  t: Translate
+  disabled: boolean
+  scope?: 'tasks' | 'pdf' | 'all'
+  label?: string
+  hint?: string
+  buttonLabel?: string
+  confirmText?: string
+}): ReactElement {
+  const [busy, setBusy] = useState(false)
+  const [text, setText] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  const run = (): void => {
+    if (busy || disabled) return
+    if (!window.confirm(confirmText)) return
+    setBusy(true)
+    setText('')
+    setFailed(false)
+    void cleanupSettings(scope)
+      .then((result) => {
+        setText(
+          tpl(t('cleanup.done'), {
+            n: result.removed,
+            size: formatBytes(result.freedBytes),
+          }),
+        )
+        void refreshHealth()
+      })
+      .catch((error: unknown) => {
+        setFailed(true)
+        setText(
+          tpl(t('cleanup.failed'), {
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        )
+      })
+      .finally(() => {
+        setBusy(false)
+      })
+  }
+
+  return (
+    <div style={CHOICE_ROW_STYLE}>
+      <div style={TOGGLE_INFO_STYLE}>
+        <span style={CHOICE_LABEL_STYLE}>{label}</span>
+        <span style={CHOICE_HINT_STYLE}>{hint}</span>
+      </div>
+      <div style={INLINE_ROW_STYLE}>
+        <button type="button" style={SMALL_BUTTON_STYLE} disabled={busy || disabled} onClick={run}>
+          {buttonLabel}
+        </button>
+        {text !== '' && (
+          <span style={failed ? RESULT_ERROR_STYLE : RESULT_STYLE}>{text}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 测试下载目录可写性。 */
+function StorageProbeRow({ t, disabled }: { t: Translate; disabled: boolean }): ReactElement {
+  const [busy, setBusy] = useState(false)
+  const [text, setText] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  const run = (): void => {
+    if (busy) return
+    setBusy(true)
+    setText('')
+    setFailed(false)
+    void probeStorage()
+      .then((result) => {
+        setFailed(!result.writable)
+        setText(
+          result.writable
+            ? tpl(t('storage.probeOk'), { root: result.root })
+            : tpl(t('storage.probeFail'), {
+                root: result.root,
+                message: result.error ?? '',
+              }),
+        )
+      })
+      .catch((error: unknown) => {
+        setFailed(true)
+        setText(
+          tpl(t('storage.probeFail'), {
+            root: '—',
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        )
+      })
+      .finally(() => {
+        setBusy(false)
+      })
+  }
+
+  return (
+    <div style={CHOICE_ROW_STYLE}>
+      <div style={TOGGLE_INFO_STYLE}>
+        <span style={CHOICE_LABEL_STYLE}>{t('field.pdfRootProbe')}</span>
+        <span style={CHOICE_HINT_STYLE}>{t('field.pdfRootProbeHint')}</span>
+      </div>
+      <div style={INLINE_ROW_STYLE}>
+        <button type="button" style={SMALL_BUTTON_STYLE} disabled={busy || disabled} onClick={run}>
+          {busy ? t('storage.testing') : t('storage.test')}
+        </button>
+        {text !== '' && (
+          <span style={failed ? RESULT_ERROR_STYLE : RESULT_STYLE}>{text}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 测试 Zotero connector 并显示当前选中分类。 */
+function ZoteroProbeRow({ t, disabled }: { t: Translate; disabled: boolean }): ReactElement {
+  const [busy, setBusy] = useState(false)
+  const [text, setText] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  const run = (): void => {
+    if (busy) return
+    setBusy(true)
+    setText('')
+    setFailed(false)
+    void probeZotero()
+      .then((result) => {
+        setFailed(!result.ok)
+        if (!result.ok) {
+          setText(tpl(t('zotero.probeFail'), { message: result.error ?? '' }))
+          return
+        }
+        setText(
+          result.collection === undefined
+            ? t('zotero.probeOkNoCollection')
+            : tpl(t('zotero.probeOk'), {
+                name: result.collection.name,
+                version: result.version ?? '—',
+              }),
+        )
+      })
+      .catch((error: unknown) => {
+        setFailed(true)
+        setText(
+          tpl(t('zotero.probeFail'), {
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        )
+      })
+      .finally(() => {
+        setBusy(false)
+      })
+  }
+
+  return (
+    <div style={CHOICE_ROW_STYLE}>
+      <div style={TOGGLE_INFO_STYLE}>
+        <span style={CHOICE_LABEL_STYLE}>{t('field.zoteroProbe')}</span>
+        <span style={CHOICE_HINT_STYLE}>{t('field.zoteroProbeHint')}</span>
+      </div>
+      <div style={INLINE_ROW_STYLE}>
+        <button type="button" style={SMALL_BUTTON_STYLE} disabled={busy || disabled} onClick={run}>
+          {busy ? t('zotero.testing') : t('zotero.test')}
+        </button>
+        {text !== '' && (
+          <span style={failed ? RESULT_ERROR_STYLE : RESULT_STYLE}>{text}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
 interface DiagnosticsProps {
@@ -594,4 +850,8 @@ const RESULT_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.5,
   color: '#508cff',
+}
+const RESULT_ERROR_STYLE: CSSProperties = {
+  ...RESULT_STYLE,
+  color: 'var(--dsw-alias-state-error-primary, var(--dsw-alias-label-error, #b3261e))',
 }

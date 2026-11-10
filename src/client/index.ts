@@ -23,6 +23,7 @@ import { refreshHealth } from './health'
 import type { InputActions } from './inline'
 import { LitsearchPage } from './LitsearchPage'
 import { dicts, NS, type Translate } from './locales'
+import { PAPER_ADDRESS_PREFIX, PaperPane } from './PaperPane'
 import { LitsearchSettingsController, ROW_ID } from './SettingsController'
 import { SettingsSection } from './SettingsSection'
 import { TASK_ADDRESS_PREFIX, TaskPane, taskIdFromAddress } from './TaskPane'
@@ -96,6 +97,9 @@ const TAB_ID = 'litsearch'
 /** 任务 tab 的类型 id / kind；正文与标题席位也按这个 key 注册。 */
 const TASK_TAB_ID = 'litsearch-task'
 
+/** 独立论文 tab 的类型 id / kind。 */
+const PAPER_TAB_ID = 'litsearch-paper'
+
 /** 设置对话框里这一页的 section id。 */
 const SETTINGS_SECTION_ID = 'litsearch'
 
@@ -146,6 +150,20 @@ export function apply(ctx: ClientContext): void {
     'dsh-plugin-litsearch: task tab',
   )
 
+  // 单篇论文一个资源 tab；从结果卡片或论文页内跳转。
+  ctx.effect(
+    () =>
+      ctx.sidebarRightTabs.register({
+        id: PAPER_TAB_ID,
+        kind: PAPER_TAB_ID,
+        title: () => t('paperTab.title'),
+        patterns: ['dsh-resource://litsearch-paper/**'],
+        priority: 'extension',
+        keepMounted: true,
+      }),
+    'dsh-plugin-litsearch: paper tab',
+  )
+
   /** 打开 / 聚焦某任务的 tab；先把标题记进缓存，布局恢复后不靠 params 也能显示。 */
   const openTask = (id: string, title?: string): void => {
     const address = `${TASK_ADDRESS_PREFIX}${encodeURIComponent(id)}`
@@ -174,6 +192,12 @@ export function apply(ctx: ClientContext): void {
 
   type TaskPaneProps = Parameters<typeof TaskPane>[0]
 
+  /** 打开 / 聚焦单篇论文 tab；标题通过 params 传给标题席位。 */
+  const openPaper = (taskId: string, paperId: string, title: string): void => {
+    const address = `${PAPER_ADDRESS_PREFIX}${encodeURIComponent(taskId)}/${encodeURIComponent(paperId)}`
+    ctx.sidebarRight.openResource(address, title === '' ? undefined : { params: { title } })
+  }
+
   const TaskBody = (props: {
     inputActions?: InputActions
     useTabInfo: TaskPaneProps['useTabInfo']
@@ -182,6 +206,7 @@ export function apply(ctx: ClientContext): void {
       t,
       useTabInfo: props.useTabInfo,
       inputActions: props.inputActions,
+      onOpenPaper: openPaper,
     })
 
   /** tab 标题：按地址里的任务 id 读缓存，缺了补取一次详情。 */
@@ -226,6 +251,56 @@ export function apply(ctx: ClientContext): void {
         ),
       ),
     'dsh-plugin-litsearch: task title',
+  )
+
+  type PaperPaneProps = Parameters<typeof PaperPane>[0]
+
+  const PaperBody = (props: {
+    inputActions?: InputActions
+    useTabInfo: PaperPaneProps['useTabInfo']
+  }): ReactElement =>
+    createElement(PaperPane, {
+      t,
+      useTabInfo: props.useTabInfo,
+      inputActions: props.inputActions,
+    })
+
+  const PaperTitle = (props: {
+    useTabInfo: PaperPaneProps['useTabInfo']
+  }): ReactElement => {
+    const info = props.useTabInfo()
+    const params = info.tab.navigation?.params as { title?: unknown } | undefined
+    const title =
+      typeof params?.title === 'string' && params.title !== ''
+        ? params.title
+        : t('paperTab.title')
+    return createElement(
+      'span',
+      { title, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+      title,
+    )
+  }
+
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab', () =>
+        ctx.slots.register(
+          { name: 'sidebar.right.pane.tab', key: PAPER_TAB_ID },
+          PaperBody as ComponentType<never>,
+        ),
+      ),
+    'dsh-plugin-litsearch: paper body',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+        ctx.slots.register(
+          { name: 'sidebar.right.pane.tab.title', key: PAPER_TAB_ID },
+          PaperTitle as ComponentType<never>,
+        ),
+      ),
+    'dsh-plugin-litsearch: paper title',
   )
 
   // 设置页：只有「设置」对话框里的独立一页，仅在 Host 服务本插件命名空间时注册。

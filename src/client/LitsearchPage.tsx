@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 
-import { Button, Input, Pill } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Pill } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import { DEFAULT_PAGE_SIZE } from '../search/config'
 import type { SourceId, TaskSummary } from '../search/types'
@@ -20,6 +20,8 @@ import {
 } from './autoOpen'
 import { useHealth } from './health'
 import { tpl, type Translate } from './locales'
+import { newQuery, QueryEditor, toQueryBodies, type QueryDraft } from './QueryEditor'
+import { sourceSyntaxTitle, SyntaxHint } from './SyntaxHint'
 import {
   ERROR,
   formStyle,
@@ -50,7 +52,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   const health = useHealth()
   const pending = usePendingTasks()
 
-  const [queryInputs, setQueryInputs] = useState<string[]>([''])
+  const [queryInputs, setQueryInputs] = useState<QueryDraft[]>([newQuery()])
   const [selected, setSelected] = useState<SourceId[]>([...SOURCE_IDS])
   const [creating, setCreating] = useState(false)
   const [tasks, setTasks] = useState<TaskSummary[]>([])
@@ -94,27 +96,21 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
     })
   }
 
-  const texts = queryInputs.map((text) => text.trim()).filter((text) => text !== '')
+  const bodies = toQueryBodies(queryInputs)
+  const runnable = bodies.filter((body) => body.enabled !== false).length
 
   const run = async (): Promise<void> => {
-    if (texts.length === 0 || creating) return
+    if (runnable === 0 || creating) return
     setCreating(true)
     setError(null)
     try {
       const detail = await createTask({
-        ...(texts.length === 1
-          ? { query: texts[0] }
-          : {
-              queries: texts.map((text, index) => ({
-                text,
-                name: `检索式 ${index + 1}`,
-              })),
-            }),
+        queries: bodies,
         sources: selected.length === 0 ? undefined : selected,
       })
       rememberTaskTitle(detail.id, detail.title)
       onOpenTask(detail.id, detail.title)
-      setQueryInputs([''])
+      setQueryInputs([newQuery()])
       await loadHistory()
     } catch (err) {
       setError(errorMessage(err))
@@ -123,12 +119,14 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
     }
   }
 
-  const setQueryAt = (index: number, text: string): void => {
-    setQueryInputs((previous) => previous.map((value, i) => (i === index ? text : value)))
+  const patchQuery = (index: number, patch: Partial<QueryDraft>): void => {
+    setQueryInputs((previous) =>
+      previous.map((draft, i) => (i === index ? { ...draft, ...patch } : draft)),
+    )
   }
 
   const addQuery = (): void => {
-    setQueryInputs((previous) => [...previous, ''])
+    setQueryInputs((previous) => [...previous, newQuery()])
   }
 
   const removeQuery = (index: number): void => {
@@ -166,40 +164,23 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   return (
     <div style={panelStyle}>
       <form
-        style={formStyle}
+        style={searchFormStyle}
         onSubmit={(event) => {
           event.preventDefault()
           void run()
         }}
       >
         <div style={queryListStyle}>
-          {queryInputs.map((value, index) => (
-            <div key={index} style={queryRowStyle}>
-              <Input
-                value={value}
-                placeholder={
-                  index === 0
-                    ? t('search.placeholder')
-                    : tpl(t('search.queryPlaceholder'), { n: index + 1 })
-                }
-                aria-label={
-                  index === 0
-                    ? t('search.placeholder')
-                    : tpl(t('search.queryPlaceholder'), { n: index + 1 })
-                }
-                onChange={(event) => setQueryAt(index, event.target.value)}
-              />
-              {queryInputs.length > 1 && (
-                <button
-                  type="button"
-                  style={linkButtonStyle}
-                  title={t('search.removeQuery')}
-                  onClick={() => removeQuery(index)}
-                >
-                  ×
-                </button>
-              )}
-            </div>
+          {queryInputs.map((draft, index) => (
+            <QueryEditor
+              key={index}
+              t={t}
+              index={index}
+              draft={draft}
+              canRemove={queryInputs.length > 1}
+              onChange={(patch) => patchQuery(index, patch)}
+              onRemove={() => removeQuery(index)}
+            />
           ))}
           <div style={{ display: 'flex', gap: 10, fontSize: 12 }}>
             <button type="button" style={linkButtonStyle} onClick={addQuery}>
@@ -207,30 +188,40 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
             </button>
           </div>
         </div>
-        <Button
-          type="submit"
-          variant="primary"
-          size="sm"
-          disabled={creating || texts.length === 0}
-        >
-          {creating ? t('search.searching') : t('search.button')}
-        </Button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <Button
+            type="submit"
+            variant="primary"
+            size="sm"
+            disabled={creating || runnable === 0}
+          >
+            {creating ? t('search.searching') : t('search.button')}
+          </Button>
+        </div>
       </form>
 
       <div style={sourceRowStyle}>
         <span style={sourceLabelStyle}>{t('search.sources')}</span>
         {SOURCE_IDS.map((id) => (
-          <Pill
-            key={id}
-            type="button"
-            active={selected.includes(id)}
-            aria-pressed={selected.includes(id)}
-            onClick={() => toggleSource(id)}
-          >
-            {t(`source.${id}`)}
-          </Pill>
+          <span key={id} title={sourceSyntaxTitle(health?.sources, id)}>
+            <Pill
+              type="button"
+              active={selected.includes(id)}
+              aria-pressed={selected.includes(id)}
+              onClick={() => toggleSource(id)}
+            >
+              {t(`source.${id}`)}
+            </Pill>
+          </span>
         ))}
       </div>
+
+      <SyntaxHint
+        t={t}
+        sources={selected}
+        texts={queryInputs.filter((draft) => draft.enabled).map((draft) => draft.text)}
+        infos={health?.sources}
+      />
 
       <div style={statusStyle}>{tpl(t('search.hint'), { n: pageSize })}</div>
 
@@ -303,18 +294,19 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   )
 }
 
+const searchFormStyle = {
+  ...formStyle,
+  flexDirection: 'column',
+  alignItems: 'stretch',
+  gap: 8,
+} as const
+
 const queryListStyle = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 4,
+  gap: 6,
   flex: 1,
   minWidth: 0,
-} as const
-
-const queryRowStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
 } as const
 
 const sectionTitleStyle = {

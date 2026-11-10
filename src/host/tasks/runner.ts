@@ -17,6 +17,7 @@ import type {
   TaskConditions,
   TaskLanguage,
 } from '../../search/types.js'
+import { countScreening, pruneStates } from './states.js'
 
 export interface RunnerHooks {
   persist(task: SearchTask): Promise<void>
@@ -79,7 +80,6 @@ export class TaskRunner {
       deduped: 0,
       screening: { unread: 0, read: 0, included: 0, excluded: 0 },
     }
-    task.states = {}
     task.progress = { queryIndex: 0, queryTotal: queries.length }
     touch(task, hooks)
     await hooks.persist(task)
@@ -146,14 +146,10 @@ export class TaskRunner {
       task.result.papers = papers
       task.result.sources = [...statusById.values()]
       task.result.fetchedAt = new Date().toISOString()
+      task.states = pruneStates(task.states, papers)
       task.stats.rawHits = hits.length
       task.stats.deduped = merged.length
-      task.stats.screening = {
-        unread: papers.length,
-        read: 0,
-        included: 0,
-        excluded: 0,
-      }
+      task.stats.screening = countScreening(papers, task.states)
 
       const failed = task.result.sources.filter((source) => !source.ok)
       const succeeded = task.result.sources.filter((source) => source.ok)
@@ -168,6 +164,7 @@ export class TaskRunner {
         task.error = error instanceof Error ? error.message : String(error)
       }
       task.result.sources = [...statusById.values()]
+      task.stats.screening = countScreening(task.result.papers, task.states)
       task.progress = undefined
     } finally {
       touch(task, hooks)

@@ -14,12 +14,17 @@ import { SearchError } from '../search/errors.js'
 import { asRecord } from '../search/normalize.js'
 import { isSourceId } from '../search/providers/index.js'
 import type {
+  AnnotationInput,
   ApiEnvelope,
   ApiError,
   ApiErrorCode,
+  CleanupScope,
+  ExportFile,
+  ExportFormat,
   Screening,
   SortMode,
   SourceId,
+  TaskGroup,
   TaskLanguage,
   TaskOrigin,
 } from '../search/types.js'
@@ -47,6 +52,9 @@ const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
 const LANGUAGES: readonly TaskLanguage[] = ['any', 'eng', 'chi']
 const ORIGINS: readonly TaskOrigin[] = ['model', 'panel', 'history', 'api']
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
+const EXPORT_FORMATS: readonly ExportFormat[] = ['csv', 'ris', 'bibtex', 'md']
+const CLEANUP_SCOPES: readonly CleanupScope[] = ['tasks', 'pdf', 'all']
+const MAX_ANNOTATIONS = 50
 
 function isLoopbackHost(hostHeader: string | undefined): boolean {
   if (!hostHeader) return false
@@ -84,6 +92,91 @@ function fail(res: ServerResponse, status: number, code: ApiErrorCode, message: 
 
 function ok<T>(res: ServerResponse, data: T, status = 200): void {
   sendJson(res, status, { ok: true, data })
+}
+
+function sendFile(res: ServerResponse, file: ExportFile): void {
+  const body = Buffer.from(file.content, 'utf8')
+  res.writeHead(200, {
+    'content-type': file.mime,
+    'content-length': body.length,
+    'content-disposition': `attachment; filename="${file.filename}"`,
+    'cache-control': 'no-store',
+  })
+  res.end(body)
+}
+
+/** 内联 PDF，支持单段 Range（预览器会按需拉取）。 */
+function sendPdf(
+  req: IncomingMessage,
+  res: ServerResponse,
+  buffer: Buffer,
+  filename: string,
+): void {
+  const total = buffer.length
+  const disposition = `inline; filename*=UTF-8''${encodeURIComponent(filename)}`
+  const range = req.headers.range
+  if (range === undefined) {
+    res.writeHead(200, {
+      'content-type': 'application/pdf',
+      'content-length': total,
+      'content-disposition': disposition,
+      'accept-ranges': 'bytes',
+      'cache-control': 'no-store',
+    })
+    res.end(buffer)
+    return
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/u.exec(range.trim())
+  const start = match?.[1] === '' ? Number.NaN : Number(match?.[1])
+  const end = match?.[2] === '' ? Number.NaN : Number(match?.[2])
+  if (match === null || (!Number.isFinite(start) && !Number.isFinite(end))) {
+    res.writeHead(416, { 'content-range': `bytes */${total}`, 'cache-control': 'no-store' })
+    res.end()
+    return
+  }
+  const from = Number.isFinite(start) ? Math.max(0, start) : Math.max(0, total - (end || 0))
+  const to = Number.isFinite(end) ? Math.min(end, total - 1) : total - 1
+  if (from > to || from >= total) {
+    res.writeHead(416, { 'content-range': `bytes */${total}`, 'cache-control': 'no-store' })
+    res.end()
+    return
+  }
+  const chunk = buffer.subarray(from, to + 1)
+  res.writeHead(206, {
+    'content-type': 'application/pdf',
+    'content-length': chunk.length,
+    'content-range': `bytes ${from}-${to}/${total}`,
+    'content-disposition': disposition,
+    'accept-ranges': 'bytes',
+    'cache-control': 'no-store',
+  })
+  res.end(chunk)
+}
+
+function sendHtml(res: ServerResponse, status: number, html: string): void {
+  res.writeHead(status, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+  })
+  res.end(html)
+}
+
+function sendHtmlError(res: ServerResponse, error: unknown): void {
+  const { status, error: apiError } = toApiError(error)
+  sendHtml(
+    res,
+    status === 500 ? 502 : status,
+    `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>全文不可用</title></head><body style="font:14px/1.7 -apple-system,'PingFang SC',sans-serif;padding:16px"><p>全文不可用：${escapeHtml(apiError.message)}</p></body></html>`,
+  )
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;')
 }
 
 function statusFor(code: ApiErrorCode): number {
@@ -222,6 +315,72 @@ function readQueriesValue(value: unknown): QueryInput[] | undefined {
   })
 }
 
+function readAnnotations(value: unknown): AnnotationInput[] {
+  if (!Array.isArray(value)) throw new SearchError('bad_request', 'papers 必须是数组')
+  if (value.length === 0) throw new SearchError('bad_request', 'papers 不能为空')
+  if (value.length > MAX_ANNOTATIONS) {
+    throw new SearchError('bad_request', `一次最多注解 ${MAX_ANNOTATIONS} 篇`)
+  }
+  return value.map((entry, index) => {
+    const record = asRecord(entry)
+    const paperId = readString(record['paperId'], 'paperId', 80)
+    if (paperId === undefined || paperId === '') {
+      throw new SearchError('bad_request', `第 ${index + 1} 条缺少 paperId`)
+    }
+    const input: AnnotationInput = { paperId }
+
+    const screening = readEnum(record['screening'], 'screening', SCREENINGS)
+    if (screening !== undefined) input.screening = screening
+
+    if (record['groupId'] === null) input.groupId = null
+    else {
+      const groupId = readString(record['groupId'], 'groupId', 40)
+      if (groupId !== undefined) input.groupId = groupId
+    }
+
+    if (record['shortlistOrder'] === null) input.shortlistOrder = null
+    else if (record['shortlistOrder'] !== undefined) {
+      const order = readInt(record['shortlistOrder'], 'shortlistOrder', 0, 100_000)
+      if (order !== undefined) input.shortlistOrder = order
+    }
+
+    if (record['note'] !== undefined) {
+      if (typeof record['note'] !== 'string') {
+        throw new SearchError('bad_request', 'note 必须是字符串')
+      }
+      input.note = record['note'].slice(0, 4_000)
+    }
+
+    if (record['tags'] !== undefined) {
+      const tags = readStringArray(record['tags'], 'tags', 20, 40)
+      if (tags !== undefined && tags !== null) input.tags = tags
+      else if (tags === null) input.tags = []
+    }
+
+    return input
+  })
+}
+
+function readGroups(value: unknown): TaskGroup[] | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!Array.isArray(value)) throw new SearchError('bad_request', 'groups 必须是数组')
+  return value.map((entry, index) => {
+    const record = asRecord(entry)
+    const id = readString(record['id'], 'id', 40)
+    const name = readString(record['name'], 'name', 60)
+    if (id === undefined || id === '') {
+      throw new SearchError('bad_request', `第 ${index + 1} 个分组缺少 id`)
+    }
+    if (name === undefined || name === '') {
+      throw new SearchError('bad_request', `第 ${index + 1} 个分组缺少名称`)
+    }
+    const group: TaskGroup = { id, name, order: index }
+    const description = readString(record['description'], 'description', 500)
+    if (description !== undefined && description !== '') group.description = description
+    return group
+  })
+}
+
 function readEnum<T extends string>(
   value: unknown,
   name: string,
@@ -291,6 +450,8 @@ function readPatch(body: Record<string, unknown>): TaskPatch {
     }
     patch.pinned = body['pinned']
   }
+  const groups = readGroups(body['groups'])
+  if (groups !== undefined) patch.groups = groups
 
   const rawConditions = body['conditions']
   if (rawConditions !== undefined) {
@@ -386,6 +547,16 @@ function readResultsFilter(params: URLSearchParams): ResultsFilter {
   if (language !== undefined) filter.language = language
   const hasPdf = params.get('hasPdf')
   if (hasPdf === '1' || hasPdf === 'true') filter.hasPdf = true
+  const missingFullText = params.get('missingFullText')
+  if (missingFullText === '1' || missingFullText === 'true') filter.missingFullText = true
+  const groupId = params.get('groupId')?.trim() ?? ''
+  if (groupId !== '') filter.groupId = groupId
+  const venue = params.get('venue')?.trim() ?? ''
+  if (venue !== '') filter.venue = venue
+  const author = params.get('author')?.trim() ?? ''
+  if (author !== '') filter.author = author
+  const newOnly = params.get('new')
+  if (newOnly === '1' || newOnly === 'true') filter.newOnly = true
   return filter
 }
 
@@ -464,6 +635,98 @@ async function handleTasks(
     }
     const scope = params.get('scope') === 'filtered' ? 'filtered' : 'task'
     ok(res, await service.stats(id, readResultsFilter(params), scope))
+    return
+  }
+
+  if (action === 'annotate') {
+    if (req.method !== 'POST') {
+      fail(res, 405, 'bad_request', 'annotate 仅支持 POST')
+      return
+    }
+    const body = await readJsonBody(req)
+    const papers = readAnnotations(body['papers'])
+    const expectedRev = readInt(body['rev'], 'rev', 1, Number.MAX_SAFE_INTEGER)
+    ok(res, await service.annotate(id, papers, expectedRev))
+    return
+  }
+
+  if (action === 'papers') {
+    const paperId = seg[3] ?? ''
+    const op = seg[4] ?? ''
+    if (paperId === '') throw new SearchError('bad_request', '缺少 paperId')
+    if (op === '') {
+      if (req.method !== 'GET') {
+        fail(res, 405, 'bad_request', '论文详情仅支持 GET')
+        return
+      }
+      ok(res, await service.paperDetail(id, paperId))
+      return
+    }
+    if (op === 'entities') {
+      if (req.method !== 'GET') {
+        fail(res, 405, 'bad_request', 'entities 仅支持 GET')
+        return
+      }
+      ok(res, await service.entities(id, paperId))
+      return
+    }
+    if (op === 'download') {
+      if (req.method !== 'POST') {
+        fail(res, 405, 'bad_request', 'download 仅支持 POST')
+        return
+      }
+      ok(res, await service.downloadPdf(id, paperId))
+      return
+    }
+    if (op === 'pdf') {
+      if (req.method !== 'GET') {
+        fail(res, 405, 'bad_request', 'pdf 仅支持 GET')
+        return
+      }
+      try {
+        const file = await service.previewPdf(id, paperId)
+        sendPdf(req, res, file.buffer, file.filename)
+      } catch (error) {
+        const { status, error: apiError } = toApiError(error)
+        fail(res, status === 500 ? 502 : status, apiError.code, apiError.message)
+      }
+      return
+    }
+    if (op === 'fulltext') {
+      if (req.method !== 'GET') {
+        fail(res, 405, 'bad_request', 'fulltext 仅支持 GET')
+        return
+      }
+      try {
+        sendHtml(res, 200, await service.fullText(id, paperId))
+      } catch (error) {
+        sendHtmlError(res, error)
+      }
+      return
+    }
+    fail(res, 404, 'not_found', `未知全文操作 ${op}`)
+    return
+  }
+
+  if (action === 'zotero') {
+    if (req.method !== 'POST') {
+      fail(res, 405, 'bad_request', 'zotero 仅支持 POST')
+      return
+    }
+    const body = await readJsonBody(req)
+    const ids = readStringArray(body['paperIds'], 'paperIds', 50, 80)
+    ok(res, await service.zoteroSync(id, ids === undefined || ids === null ? undefined : ids))
+    return
+  }
+
+  if (action === 'compare') {
+    if (req.method !== 'GET') {
+      fail(res, 405, 'bad_request', 'compare 仅支持 GET')
+      return
+    }
+    const withTaskId = params.get('with')?.trim() ?? ''
+    if (withTaskId === '') throw new SearchError('bad_request', '缺少 with 参数')
+    ok(res, await service.compare(id, withTaskId))
     return
   }
 
@@ -550,12 +813,52 @@ export function createHandler(
           ok(res, await service.probe(source))
           return
         }
+        if (seg[1] === 'cleanup' && req.method === 'POST') {
+          const scope =
+            readEnum((await readJsonBody(req))['scope'], 'scope', CLEANUP_SCOPES) ?? 'tasks'
+          ok(res, await service.cleanup(scope))
+          return
+        }
+        if (seg[1] === 'zotero' && req.method === 'POST') {
+          ok(res, await service.zoteroProbe())
+          return
+        }
+        if (seg[1] === 'storage' && req.method === 'POST') {
+          ok(res, await service.storageProbe())
+          return
+        }
         fail(res, 404, 'not_found', `未知设置端点 ${seg[1] ?? ''}`)
         return
       }
 
       if (head === 'tasks') {
         await handleTasks(service, req, res, seg, url.searchParams)
+        return
+      }
+
+      if (head === 'export') {
+        if (req.method !== 'GET') {
+          fail(res, 405, 'bad_request', 'export 仅支持 GET')
+          return
+        }
+        const format = readEnum(url.searchParams.get('format') ?? undefined, 'format', EXPORT_FORMATS)
+        if (format === undefined) {
+          throw new SearchError('bad_request', `format 只能是 ${EXPORT_FORMATS.join(' / ')}`)
+        }
+        const taskId = url.searchParams.get('taskId')?.trim() ?? ''
+        if (taskId === '') throw new SearchError('bad_request', '缺少 taskId 参数')
+        const idsRaw = url.searchParams.get('ids') ?? ''
+        const ids =
+          idsRaw.trim() === ''
+            ? undefined
+            : idsRaw
+                .split(',')
+                .map((id) => id.trim())
+                .filter((id) => id !== '')
+        sendFile(
+          res,
+          await service.export(taskId, format, readResultsFilter(url.searchParams), ids),
+        )
         return
       }
 
