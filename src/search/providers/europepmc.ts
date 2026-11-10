@@ -11,6 +11,13 @@ import type { PaperRecord, Provider, ProviderSearchOptions } from '../types.js'
 
 const ENDPOINT = 'https://www.ebi.ac.uk/europepmc/webservices/rest/search'
 
+/**
+ * `resultType=core` 加上较大的 pageSize 时响应明显偏慢，15s 会把正常请求
+ * 误判成超时（全文接口本来就用 30s）。检索请求固定给 25s 下限，设置里
+ * 调高全局超时仍然生效。
+ */
+const SEARCH_TIMEOUT_FLOOR_MS = 25_000
+
 export const europepmc: Provider = {
   info: {
     id: 'europepmc',
@@ -31,7 +38,7 @@ export const europepmc: Provider = {
     })
 
     const payload = await limitedJson('europepmc', `${ENDPOINT}?${params.toString()}`, {
-      timeoutMs: options.timeoutMs,
+      timeoutMs: Math.max(options.timeoutMs, SEARCH_TIMEOUT_FLOOR_MS),
       signal: options.signal,
       bypassCooldown: options.bypassCooldown === true,
       headers: { accept: 'application/json' },

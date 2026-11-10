@@ -131,9 +131,14 @@ export interface Provider {
 /** 单个数据源在一次检索中的结果状态。 */
 export interface SourceStatus {
   id: SourceId
+  /** 是否成功参与检索；因限流跳过的源不算失败，也为 true。 */
   ok: boolean
   count: number
   error?: string
+  /** 因遵守上游限流而跳过，不计入失败 / partial，面板只给中性提示。 */
+  skipped?: boolean
+  /** 跳过原因（中性文案）。 */
+  note?: string
   /** 该源不支持下推、结果被后置过滤过。 */
   filtered?: boolean
 }

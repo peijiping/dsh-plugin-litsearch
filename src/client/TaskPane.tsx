@@ -268,7 +268,8 @@ export function TaskPane({ t, useTabInfo, inputActions, onOpenPaper }: Props): R
   }
 
   const active = detail.status === 'running' || detail.status === 'queued'
-  const failed = detail.result.sources.filter((source) => !source.ok)
+  const failed = detail.result.sources.filter((source) => !source.ok && !source.skipped)
+  const skipped = detail.result.sources.filter((source) => source.skipped)
   const page = view.page
 
   return (
@@ -355,6 +356,16 @@ export function TaskPane({ t, useTabInfo, inputActions, onOpenPaper }: Props): R
               }),
             )
             .join('；')}
+        </div>
+      )}
+
+      {skipped.length > 0 && (
+        <div style={statusStyle}>
+          {tpl(t('task.sourceSkipped'), {
+            sources: skipped
+              .map((source) => t(`source.${source.id}`))
+              .join(t('task.sourceListSeparator')),
+          })}
         </div>
       )}
 

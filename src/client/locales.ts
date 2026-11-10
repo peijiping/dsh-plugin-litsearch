@@ -329,6 +329,8 @@ const zh: Record<string, string> = {
   'error.noEditor': '当前面板不在会话上下文中，无法插入到输入框',
   'error.draftChanged': '输入框草稿已变化，未插入；请避免在插入期间编辑草稿',
   'error.sourceFailed': '数据源 {source} 检索失败：{message}',
+  'task.sourceSkipped': '已按上游限流自动放慢或跳过：{sources}；结果可能不完整，可稍后重跑',
+  'task.sourceListSeparator': '、',
 
   'settings.nav': '文献检索',
   'settings.hint': '保存后立即生效；表单会自动保存，无需手动提交。',
@@ -772,6 +774,9 @@ const en: Record<string, string> = {
   'error.noEditor': 'This panel is not in a conversation context; cannot insert into the composer',
   'error.draftChanged': 'The draft changed; nothing was inserted. Avoid editing while inserting.',
   'error.sourceFailed': 'Source {source} failed: {message}',
+  'task.sourceSkipped':
+    'Automatically slowed or skipped due to upstream rate limits: {sources}. Results may be incomplete; rerun later.',
+  'task.sourceListSeparator': ', ',
 
   'settings.nav': 'Literature Search',
   'settings.hint': 'Changes take effect immediately; the form saves automatically.',

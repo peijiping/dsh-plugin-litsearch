@@ -10,6 +10,7 @@ import { MAX_LIMIT, getSettings } from './config.js'
 import { SearchError } from './errors.js'
 import { PROVIDERS, resolveSources } from './providers/index.js'
 import { adaptQuery } from './query-adapter.js'
+import { SourceSkipped } from './rate-limit.js'
 import type { PaperRecord, SearchOptions, SourceId } from './types.js'
 
 export interface SourceRunResult {
@@ -17,6 +18,8 @@ export interface SourceRunResult {
   ok: boolean
   records: PaperRecord[]
   error?: string
+  /** 因遵守上游限流而跳过；不是失败，不计入 partial 与红色报错。 */
+  skipped?: boolean
 }
 
 export async function searchSources(options: SearchOptions): Promise<SourceRunResult[]> {
@@ -61,12 +64,12 @@ export async function searchSources(options: SearchOptions): Promise<SourceRunRe
     if (outcome.status === 'fulfilled') {
       return { source, ok: true, records: outcome.value }
     }
-    return {
-      source,
-      ok: false,
-      records: [],
-      error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+    const reason: unknown = outcome.reason
+    const message = reason instanceof Error ? reason.message : String(reason)
+    if (reason instanceof SourceSkipped) {
+      return { source, ok: false, records: [], skipped: true, error: message }
     }
+    return { source, ok: false, records: [], error: message }
   })
 }
 

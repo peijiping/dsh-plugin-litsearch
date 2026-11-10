@@ -119,7 +119,11 @@ export class TaskRunner {
           }
           if (records.length < result.records.length) status.filtered = true
           status.count += records.length
-          if (!result.ok) {
+          if (result.skipped === true) {
+            // 限流跳过不是故障：不标 failed、不进 partial，只留中性说明。
+            status.skipped = true
+            status.note = result.error
+          } else if (!result.ok) {
             status.ok = false
             status.error = result.error
           }
@@ -151,9 +155,16 @@ export class TaskRunner {
       task.stats.deduped = merged.length
       task.stats.screening = countScreening(papers, task.states)
 
-      const failed = task.result.sources.filter((source) => !source.ok)
-      const succeeded = task.result.sources.filter((source) => source.ok)
-      task.status = succeeded.length === 0 && failed.length > 0 ? 'error' : failed.length > 0 ? 'partial' : 'done'
+      const failed = task.result.sources.filter((source) => !source.ok && !source.skipped)
+      const succeeded = task.result.sources.filter((source) => source.ok && !source.skipped)
+      const skipped = task.result.sources.filter((source) => source.skipped)
+      // 全被限流跳过且结果为空时仍标 partial 提示重跑，但不显示任何红色失败。
+      task.status =
+        succeeded.length === 0 && failed.length > 0
+          ? 'error'
+          : failed.length > 0 || (succeeded.length === 0 && skipped.length > 0)
+            ? 'partial'
+            : 'done'
       task.progress = undefined
     } catch (error) {
       if (controller.signal.aborted || error instanceof RunCanceled) {

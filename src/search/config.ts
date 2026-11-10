@@ -14,8 +14,13 @@ export const PLUGIN_VERSION = '0.1.0'
 /** 默认每次加载条数。 */
 export const DEFAULT_PAGE_SIZE = 20
 
-/** 单次上游请求超时（毫秒）。 */
-export const REQUEST_TIMEOUT_MS = 15_000
+/**
+ * 单次上游请求超时（毫秒）。
+ *
+ * Europe PMC 的 `resultType=core` 明显慢于其它源，15s 容易误判为失败；
+ * 这里给全局一个更宽裕的默认值，检索层仍对该源单独设下限。
+ */
+export const REQUEST_TIMEOUT_MS = 20_000
 
 /** 返回条数上限，防止一次请求拉爆上游与宿主。 */
 export const MAX_LIMIT = 50

@@ -23,7 +23,7 @@
 - **批量操作**：全选本页后可批量改筛读状态、归入或移出分组、下载 PDF、存入 Zotero、按选中导出。
 - **导出与对比**：按当前筛选或选中条目导出 CSV 台账、RIS、BibTeX、Markdown 报告；也可选一个旧任务做新增 / 共有 / 缺失对比，并把「新增」整批标记为纳入。
 - **带进对话**：点击「插入到对话」，把论文元数据与摘要写入当前会话草稿（不自动发送），模型可据此继续工作；勾选多篇后可一次插入，按序号编号。
-- **免费数据源**：全部无需付费或申请密钥；NCBI 与 Semantic Scholar 可选填 Key 提高额度，限流在本地按源串行排队，单个源触发 429 只影响该源。
+- **免费数据源**：全部无需付费或申请密钥；NCBI 与 Semantic Scholar 可选填 Key 提高额度。限流在本地按源串行排队：冷却期内排队等待而非报错，收到 429 会退避重试并自适应放大该源间隔，连续成功后回落；只有上游要求冷却过久才优雅跳过该源，此时任务不会变「部分完成」、面板也只给中性提示。单个源触发限流只影响该源。超时 / 临时网络故障会重试一次；Europe PMC 的 `resultType=core` 检索单独享有 25s 超时下限。
 
 ## 安装
 
@@ -46,7 +46,7 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 | `s2ApiKey` | 可选，Semantic Scholar 配额；界面不回显 | 空 |
 | `pubmedIntervalMs` / `s2IntervalMs` / `arxivIntervalMs` | 各源最小请求间隔 | 350 / 3000 / 3000 |
 | `defaultPageSize` | 每个来源默认取多少条 | 20 |
-| `requestTimeoutMs` | 单次上游请求超时（毫秒） | 15000 |
+| `requestTimeoutMs` | 单次上游请求超时（毫秒）；Europe PMC 检索另有 25000 下限 | 20000 |
 | `defaultSources` / `defaultSort` / `defaultLanguage` | 新任务默认勾选的数据源、排序与语言 | 全部 / 相关度 / 不限 |
 | `autoOpenTaskTab` / `maxTaskTabs` | 模型发起检索后自动打开任务 tab，及同时打开上限 | 开 / 5 |
 | `taskRetentionDays` / `taskRetentionCount` / `taskMaxPapers` | 未置顶任务保留天数、保留条数、单任务结果上限 | 90 / 120 / 1500 |
