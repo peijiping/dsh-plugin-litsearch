@@ -4,6 +4,9 @@
  * 文本类条件（关键词、年份、类型）本地暂存 300ms 再上抛，避免每敲一个字都
  * 打一次 Host；下拉类条件立即生效。父组件的筛选对象必须能直接喂给
  * `/results` 与 `/stats`。
+ *
+ * 顶部标签与「收起筛选（N）」共用 collectActiveFilters：新增筛选维度时
+ * 只在那里加一项，不要另外单写 chip，否则两处会再次不同步。
  */
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
@@ -15,7 +18,8 @@ import { tpl, type Translate } from './locales'
 const TEXT_DEBOUNCE_MS = 300
 
 const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
-const LANGUAGES: readonly TaskLanguage[] = ['any', 'eng', 'chi']
+// 空 option 已经是「不限」，不再重复列出 TaskLanguage 的 any。
+const LANGUAGES: readonly TaskLanguage[] = ['eng', 'chi']
 const SCREENINGS = ['unread', 'read', 'included', 'excluded'] as const
 
 type Screening = (typeof SCREENINGS)[number]
@@ -69,25 +73,101 @@ function mergeDraft(base: ResultsQuery, draft: Draft): ResultsQuery {
   return next
 }
 
+interface ActiveFilter {
+  key: string
+  label: string
+  /** 点 × 时清掉的条件（可能同时清多个字段，如年份区间）。 */
+  clear: Partial<ResultsQuery>
+}
+
+/**
+ * 已生效条件的唯一清单：折叠态的计数与顶部标签都从这里派生，
+ * 新增筛选维度时只需加一项，两处必然同步（此前只有 6 个维度有标签）。
+ * `t` 可省略——只计数时用占位翻译，文案不参与判断。
+ */
+function collectActiveFilters(
+  value: ResultsQuery,
+  t: Translate = (key) => key,
+  queries: readonly QueryBlock[] = [],
+  groups: readonly TaskGroup[] = [],
+): ActiveFilter[] {
+  const list: ActiveFilter[] = []
+  const add = (key: string, label: string, clear: Partial<ResultsQuery>): void => {
+    list.push({ key, label, clear })
+  }
+
+  if (value.q !== undefined && value.q.trim() !== '') {
+    add('q', tpl(t('filter.keywordChip'), { value: value.q }), { q: undefined })
+  }
+  if (value.source !== undefined) {
+    add(
+      'source',
+      tpl(t('filter.sourceChip'), { value: t(`source.${value.source}`) }),
+      { source: undefined },
+    )
+  }
+  if (value.yearFrom !== undefined || value.yearTo !== undefined) {
+    const from = value.yearFrom === undefined ? '' : String(value.yearFrom)
+    const to = value.yearTo === undefined ? '' : String(value.yearTo)
+    add('year', tpl(t('filter.yearChip'), { value: `${from}–${to}` }), {
+      yearFrom: undefined,
+      yearTo: undefined,
+    })
+  }
+  if (value.screening !== undefined) {
+    add(
+      'screening',
+      tpl(t('filter.screeningChip'), { value: t(`screening.${value.screening}`) }),
+      { screening: undefined },
+    )
+  }
+  if (value.queryId !== undefined) {
+    const name = queries.find((query) => query.id === value.queryId)?.name ?? value.queryId
+    add('queryId', tpl(t('filter.queryChip'), { value: name }), { queryId: undefined })
+  }
+  if (value.groupId !== undefined) {
+    const name = groups.find((group) => group.id === value.groupId)?.name ?? value.groupId
+    add('groupId', tpl(t('filter.groupChip'), { value: name }), { groupId: undefined })
+  }
+  if (value.language !== undefined && value.language !== 'any') {
+    add(
+      'language',
+      tpl(t('filter.languageChip'), { value: t(`lang.${value.language}`) }),
+      { language: undefined },
+    )
+  }
+  if (value.sort !== undefined && value.sort !== 'relevance') {
+    add('sort', tpl(t('filter.sortChip'), { value: t(`sort.${value.sort}`) }), {
+      sort: undefined,
+    })
+  }
+  if (value.openAccessOnly === true) {
+    add('openAccessOnly', t('filter.openAccess'), { openAccessOnly: undefined })
+  }
+  if (value.hasPdf === true) {
+    add('hasPdf', t('filter.hasPdf'), { hasPdf: undefined })
+  }
+  if (value.missingFullText === true) {
+    add('missingFullText', t('filter.missingFullText'), { missingFullText: undefined })
+  }
+  if (value.type !== undefined) {
+    add('type', tpl(t('filter.typeChip'), { value: value.type }), { type: undefined })
+  }
+  if (value.venue !== undefined) {
+    add('venue', tpl(t('filter.venueChip'), { value: value.venue }), { venue: undefined })
+  }
+  if (value.author !== undefined) {
+    add('author', tpl(t('filter.authorChip'), { value: value.author }), { author: undefined })
+  }
+  if (value.newOnly === true) {
+    add('newOnly', t('filter.newChip'), { newOnly: undefined })
+  }
+  return list
+}
+
 /** 已生效的筛选条件数量（用于折叠态提示）。 */
 export function activeFilterCount(value: ResultsQuery): number {
-  let count = 0
-  if (value.q !== undefined && value.q.trim() !== '') count += 1
-  if (value.source !== undefined) count += 1
-  if (value.yearFrom !== undefined || value.yearTo !== undefined) count += 1
-  if (value.openAccessOnly === true) count += 1
-  if (value.hasPdf === true) count += 1
-  if (value.missingFullText === true) count += 1
-  if (value.screening !== undefined) count += 1
-  if (value.language !== undefined) count += 1
-  if (value.queryId !== undefined) count += 1
-  if (value.type !== undefined) count += 1
-  if (value.sort !== undefined) count += 1
-  if (value.groupId !== undefined) count += 1
-  if (value.venue !== undefined) count += 1
-  if (value.author !== undefined) count += 1
-  if (value.newOnly === true) count += 1
-  return count
+  return collectActiveFilters(value).length
 }
 
 export function TaskFilters({
@@ -125,15 +205,8 @@ export function TaskFilters({
     onChange({ ...value, ...next })
   }
 
-  const count = activeFilterCount(value)
-  const queryName =
-    value.queryId === undefined
-      ? ''
-      : (queries.find((query) => query.id === value.queryId)?.name ?? value.queryId)
-  const groupName =
-    value.groupId === undefined
-      ? ''
-      : (groups.find((group) => group.id === value.groupId)?.name ?? value.groupId)
+  const chips = collectActiveFilters(value, t, queries, groups)
+  const count = chips.length
 
   const setDraftValue = (key: keyof Draft, text: string): void => {
     setDraft((previous) => ({ ...previous, [key]: text }))
@@ -151,42 +224,9 @@ export function TaskFilters({
             {t('filter.reset')}
           </button>
         )}
-        {value.type !== undefined && (
-          <ActiveChip
-            label={tpl(t('filter.typeChip'), { value: value.type })}
-            onRemove={() => patch({ type: undefined })}
-          />
-        )}
-        {value.queryId !== undefined && (
-          <ActiveChip
-            label={tpl(t('filter.queryChip'), { value: queryName })}
-            onRemove={() => patch({ queryId: undefined })}
-          />
-        )}
-        {value.groupId !== undefined && (
-          <ActiveChip
-            label={tpl(t('filter.groupChip'), { value: groupName })}
-            onRemove={() => patch({ groupId: undefined })}
-          />
-        )}
-        {value.venue !== undefined && (
-          <ActiveChip
-            label={tpl(t('filter.venueChip'), { value: value.venue })}
-            onRemove={() => patch({ venue: undefined })}
-          />
-        )}
-        {value.author !== undefined && (
-          <ActiveChip
-            label={tpl(t('filter.authorChip'), { value: value.author })}
-            onRemove={() => patch({ author: undefined })}
-          />
-        )}
-        {value.newOnly === true && (
-          <ActiveChip
-            label={t('filter.newChip')}
-            onRemove={() => patch({ newOnly: undefined })}
-          />
-        )}
+        {chips.map((chip) => (
+          <ActiveChip key={chip.key} label={chip.label} onRemove={() => patch(chip.clear)} />
+        ))}
       </div>
 
       {open && (
@@ -286,7 +326,7 @@ export function TaskFilters({
             <span>{t('filter.language')}</span>
             <select
               style={INPUT_STYLE}
-              value={value.language ?? ''}
+              value={value.language === 'any' ? '' : (value.language ?? '')}
               onChange={(event) =>
                 patch({
                   language:
@@ -308,7 +348,15 @@ export function TaskFilters({
             <select
               style={INPUT_STYLE}
               value={value.sort ?? 'relevance'}
-              onChange={(event) => patch({ sort: event.target.value as SortMode })}
+              onChange={(event) =>
+                // 相关度是默认排序，不写进筛选对象，否则会被当成一条生效条件。
+                patch({
+                  sort:
+                    event.target.value === 'relevance'
+                      ? undefined
+                      : (event.target.value as SortMode),
+                })
+              }
             >
               {SORT_MODES.map((mode) => (
                 <option key={mode} value={mode}>
