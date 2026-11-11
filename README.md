@@ -74,6 +74,23 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 
 设置页还提供诊断与清理：逐源查看最近成功 / 失败与限流冷却并做探活；测试 PDF 下载目录可写性；测试 Zotero connector 连接并读取当前选中分类；按任务 / PDF 缓存 / 全部三种范围清理文件。
 
+## 数据目录
+
+任务的全部元数据都用本地 JSON 文件保存，位于平台统一存储区（不依赖数据库）：
+
+```
+$DSH_HOME/storages/dsh-plugin-litsearch/
+├── tasks/index.json        # 任务摘要索引（缺失时按任务文件重建）
+├── tasks/<taskId>.json     # 单任务全量元数据：条件、轮次、结果、分组、筛读状态、备注
+├── current.json            # 当前任务绑定
+├── out/<taskId>/           # CSV / RIS / BibTeX / Markdown 导出
+└── pdfs/<sha256>.pdf       # PDF 去重缓存
+```
+
+- `DSH_HOME` 由宿主注入，未设置时回落 `~/.dsh`；设置页「存储目录」展示当前实际生效的路径。
+- 旧版本的数据写在 `~/.dsh/dsh-litsearch/`。首次启动时若新目录为空而旧目录有任务，会把任务、导出文件与缓存**复制**到新目录并重建索引，**旧目录原样保留作备份**；新目录已有任务时不再迁移，复制失败则暂时回退到旧目录读取，不会丢标注。
+- **PDF 可读文件不在这里**：它由 `pdfRoot` 决定（默认 `~/Downloads/dsh-litsearch`），任务里记录的 `pdfFile` 是该目录下的绝对路径，升级不影响已下载的文件；只有内部去重缓存 `pdfs/` 随任务目录一起搬迁。
+
 ## Zotero 同步
 
 同步走 Zotero 桌面端自带的 connector（默认 `http://127.0.0.1:23119`），不需要 Web API Key：
@@ -114,6 +131,7 @@ dsh --profile litsearch
 - `src/search/`：数据源无关的检索层（类型、聚合、身份合并、查询适配、限流、健康状态）。
 - `src/search/providers/`：每家免费 API 一个 provider，新增数据源只需实现 `Provider` 并注册。
 - `src/host/`：`/dsh-litsearch/api/*` 端点、任务执行 / 持久化 / 统计 / 导出、模型侧工具注册。
+- `src/host/paths.ts`：`$DSH_HOME` 解析、统一存储区路径、旧目录一次性迁移与失败回退。
 - `src/host/pdf/`：PDF 候选链、SSRF 防护的抓取与本地缓存、可读文件名、Europe PMC 全文兜底。
 - `src/host/zotero/`：本机 Zotero connector 协议封装（探测、保存条目、上传附件）。
 - `src/client/`：右侧栏检索面板、任务 tab（结果 / 概览 / 分组 / 笔记 / 对比 / 全文）、独立论文 tab 与设置页。

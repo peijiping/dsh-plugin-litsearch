@@ -1,17 +1,19 @@
 /**
  * 任务持久化：`<root>/tasks/<id>.json` + `tasks/index.json`。
  *
+ * - 数据根目录为 `$DSH_HOME/storages/dsh-plugin-litsearch`（见 `host/paths.ts`），
+ *   加载时若新目录为空而旧目录有任务，会一次性复制过来；显式传入 root 时不迁移；
  * - 写盘全部串行执行，先写临时文件再 rename，避免半截 JSON；
  * - 内存里只保留摘要，任务正文按需从磁盘读；
  * - 落盘时摘要截到 {@link MAX_ABSTRACT_CHARS} 字符，任务数按保留策略裁剪。
  */
 
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { MAX_ABSTRACT_CHARS } from '../../search/config.js'
 import type { Paper, SearchTask, TaskSummary } from '../../search/types.js'
+import { resolveStorageRoot, storageRoot } from '../paths.js'
 import { cloneRound, roundsOf, toSummary, trimRounds } from './summary.js'
 
 const INDEX_VERSION = 1
@@ -33,13 +35,13 @@ export interface CurrentTaskSnapshot {
 }
 
 export class TaskStore {
-  readonly root: string
+  root: string
 
-  private readonly tasksDir: string
+  private tasksDir: string
 
-  private readonly indexFile: string
+  private indexFile: string
 
-  private readonly currentFile: string
+  private currentFile: string
 
   private readonly summaries = new Map<string, TaskSummary>()
 
@@ -49,17 +51,35 @@ export class TaskStore {
 
   private retention: RetentionOptions = { retentionDays: 90, retentionCount: 120 }
 
-  constructor(root = join(homedir(), '.dsh', 'dsh-litsearch')) {
-    this.root = root
-    this.tasksDir = join(root, 'tasks')
+  /** 只有使用默认（平台统一）目录时才做旧数据迁移；显式 root 多用于测试。 */
+  private readonly migrateOnLoad: boolean
+
+  /** 迁移过来的任务文件必须重建索引，避免沿用旧目录里那份空 index.json。 */
+  private forceRebuildIndex = false
+
+  constructor(root?: string) {
+    this.migrateOnLoad = root === undefined
+    this.root = root ?? storageRoot()
+    this.tasksDir = join(this.root, 'tasks')
     this.indexFile = join(this.tasksDir, 'index.json')
-    this.currentFile = join(root, 'current.json')
+    this.currentFile = join(this.root, 'current.json')
   }
 
   async load(retention: RetentionOptions): Promise<void> {
     this.retention = retention
+    if (this.migrateOnLoad) {
+      try {
+        const resolution = await resolveStorageRoot()
+        this.rebind(resolution.root)
+        // 复制过来的 index.json 可能不含新任务，强制按任务文件重建一次。
+        this.forceRebuildIndex = resolution.migratedFrom !== undefined
+      } catch (error) {
+        // 目录解析失败不应阻断任务系统启动，继续用构造时的默认目录。
+        console.warn('[dsh-plugin-litsearch] 数据目录解析失败，沿用默认目录：', error)
+      }
+    }
     await mkdir(this.tasksDir, { recursive: true })
-    const index = await this.readIndex()
+    const index = this.forceRebuildIndex ? null : await this.readIndex()
     if (index === null) {
       await this.rebuildIndex()
     } else {
@@ -161,6 +181,15 @@ export class TaskStore {
       await this.remove(summary.id)
     }
     return { removed: targets.length, freedBytes }
+  }
+
+  /** 迁移回退时切回旧目录读取，所有派生路径（含设置页展示）同步更新。 */
+  private rebind(root: string): void {
+    if (root === this.root) return
+    this.root = root
+    this.tasksDir = join(root, 'tasks')
+    this.indexFile = join(this.tasksDir, 'index.json')
+    this.currentFile = join(root, 'current.json')
   }
 
   private taskFile(id: string): string {
