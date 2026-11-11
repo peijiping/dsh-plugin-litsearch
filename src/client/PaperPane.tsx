@@ -337,8 +337,9 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
         <select
           style={SELECT_STYLE}
           value={state?.groupId ?? ''}
-          disabled={busy || detail.groups.length === 0}
+          disabled={busy}
           aria-label={t('annotate.group')}
+          title={detail.groups.length === 0 ? t('annotate.groupHint') : t('annotate.group')}
           onChange={(event) =>
             annotate({
               paperId: paper.paperId,

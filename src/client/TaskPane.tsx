@@ -637,6 +637,7 @@ export function TaskPane({
                       }}
                       onDownload={downloadPaper}
                       onZotero={zoteroPaper}
+                      onManageGroups={() => setTab('groups')}
                       {...(onOpenPaper === undefined
                         ? {}
                         : {
@@ -890,8 +891,9 @@ function BulkBar({
         <select
           style={BULK_SELECT_STYLE}
           value=""
-          disabled={busy || groups.length === 0}
+          disabled={busy}
           aria-label={t('bulk.setGroup')}
+          title={groups.length === 0 ? t('annotate.groupHint') : t('bulk.setGroup')}
           onChange={(event) => {
             const value = event.target.value
             if (value !== '') onAnnotate({ groupId: value === '__none__' ? null : value })

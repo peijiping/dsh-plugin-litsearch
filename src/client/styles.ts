@@ -57,10 +57,10 @@ export const listStyle = {
   gap: 0,
 } as const
 
-/** 单条结果卡片。 */
+/** 单条结果卡片：顶线即文献之间的分割线，透明度需足够高才看得清。 */
 export const cardStyle = {
   padding: '10px 0',
-  borderTop: '1px solid rgba(127,127,127,0.18)',
+  borderTop: '1px solid rgba(127,127,127,0.5)',
 } as const
 
 /** 标题。 */

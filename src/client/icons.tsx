@@ -75,3 +75,37 @@ export function TaskListIcon(): ReactElement {
     </svg>
   )
 }
+
+/** 结果卡片字段图标统一尺寸：比右上角图标按钮略小，跟正文基线对齐。 */
+const fieldSvgProps = { ...svgProps, width: 14, height: 14 } as const
+
+/** 文献标题：带折角的文档 + 标题行。 */
+export function TitleIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+      <path d="M8 13h8M8 17h5" />
+    </svg>
+  )
+}
+
+/** 作者：双人像。 */
+export function AuthorsIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.5 20v-1a5.5 5.5 0 0 1 11 0v1" />
+      <path d="M16 5.4a3 3 0 0 1 0 5.2M18 15.2a5 5 0 0 1 2.5 3.8v1" />
+    </svg>
+  )
+}
+
+/** 摘要：段落横排文字。 */
+export function AbstractIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M4 6h16M4 10h16M4 14h13M4 18h8" />
+    </svg>
+  )
+}

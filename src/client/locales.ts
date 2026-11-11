@@ -189,6 +189,8 @@ const zh: Record<string, string> = {
 
   'annotate.group': '分组',
   'annotate.noGroup': '未分组',
+  'annotate.createGroup': '＋ 新建分组…',
+  'annotate.groupHint': '还没有分组；可在任务的「分组」页新建，选「未分组」可清除分组',
   'annotate.expand': '标注',
   'annotate.collapse': '收起标注',
   'annotate.note': '备注',
@@ -233,7 +235,6 @@ const zh: Record<string, string> = {
   'groups.name': '名称',
   'groups.desc': '说明',
   'groups.add': '添加分组',
-  'groups.save': '保存分组',
   'groups.delete': '删除',
   'groups.up': '上移',
   'groups.down': '下移',
@@ -244,7 +245,8 @@ const zh: Record<string, string> = {
   'groups.descPlaceholder': '如：用于方法对比',
   'groups.deleteConfirm': '删除分组「{name}」？组内文献会回到未分组，标注不受影响。',
   'groups.saved': '分组已保存',
-  'groups.added': '已添加分组',
+  'groups.saving': '正在保存…',
+  'groups.retry': '重试保存',
 
   'notes.title': '任务笔记',
   'notes.taskPlaceholder': '记录检索策略、纳入排除标准、阶段性结论…',
@@ -337,6 +339,10 @@ const zh: Record<string, string> = {
   'result.insert': '插入到对话',
   'result.inserted': '已插入到会话草稿',
   'result.pdf': 'PDF',
+  'result.infoLabel': '状态与来源',
+  'result.infoHint': '筛读状态、命中的数据库、被引次数、开放获取与全文状态',
+  'result.actionLabel': '快捷操作',
+  'result.actionHint': '对这篇文献执行操作：插入对话、打开详情、预览或下载全文、存入 Zotero',
 
   'error.noEditor': '当前面板不在会话上下文中，无法插入到输入框',
   'error.draftChanged': '输入框草稿已变化，未插入；请避免在插入期间编辑草稿',
@@ -681,6 +687,8 @@ const en: Record<string, string> = {
 
   'annotate.group': 'Group',
   'annotate.noGroup': 'Ungrouped',
+  'annotate.createGroup': '+ New group…',
+  'annotate.groupHint': 'No groups yet; create one on the Groups tab, or pick Ungrouped to clear',
   'annotate.expand': 'Annotate',
   'annotate.collapse': 'Hide annotation',
   'annotate.note': 'Note',
@@ -726,7 +734,6 @@ const en: Record<string, string> = {
   'groups.name': 'Name',
   'groups.desc': 'Description',
   'groups.add': 'Add group',
-  'groups.save': 'Save groups',
   'groups.delete': 'Delete',
   'groups.up': 'Move up',
   'groups.down': 'Move down',
@@ -738,7 +745,8 @@ const en: Record<string, string> = {
   'groups.deleteConfirm':
     'Delete group "{name}"? Its papers become ungrouped; annotations are kept.',
   'groups.saved': 'Groups saved',
-  'groups.added': 'Group added',
+  'groups.saving': 'Saving…',
+  'groups.retry': 'Retry saving',
 
   'notes.title': 'Task notes',
   'notes.taskPlaceholder': 'Search strategy, inclusion criteria, interim conclusions…',
@@ -832,6 +840,10 @@ const en: Record<string, string> = {
   'result.insert': 'Add to conversation',
   'result.inserted': 'Added to the conversation draft',
   'result.pdf': 'PDF',
+  'result.infoLabel': 'Status & sources',
+  'result.infoHint': 'Screening status, matched databases, citations, open access and full-text status',
+  'result.actionLabel': 'Actions',
+  'result.actionHint': 'Actions on this paper: insert into chat, open details, preview or download full text, save to Zotero',
 
   'error.noEditor': 'This panel is not in a conversation context; cannot insert into the composer',
   'error.draftChanged': 'The draft changed; nothing was inserted. Avoid editing while inserting.',
