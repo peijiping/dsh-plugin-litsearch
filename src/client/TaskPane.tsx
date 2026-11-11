@@ -76,6 +76,8 @@ interface Props {
   onOpenPaper?: (taskId: string, paperId: string, title: string) => void
   /** 从任务列表弹窗切换到另一个任务（宿主按地址去重，重复打开只聚焦）。 */
   onOpenTask?: (id: string, title: string) => void
+  /** 当前任务被删除且没有别的任务可切换时，由宿主关闭这个任务 tab。 */
+  onCloseTask?: (taskId: string) => void
 }
 
 export function taskIdFromAddress(address: string): string | null {
@@ -104,6 +106,7 @@ export function TaskPane({
   inputActions,
   onOpenPaper,
   onOpenTask,
+  onCloseTask,
 }: Props): ReactElement {
   const info = useTabInfo()
   const taskId = parseTaskId(info)
@@ -769,6 +772,10 @@ export function TaskPane({
         onClose={() => setShowTaskList(false)}
         currentTaskId={taskId}
         onOpenTask={onOpenTask ?? (() => undefined)}
+        onCurrentRemoved={(fallback) => {
+          if (fallback !== null) onOpenTask?.(fallback.id, fallback.title)
+          else onCloseTask?.(taskId)
+        }}
       />
     </div>
   )

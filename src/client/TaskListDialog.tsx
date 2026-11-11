@@ -33,6 +33,11 @@ interface Props {
   /** 当前正在看的那个任务，列表里给一个「当前」标记。 */
   currentTaskId?: string | null
   onOpenTask: (id: string, title: string) => void
+  /**
+   * 删除的正是当前查看的任务时回调：fallback 为列表里紧邻的上一个任务
+   * （删的是第一条时取相邻的下一条），没有其它任务时为 null。
+   */
+  onCurrentRemoved?: (fallback: TaskSummary | null) => void
 }
 
 function messageOf(error: unknown): string {
@@ -50,6 +55,7 @@ export function TaskListDialog({
   onClose,
   currentTaskId,
   onOpenTask,
+  onCurrentRemoved,
 }: Props): ReactElement | null {
   const version = useTaskListVersion()
   const [tasks, setTasks] = useState<TaskSummary[]>([])
@@ -118,11 +124,18 @@ export function TaskListDialog({
   const remove = async (task: TaskSummary): Promise<void> => {
     if (busyId !== null) return
     setBusyId(task.id)
+    const index = tasks.findIndex((entry) => entry.id === task.id)
     try {
       await deleteTask(task.id)
       forgetTask(task.id)
       notifyTaskListChanged()
       setConfirmDeleteId(null)
+      if (task.id === currentTaskId) {
+        const remaining = tasks.filter((entry) => entry.id !== task.id)
+        // 先取列表里紧邻的上一条；删的是第一条时退到新的第一条。
+        const fallback = index < 0 ? null : (remaining[index - 1] ?? remaining[index] ?? null)
+        onCurrentRemoved?.(fallback)
+      }
       await load()
     } catch (err) {
       setError(messageOf(err))

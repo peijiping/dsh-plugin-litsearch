@@ -216,6 +216,15 @@ export function apply(ctx: ClientContext): void {
       onOpenTask: (id: string, title: string) => openTask(id, title),
     })
 
+  /** 关闭某个任务 tab；任务被删除且没有可切换的任务时用来清空窗口。 */
+  const closeTask = (id: string): void => {
+    const sessionId = ctx.sidebarRight.mounted.getSnapshot()
+    if (sessionId === undefined) return
+    for (const tab of taskTabsIn(sessionId)) {
+      if (taskIdFromAddress(tab.contentId) === id) ctx.sidebarRight.close(tab.id)
+    }
+  }
+
   ctx.effect(
     () =>
       ctx.slots.register(
@@ -243,6 +252,7 @@ export function apply(ctx: ClientContext): void {
       inputActions: props.inputActions,
       onOpenPaper: openPaper,
       onOpenTask: (id: string, title: string) => openTask(id, title),
+      onCloseTask: (id: string) => closeTask(id),
     })
 
   /** tab 标题：按地址里的任务 id 读缓存，缺了补取一次详情。 */

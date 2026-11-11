@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { MAX_LIMIT, PLUGIN_VERSION, getSettings } from '../../search/config.js'
@@ -190,7 +190,13 @@ export class TaskService {
   /** 没有可用快照时，把最近更新的任务设为当前任务并落盘。 */
   private bootstrapCurrentTask(): void {
     const latest = this.store.list()[0]
-    if (latest === undefined) return
+    if (latest === undefined) {
+      // 任务已全部删除：清掉快照里的旧 id，避免 current.json 指向不存在的任务。
+      this.currentTaskId = undefined
+      this.currentTaskAt = 0
+      this.persistCurrent()
+      return
+    }
     this.currentTaskId = latest.id
     this.currentTaskAt = Date.parse(latest.updatedAt) || Date.now()
     this.persistCurrent()
@@ -434,8 +440,11 @@ export class TaskService {
 
   async remove(id: string): Promise<void> {
     const task = await this.get(id)
-    this.runner.cancel(id)
+    // 先等这一轮收尾（finally 里还会落一次盘），再删文件，避免任务被写回。
+    if (this.runner.cancel(task.id)) await this.runner.wait(task.id)
     await this.store.remove(task.id)
+    // 模型工具导出到 <storage>/out/<taskId>/ 的文件随任务一起清掉。
+    await rm(join(this.store.root, 'out', task.id), { recursive: true, force: true })
     this.events.remove(task.id)
     if (this.currentTaskId !== task.id) return
     this.currentTaskId = undefined
@@ -807,6 +816,8 @@ export class TaskService {
     paperId: string,
     patch: { pdfStatus: PdfStatus; pdfError?: string; pdfFile?: string },
   ): Promise<void> {
+    // 下载进行中任务被删除：不再写回，也不向客户端广播已删除的任务。
+    if (this.store.summary(task.id) === undefined) return
     const current = task.states[paperId] ?? emptyState()
     const next: PaperState = { ...current, pdfStatus: patch.pdfStatus }
     if (patch.pdfError === undefined) delete next.pdfError
@@ -907,7 +918,12 @@ export class TaskService {
       task,
       {
         persist: (current) => this.store.save(current),
-        publish: (current) => this.events.publish(toSummary(current)),
+        publish: (current) => {
+          // 删除后这一轮收尾仍会 publish，跳过已删除任务，避免客户端又去打开它。
+          if (this.store.summary(current.id) !== undefined) {
+            this.events.publish(toSummary(current))
+          }
+        },
       },
       origin,
     )
@@ -927,6 +943,8 @@ export class TaskService {
       .filter((paper) => paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '')
       .slice(0, 10)
     for (const paper of targets) {
+      // 任务中途被删除时停止后续下载，避免继续往用户下载目录写文件。
+      if (this.store.summary(task.id) === undefined) return
       if (task.states[paper.paperId]?.pdfStatus === 'downloaded') continue
       const resolution = await resolvePdf(paper).catch(() => null)
       if (resolution === null || !resolution.ok || resolution.buffer === undefined) {

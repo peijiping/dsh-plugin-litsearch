@@ -128,6 +128,8 @@ export class TaskStore {
   }
 
   async save(task: SearchTask): Promise<void> {
+    // 运行中的任务可能被用户删除：删除后的迟到落盘会重建文件与索引，这里直接丢弃。
+    if (!this.summaries.has(task.id)) return
     this.put(task)
     const file = this.taskFile(task.id)
     const body = JSON.stringify({ version: INDEX_VERSION, task: truncateForDisk(task) })
