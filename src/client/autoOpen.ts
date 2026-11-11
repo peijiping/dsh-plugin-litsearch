@@ -18,6 +18,7 @@ import { DEFAULT_AUTO_OPEN, DEFAULT_MAX_TASK_TABS } from '../search/config'
 import type { TaskSummary } from '../search/types'
 import { fetchEvents, fetchTask } from './api'
 import { getHealth, refreshHealth } from './health'
+import { publishTaskSummaries } from './taskListStore'
 
 const OPENED_KEY = 'dsh-litsearch.opened'
 const PENDING_KEY = 'dsh-litsearch.pending'
@@ -291,6 +292,9 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
     const first = !seeded
     seeded = true
     rev = page.rev
+
+    // 已挂载的任务 tab 靠这份增量同步宿主侧的变化（例如模型在同一任务里开新一轮）。
+    publishTaskSummaries(page.tasks)
 
     const settings = getHealth()?.settings
     const autoOpen = settings?.autoOpenTaskTab ?? DEFAULT_AUTO_OPEN

@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AnnotationInput, ResultsPage, TaskDetail } from '../search/types'
 import { annotateTask, cancelTask, fetchResults, fetchTask, runTask } from './api'
 import type { ResultsQuery } from './api'
+import { subscribeTaskSummary } from './taskListStore'
 
 const POLL_MS = 1500
 
@@ -60,13 +61,15 @@ export function useTask(
   const filterKey = JSON.stringify(filters)
 
   const load = useCallback(
-    async (current: string, pageLimit: number): Promise<TaskDetail | null> => {
+    async (current: string, pageLimit: number, token?: number): Promise<TaskDetail | null> => {
       const detail = await fetchTask(current, signal)
       const page = await fetchResults(
         current,
         { ...filtersRef.current, limit: pageLimit },
         signal,
       )
+      // 期间又触发了新一轮加载（例如 /events 送来新 rev）：丢弃这次较旧的结果。
+      if (token !== undefined && seq.current !== token) return detail
       statusRef.current = detail.status
       revRef.current = detail.rev
       limitRef.current = Math.max(pageLimit, detail.conditions.pageSize)
@@ -91,7 +94,7 @@ export function useTask(
         : { ...INITIAL, loading: true },
     )
 
-    void load(id, fallbackLimit).catch((error: unknown) => {
+    void load(id, fallbackLimit, current).catch((error: unknown) => {
       if (seq.current !== current || signal?.aborted === true) return
       setState({ detail: null, page: null, loading: false, error: errorMessage(error) })
     })
@@ -133,6 +136,18 @@ export function useTask(
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [id, nonce, fallbackLimit, load, signal, filterKey])
+
+  // 任务空闲时不再轮询；宿主侧一旦改了 rev（模型在同一任务里开新一轮、
+  // 批量标注等），靠 /events 的摘要触发一次整页重取。运行中的 rev 变化
+  // 仍由上面的轮询处理，避免两路重复拉取。
+  useEffect(() => {
+    if (id === null) return undefined
+    return subscribeTaskSummary((summary) => {
+      if (summary.id !== id || summary.rev === revRef.current) return
+      if (isActive(statusRef.current)) return
+      setNonce((value) => value + 1)
+    })
+  }, [id])
 
   const reload = useCallback(() => {
     setNonce((value) => value + 1)

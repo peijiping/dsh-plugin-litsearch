@@ -326,6 +326,7 @@ export function TaskPane({
   }
 
   const active = detail.status === 'running' || detail.status === 'queued'
+  const roundCount = detail.roundCount ?? 0
   const failed = detail.result.sources.filter((source) => !source.ok && !source.skipped)
   const skipped = detail.result.sources.filter((source) => source.skipped)
   const page = view.page
@@ -421,13 +422,21 @@ export function TaskPane({
       )}
 
       {active && (
-        <div style={{ ...statusStyle, color: ACCENT }}>
-          {detail.progress === undefined
-            ? t('task.running')
-            : tpl(t('task.progress'), {
-                i: detail.progress.queryIndex,
-                n: detail.progress.queryTotal,
-              })}
+        <div style={ROUND_BANNER_STYLE} role="status" aria-live="polite">
+          {roundCount > 0
+            ? detail.progress === undefined
+              ? tpl(t('task.roundRunning'), { round: roundCount })
+              : tpl(t('task.roundRunningDetail'), {
+                  round: roundCount,
+                  i: detail.progress.queryIndex,
+                  n: detail.progress.queryTotal,
+                })
+            : detail.progress === undefined
+              ? t('task.running')
+              : tpl(t('task.progress'), {
+                  i: detail.progress.queryIndex,
+                  n: detail.progress.queryTotal,
+                })}
         </div>
       )}
 
@@ -671,9 +680,14 @@ export function TaskPane({
                 </div>
               )}
             </>
+          ) : active ? (
+            <div style={ROUND_RESULTS_HINT_STYLE}>
+              {roundCount > 0
+                ? tpl(t('task.roundRunningResults'), { round: roundCount })
+                : t('task.running')}
+            </div>
           ) : (
-            !view.loading &&
-            !active && (
+            !view.loading && (
               <div style={statusStyle}>
                 {filterActive ? t('filter.noMatch') : t('task.empty')}
               </div>
@@ -985,6 +999,25 @@ const statusChipStyle = {
   fontWeight: 600,
   fontSize: 12,
 } as const
+
+const ROUND_BANNER_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '6px 8px',
+  borderRadius: 6,
+  border: '1px solid rgba(80,140,255,0.35)',
+  background: 'rgba(80,140,255,0.10)',
+  color: ACCENT,
+  fontSize: 12,
+  fontWeight: 600,
+}
+
+const ROUND_RESULTS_HINT_STYLE: CSSProperties = {
+  padding: '10px 8px',
+  fontSize: 12,
+  color: ACCENT,
+}
 
 const RIS_FALLBACK_STYLE: CSSProperties = {
   display: 'flex',
