@@ -9,10 +9,17 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } f
 
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { AnnotationInput, Paper, Screening, TaskDetail } from '../search/types'
+import type {
+  AnnotationInput,
+  Paper,
+  Screening,
+  TaskDetail,
+  TaskStatsReport,
+} from '../search/types'
 import {
   downloadPaperPdf,
   exportUrl,
+  fetchStats,
   syncZotero,
   updateTask,
   type ResultsQuery,
@@ -21,7 +28,7 @@ import { rememberTaskTitle } from './autoOpen'
 import { CompareTab } from './CompareTab'
 import { ConditionEditor } from './ConditionEditor'
 import { paperText, papersText } from './compose'
-import { FullTextTab } from './FullTextTab'
+import { FullTextTab, type FullTextView } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
 import { HistoryIcon, IconButton, TaskListIcon } from './icons'
 import { insertBuilt, type InputActions } from './inline'
@@ -112,6 +119,8 @@ export function TaskPane({
   } | null>(null)
   const [showRounds, setShowRounds] = useState(false)
   const [showTaskList, setShowTaskList] = useState(false)
+  /** 任务级全文统计：结果页覆盖率横幅与全文页台账共用同一份数据。 */
+  const [overview, setOverview] = useState<TaskStatsReport | null>(null)
 
   const detail = view.detail
   const filterActive = useMemo(() => activeFilterCount(filters) > 0, [filters])
@@ -129,6 +138,25 @@ export function TaskPane({
   useEffect(() => {
     if (detail !== null) rememberTaskTitle(detail.id, detail.title)
   }, [detail])
+
+  // rev 变化（下载、标注、重跑）后重取覆盖率，保证横幅与全文页一致。
+  useEffect(() => {
+    if (taskId === null) return undefined
+    const controller = new AbortController()
+    void fetchStats(taskId, {}, 'task', controller.signal)
+      .then((report) => {
+        if (!controller.signal.aborted) setOverview(report)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setOverview(null)
+      })
+    return () => controller.abort()
+  }, [taskId, detail?.rev])
+
+  // 切任务时先清掉上一个任务的覆盖率，避免横幅短暂显示旧数据。
+  useEffect(() => {
+    setOverview(null)
+  }, [taskId])
 
   useEffect(() => {
     if (toast === '') return undefined
@@ -223,12 +251,13 @@ export function TaskPane({
     })()
   }
 
-  const downloadMany = (): void => {
-    if (taskId === null || ids.length === 0) return
+  /** 结果页与全文页共用同一套批量下载 / Zotero 逻辑。 */
+  const downloadIds = (paperIds: readonly string[]): void => {
+    if (taskId === null || paperIds.length === 0) return
     void (async () => {
       let ok = 0
       let failed = 0
-      for (const paperId of ids) {
+      for (const paperId of paperIds) {
         try {
           const result = await downloadPaperPdf(taskId, paperId)
           if (result.status === 'downloaded' || result.status === 'html-only') ok += 1
@@ -242,14 +271,14 @@ export function TaskPane({
     })()
   }
 
-  const zoteroMany = (): void => {
-    if (taskId === null || ids.length === 0) return
-    void syncZotero(taskId, ids)
+  const zoteroIds = (paperIds: readonly string[]): void => {
+    if (taskId === null || paperIds.length === 0) return
+    void syncZotero(taskId, paperIds)
       .then((result) => {
         setToast(zoteroToast(t, result.saved, result.failed, result.messages))
         if (result.failed > 0) {
           setRisFallback({
-            ids,
+            ids: [...paperIds],
             message: result.messages[0] ?? t('pdf.zoteroFailed'),
           })
         }
@@ -257,9 +286,12 @@ export function TaskPane({
       .catch((error: unknown) => {
         const message = messageOf(error)
         setToast(tpl(t('pdf.zoteroFailed'), { message }))
-        setRisFallback({ ids, message })
+        setRisFallback({ ids: [...paperIds], message })
       })
   }
+
+  const downloadMany = (): void => downloadIds(ids)
+  const zoteroMany = (): void => zoteroIds(ids)
 
   if (taskId === null) return <div style={panelStyle}>{t('task.notFound')}</div>
 
@@ -284,6 +316,18 @@ export function TaskPane({
   const failed = detail.result.sources.filter((source) => !source.ok && !source.skipped)
   const skipped = detail.result.sources.filter((source) => source.skipped)
   const page = view.page
+  // 覆盖率恒为任务级口径（scope=task），不随结果页筛选变化。
+  const coverage = overview?.fullText
+  const overviewAvailable =
+    coverage === undefined ? 0 : coverage.available + coverage.downloaded + coverage.htmlOnly
+  const overviewMissing =
+    coverage === undefined
+      ? 0
+      : coverage.unknown + coverage.paywalled + coverage.blocked + coverage.failed
+  const overviewRate =
+    overview === null || overview.loaded === 0
+      ? 0
+      : Math.round((overviewAvailable / overview.loaded) * 100)
 
   return (
     <div style={panelStyle}>
@@ -504,6 +548,40 @@ export function TaskPane({
 
       {tab === 'results' ? (
         <>
+          {overview !== null && (
+            <div style={COVERAGE_WRAP_STYLE}>
+              <div style={COVERAGE_ROW_STYLE}>
+                <span>
+                  {tpl(t('fulltext.coverageBar'), {
+                    available: overviewAvailable,
+                    total: overview.loaded,
+                    rate: overviewRate,
+                    missing: overviewMissing,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  style={
+                    filters.missingFullText === true
+                      ? QUICK_FILTER_ACTIVE_STYLE
+                      : QUICK_FILTER_STYLE
+                  }
+                  onClick={() =>
+                    setFilters((previous) => ({
+                      ...previous,
+                      missingFullText: previous.missingFullText === true ? undefined : true,
+                    }))
+                  }
+                >
+                  {t('fulltext.quickFilter')}
+                </button>
+                <button type="button" style={linkButtonStyle} onClick={() => setTab('fulltext')}>
+                  {t('fulltext.openTab')}
+                </button>
+              </div>
+              <div style={COVERAGE_HINT_STYLE}>{t('fulltext.barHint')}</div>
+            </div>
+          )}
           <TaskFilters
             t={t}
             value={filters}
@@ -612,10 +690,16 @@ export function TaskPane({
           taskId={taskId}
           rev={detail.rev}
           states={detail.states}
+          stats={overview}
           onDownload={downloadPaper}
           onZotero={zoteroPaper}
-          onShowMissing={() => {
-            setFilters((previous) => ({ ...previous, missingFullText: true }))
+          onBatchDownload={(papers) => downloadIds(papers.map((paper) => paper.paperId))}
+          onBatchZotero={(papers) => zoteroIds(papers.map((paper) => paper.paperId))}
+          onShowInResults={(viewKey: FullTextView) => {
+            // 清空其他筛选，保证按钮上写的篇数就是跳过去能看到的篇数。
+            setFilters(
+              viewKey === 'missing' ? { missingFullText: true } : { pdfStatus: viewKey },
+            )
             setTab('results')
           }}
         />
@@ -988,4 +1072,37 @@ const BULK_SELECT_STYLE: CSSProperties = {
   background: 'transparent',
   color: 'inherit',
   maxWidth: 140,
+}
+
+const COVERAGE_WRAP_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  padding: '5px 8px',
+  borderRadius: 6,
+  background: 'rgba(80,140,255,0.08)',
+  border: '1px solid rgba(80,140,255,0.25)',
+  fontSize: 12,
+}
+const COVERAGE_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 8,
+}
+const COVERAGE_HINT_STYLE: CSSProperties = { fontSize: 11, opacity: 0.66 }
+const QUICK_FILTER_STYLE: CSSProperties = {
+  padding: '1px 7px',
+  borderRadius: 10,
+  border: '1px solid rgba(127,127,127,0.3)',
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: 11,
+  cursor: 'pointer',
+}
+const QUICK_FILTER_ACTIVE_STYLE: CSSProperties = {
+  ...QUICK_FILTER_STYLE,
+  borderColor: '#508cff',
+  color: '#508cff',
+  fontWeight: 600,
 }

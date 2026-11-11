@@ -139,6 +139,27 @@ test('missingFullText keeps only states without a full text', () => {
   )
 })
 
+test('pdfStatus filters by the effective full-text state', () => {
+  const papers = [paper('unknown'), paper('available'), paper('downloaded'), paper('failed')]
+  const current = task(papers, {
+    available: { screening: 'unread', pdfStatus: 'available' },
+    downloaded: { screening: 'unread', pdfStatus: 'downloaded' },
+    failed: { screening: 'unread', pdfStatus: 'failed' },
+  })
+  assert.deepEqual(
+    filterPapers(current, { pdfStatus: 'available' }).map((p) => p.paperId),
+    ['available'],
+  )
+  assert.deepEqual(
+    filterPapers(current, { pdfStatus: 'unknown' }).map((p) => p.paperId),
+    ['unknown'],
+  )
+  assert.deepEqual(
+    filterPapers(current, { pdfStatus: 'failed' }).map((p) => p.paperId),
+    ['failed'],
+  )
+})
+
 test('newOnly excludes papers already present in the base task', () => {
   const papers = [paper('p1'), paper('p2')]
   const current = task(papers)
@@ -162,4 +183,6 @@ test('filterKey is stable and distinguishes meaningful filters', () => {
   assert.equal(base, filterKey({ screening: 'included' }))
   assert.notEqual(base, filterKey({ screening: 'excluded' }))
   assert.notEqual(base, filterKey({}))
+  assert.notEqual(filterKey({}), filterKey({ pdfStatus: 'failed' }))
+  assert.notEqual(filterKey({ pdfStatus: 'failed' }), filterKey({ pdfStatus: 'unknown' }))
 })

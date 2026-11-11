@@ -18,6 +18,7 @@ import type {
   PaperDetail,
   PaperEntities,
   PdfDownloadResult,
+  PdfStatus,
   ProbeResult,
   ResultsPage,
   SearchRound,
@@ -140,6 +141,7 @@ export interface ResultsQuery {
   language?: TaskLanguage
   hasPdf?: boolean
   missingFullText?: boolean
+  pdfStatus?: PdfStatus
   groupId?: string
   venue?: string
   author?: string
@@ -212,6 +214,7 @@ function resultParams(query: ResultsQuery): URLSearchParams {
   if (query.language !== undefined) params.set('language', query.language)
   if (query.hasPdf === true) params.set('hasPdf', '1')
   if (query.missingFullText === true) params.set('missingFullText', '1')
+  if (query.pdfStatus !== undefined) params.set('pdfStatus', query.pdfStatus)
   if (query.groupId !== undefined && query.groupId !== '') params.set('groupId', query.groupId)
   if (query.venue !== undefined && query.venue !== '') params.set('venue', query.venue)
   if (query.author !== undefined && query.author !== '') params.set('author', query.author)

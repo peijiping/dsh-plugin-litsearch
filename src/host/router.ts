@@ -21,6 +21,7 @@ import type {
   CleanupScope,
   ExportFile,
   ExportFormat,
+  PdfStatus,
   Screening,
   SortMode,
   SourceId,
@@ -52,6 +53,15 @@ const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
 const LANGUAGES: readonly TaskLanguage[] = ['any', 'eng', 'chi']
 const ORIGINS: readonly TaskOrigin[] = ['model', 'panel', 'history', 'api']
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
+const PDF_STATUSES: readonly PdfStatus[] = [
+  'unknown',
+  'available',
+  'downloaded',
+  'html-only',
+  'paywalled',
+  'blocked',
+  'failed',
+]
 const EXPORT_FORMATS: readonly ExportFormat[] = ['csv', 'ris', 'bibtex', 'md']
 const CLEANUP_SCOPES: readonly CleanupScope[] = ['tasks', 'pdf', 'all']
 const MAX_ANNOTATIONS = 50
@@ -549,6 +559,8 @@ function readResultsFilter(params: URLSearchParams): ResultsFilter {
   if (hasPdf === '1' || hasPdf === 'true') filter.hasPdf = true
   const missingFullText = params.get('missingFullText')
   if (missingFullText === '1' || missingFullText === 'true') filter.missingFullText = true
+  const pdfStatus = readEnum(params.get('pdfStatus') ?? undefined, 'pdfStatus', PDF_STATUSES)
+  if (pdfStatus !== undefined) filter.pdfStatus = pdfStatus
   const groupId = params.get('groupId')?.trim() ?? ''
   if (groupId !== '') filter.groupId = groupId
   const venue = params.get('venue')?.trim() ?? ''

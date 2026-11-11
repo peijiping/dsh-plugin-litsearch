@@ -28,6 +28,8 @@ export interface PaperFilter {
   hasPdf?: boolean
   /** 只保留尚无可用全文（PDF 或 EPMC HTML）的论文。 */
   missingFullText?: boolean
+  /** 只保留有效全文状态恰为该值的论文（与覆盖率的 pdfStatusOf 同一口径）。 */
+  pdfStatus?: PdfStatus
   /** 只保留归入该分组的论文。 */
   groupId?: string
   /** 期刊/出处（精确匹配，不分大小写）。 */
@@ -67,6 +69,9 @@ export function filterPapers(task: SearchTask, filter: PaperFilter = {}): Paper[
     if (filter.missingFullText === true) {
       const status = pdfStatusOf(task, paper)
       if (status === 'downloaded' || status === 'available' || status === 'html-only') return false
+    }
+    if (filter.pdfStatus !== undefined && pdfStatusOf(task, paper) !== filter.pdfStatus) {
+      return false
     }
     if (filter.groupId !== undefined && task.states[paper.paperId]?.groupId !== filter.groupId) {
       return false
@@ -116,6 +121,7 @@ export function filterKey(filter: PaperFilter): string {
     filter.language ?? '',
     filter.hasPdf === true ? '1' : '',
     filter.missingFullText === true ? '1' : '',
+    filter.pdfStatus ?? '',
     filter.groupId ?? '',
     filter.venue ?? '',
     filter.author ?? '',

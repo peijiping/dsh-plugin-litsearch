@@ -150,6 +150,13 @@ function collectActiveFilters(
   if (value.missingFullText === true) {
     add('missingFullText', t('filter.missingFullText'), { missingFullText: undefined })
   }
+  if (value.pdfStatus !== undefined) {
+    add(
+      'pdfStatus',
+      tpl(t('filter.pdfStatusChip'), { value: t(`pdf.status.${value.pdfStatus}`) }),
+      { pdfStatus: undefined },
+    )
+  }
   if (value.type !== undefined) {
     add('type', tpl(t('filter.typeChip'), { value: value.type }), { type: undefined })
   }
