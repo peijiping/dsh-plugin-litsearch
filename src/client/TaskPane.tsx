@@ -342,6 +342,16 @@ export function TaskPane({
       ? 0
       : Math.round((overviewAvailable / overview.loaded) * 100)
 
+  // tab 用非 button 容器渲染：宿主的 button 全局样式会给未选中项画出深色底线。
+  const tabItems: { key: TabKey; label: string }[] = [
+    { key: 'results', label: tpl(t('tab.results'), { n: page?.total ?? detail.result.totalLoaded }) },
+    { key: 'overview', label: t('tab.overview') },
+    { key: 'fulltext', label: t('tab.fulltext') },
+    { key: 'groups', label: t('tab.groups') },
+    { key: 'notes', label: t('tab.notes') },
+    { key: 'compare', label: t('tab.compare') },
+  ]
+
   return (
     <div style={panelStyle}>
       <header>
@@ -524,48 +534,23 @@ export function TaskPane({
       )}
 
       <div style={TAB_ROW_STYLE}>
-        <button
-          type="button"
-          style={tab === 'results' ? TAB_ACTIVE_STYLE : TAB_STYLE}
-          onClick={() => setTab('results')}
-        >
-          {tpl(t('tab.results'), { n: page?.total ?? detail.result.totalLoaded })}
-        </button>
-        <button
-          type="button"
-          style={tab === 'overview' ? TAB_ACTIVE_STYLE : TAB_STYLE}
-          onClick={() => setTab('overview')}
-        >
-          {t('tab.overview')}
-        </button>
-        <button
-          type="button"
-          style={tab === 'fulltext' ? TAB_ACTIVE_STYLE : TAB_STYLE}
-          onClick={() => setTab('fulltext')}
-        >
-          {t('tab.fulltext')}
-        </button>
-        <button
-          type="button"
-          style={tab === 'groups' ? TAB_ACTIVE_STYLE : TAB_STYLE}
-          onClick={() => setTab('groups')}
-        >
-          {t('tab.groups')}
-        </button>
-        <button
-          type="button"
-          style={tab === 'notes' ? TAB_ACTIVE_STYLE : TAB_STYLE}
-          onClick={() => setTab('notes')}
-        >
-          {t('tab.notes')}
-        </button>
-        <button
-          type="button"
-          style={tab === 'compare' ? TAB_ACTIVE_STYLE : TAB_STYLE}
-          onClick={() => setTab('compare')}
-        >
-          {t('tab.compare')}
-        </button>
+        {tabItems.map((item) => (
+          <div
+            key={item.key}
+            aria-current={tab === item.key ? 'page' : undefined}
+            tabIndex={0}
+            style={tab === item.key ? TAB_ACTIVE_STYLE : TAB_STYLE}
+            onClick={() => setTab(item.key)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                setTab(item.key)
+              }
+            }}
+          >
+            {item.label}
+          </div>
+        ))}
       </div>
 
       {tab === 'results' ? (
@@ -1014,27 +999,35 @@ const RIS_FALLBACK_STYLE: CSSProperties = {
   lineHeight: 1.5,
 }
 
+// 只有选中项画底部横线；tab 用普通 div 渲染，绕开宿主对 button / tab 元素的
+// 全局下划线样式（原先的 `transparent` 边会被渲染成深色）。用 padding 补偿 2px 边框高度。
 const TAB_ROW_STYLE: CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
   gap: 2,
-  borderBottom: '1px solid rgba(127,127,127,0.18)',
 }
 const TAB_STYLE: CSSProperties = {
-  padding: '4px 8px',
+  padding: '4px 8px 6px',
   border: 'none',
-  borderBottom: '2px solid transparent',
+  borderBottom: 'none',
+  boxShadow: 'none',
+  outline: 'none',
+  textDecoration: 'none',
   background: 'transparent',
   color: 'inherit',
   fontSize: 12,
   opacity: 0.66,
   cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  userSelect: 'none',
 }
 const TAB_ACTIVE_STYLE: CSSProperties = {
   ...TAB_STYLE,
+  padding: '4px 8px',
+  borderBottom: `2px solid ${ACCENT}`,
+  color: ACCENT,
   opacity: 1,
   fontWeight: 600,
-  borderBottomColor: ACCENT,
 }
 const SCREENING_BAR_STYLE: CSSProperties = {
   display: 'flex',
