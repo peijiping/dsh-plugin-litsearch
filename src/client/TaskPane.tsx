@@ -27,7 +27,7 @@ import {
 import { rememberTaskTitle } from './autoOpen'
 import { CompareTab } from './CompareTab'
 import { ConditionEditor } from './ConditionEditor'
-import { paperText, papersText } from './compose'
+import { paperText, papersText, taskText } from './compose'
 import { FullTextTab, type FullTextView } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
 import { HistoryIcon, IconButton, TaskListIcon } from './icons'
@@ -180,6 +180,16 @@ export function TaskPane({
     void (async () => {
       const outcome = await insertBuilt(inputActions, () => papersText(t, papers))
       if (outcome === 'inserted') setToast(tpl(t('bulk.inserted'), { n: papers.length }))
+      else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
+    })()
+  }
+
+  /** 把任务 id 与当前条件带入会话草稿，新会话也能续接同一任务。 */
+  const insertTask = (): void => {
+    if (detail === null) return
+    void (async () => {
+      const outcome = await insertBuilt(inputActions, () => taskText(t, detail))
+      if (outcome === 'inserted') setToast(t('task.inserted'))
       else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
     })()
   }
@@ -454,6 +464,15 @@ export function TaskPane({
           }}
         >
           {t('task.rerun')}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          type="button"
+          title={t('task.insertToChatHint')}
+          onClick={insertTask}
+        >
+          {t('task.insertToChat')}
         </Button>
         {active && (
           <Button
@@ -1012,8 +1031,10 @@ const TAB_ACTIVE_STYLE: CSSProperties = {
 }
 const SCREENING_BAR_STYLE: CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  flexWrap: 'wrap',
+  gap: 8,
   padding: '2px 0 4px',
   borderBottom: '1px solid rgba(127,127,127,0.12)',
 }
@@ -1041,8 +1062,10 @@ const SCREENING_PILL_ACTIVE: CSSProperties = {
 const EXPORT_ROW_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  flexWrap: 'wrap',
+  flexWrap: 'nowrap',
+  whiteSpace: 'nowrap',
   gap: 8,
+  marginLeft: 'auto',
   fontSize: 11,
 }
 const EXPORT_LABEL_STYLE: CSSProperties = { opacity: 0.66 }

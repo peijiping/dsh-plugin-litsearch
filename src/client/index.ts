@@ -63,9 +63,26 @@ interface SidebarRightTabsService {
   register(definition: TabDefinition): unknown
 }
 
-/** 右侧栏导航服务（只用到按资源地址打开）。 */
+/** 右侧栏里一个已打开的 tab（只声明本插件用到的字段）。 */
+interface SidebarRightOpenTab {
+  id: string
+  kind: string
+  contentId: string
+}
+
+/** 右侧栏导航服务：打开资源 + 读取 / 关闭当前会话已打开的 tab。 */
 interface SidebarRightService {
-  openResource(address: string, options?: { params?: unknown }): void
+  openResource(
+    address: string,
+    options?: { params?: unknown; replaceTab?: string },
+  ): void
+  close(tabId: string): void
+  active(): SidebarRightOpenTab | undefined
+  mounted: {
+    getSnapshot(): string | undefined
+    subscribe(listener: () => void): () => void
+  }
+  tabsIn(sessionId: string): readonly SidebarRightOpenTab[]
 }
 
 /** slots 服务。 */
@@ -165,6 +182,10 @@ export function apply(ctx: ClientContext): void {
     'dsh-plugin-litsearch: paper tab',
   )
 
+  /** 当前会话里已打开的任务 tab。 */
+  const taskTabsIn = (sessionId: string): SidebarRightOpenTab[] =>
+    ctx.sidebarRight.tabsIn(sessionId).filter((tab) => tab.kind === TASK_TAB_ID)
+
   /** 打开 / 聚焦某任务的 tab；先把标题记进缓存，布局恢复后不靠 params 也能显示。 */
   const openTask = (id: string, title?: string): void => {
     const address = `${TASK_ADDRESS_PREFIX}${encodeURIComponent(id)}`
@@ -172,10 +193,20 @@ export function apply(ctx: ClientContext): void {
     // 用户主动点开某任务 = 进入该任务，之后的模型检索默认落在这里。
     // 自动打开路径也会调用，但 activate 是幂等的，不会改变已有语义。
     void activateTask(id).catch(() => undefined)
-    ctx.sidebarRight.openResource(
-      address,
-      title === undefined || title === '' ? undefined : { params: { title } },
-    )
+    // 一个对话只保留一个任务 tab：已经打开别的任务时，原位替换而不是再开一个。
+    const sessionId = ctx.sidebarRight.mounted.getSnapshot()
+    const tabs = sessionId === undefined ? [] : taskTabsIn(sessionId)
+    const previous = tabs.find((tab) => taskIdFromAddress(tab.contentId) !== id)
+    ctx.sidebarRight.openResource(address, {
+      ...(title === undefined || title === '' ? {} : { params: { title } }),
+      ...(previous === undefined ? {} : { replaceTab: previous.id }),
+    })
+    // 升级前可能遗留多个任务 tab：打开动作之后收敛到这一个。
+    for (const tab of tabs) {
+      if (tab.id !== previous?.id && taskIdFromAddress(tab.contentId) !== id) {
+        ctx.sidebarRight.close(tab.id)
+      }
+    }
   }
 
   // 主页：t 闭包 + 打开任务 tab 的能力。
@@ -336,9 +367,34 @@ export function apply(ctx: ClientContext): void {
     () =>
       startAutoOpen({
         open: (id, title) => openTask(id, title),
+        sessionId: () => ctx.sidebarRight.mounted.getSnapshot(),
       }),
     'dsh-plugin-litsearch: auto open',
   )
+
+  // 切换对话时，让「当前任务」跟随该对话里打开的那个任务 tab：
+  // 模型下一轮执行前用 literature_task current 就能看到正确的任务。
+  ctx.effect(() => {
+    const sync = (): void => {
+      const sessionId = ctx.sidebarRight.mounted.getSnapshot()
+      if (sessionId === undefined) return
+      const tabs = taskTabsIn(sessionId)
+      if (tabs.length === 0) return
+      const activeId = ctx.sidebarRight.active()?.id
+      const tab = tabs.find((entry) => entry.id === activeId) ?? tabs[0]
+      // 一个对话只留一个任务 tab：旧版本遗留的多余 tab 顺手收敛掉。
+      for (const extra of tabs) {
+        if (extra.id !== tab.id) ctx.sidebarRight.close(extra.id)
+      }
+      const id = taskIdFromAddress(tab.contentId)
+      if (id !== null) void activateTask(id).catch(() => undefined)
+    }
+    const unsubscribe = ctx.sidebarRight.mounted.subscribe(sync)
+    sync()
+    return () => {
+      unsubscribe()
+    }
+  }, 'dsh-plugin-litsearch: current task follows conversation')
 
   // 设置改动没有推送通道：定时刷新 /health，自动打开与默认值随之更新。
   ctx.effect(() => {

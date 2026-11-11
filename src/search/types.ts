@@ -266,7 +266,6 @@ export interface SearchTask {
   conditions: TaskConditions
   status: TaskStatus
   origin: TaskOrigin
-  sessionId?: string
   fromTaskId?: string
   /** 每次状态/条件变化自增。 */
   rev: number
@@ -577,11 +576,22 @@ export interface ProbeResult {
   cooldownUntil?: string
 }
 
+/** 客户端需要打开/聚焦的任务（模型刚在当前任务里发起了一轮检索）。 */
+export interface TaskFocus {
+  taskId: string
+  title: string
+  /** 请求时间（epoch ms）；客户端据此丢弃过期的聚焦请求。 */
+  at: number
+  /** 发起检索的会话；客户端只在该会话可见时打开，避免抢占其他对话的面板。 */
+  sessionId?: string
+}
+
 /** `/events` 的响应；`reset` 表示客户端的 sinceRev 比服务端新（宿主重启）。 */
 export interface EventsPage {
   rev: number
   reset: boolean
   tasks: TaskSummary[]
+  focus?: TaskFocus
 }
 
 /** `/health` 的响应：数据源能力 + 客户端需要的默认设置（不含密钥）。 */

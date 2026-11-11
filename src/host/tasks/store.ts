@@ -26,12 +26,20 @@ export interface RetentionOptions {
   retentionCount: number
 }
 
+/** 「当前任务」快照：最近一次使用或打开的任务。 */
+export interface CurrentTaskSnapshot {
+  version: number
+  current?: { taskId: string; at: number }
+}
+
 export class TaskStore {
   readonly root: string
 
   private readonly tasksDir: string
 
   private readonly indexFile: string
+
+  private readonly currentFile: string
 
   private readonly summaries = new Map<string, TaskSummary>()
 
@@ -45,6 +53,7 @@ export class TaskStore {
     this.root = root
     this.tasksDir = join(root, 'tasks')
     this.indexFile = join(this.tasksDir, 'index.json')
+    this.currentFile = join(root, 'current.json')
   }
 
   async load(retention: RetentionOptions): Promise<void> {
@@ -119,6 +128,24 @@ export class TaskStore {
 
   async flush(): Promise<void> {
     await this.chain
+  }
+
+  /** 读取「当前任务」快照；文件缺失或损坏时返回 null（由调用方自举）。 */
+  async loadCurrent(): Promise<CurrentTaskSnapshot | null> {
+    try {
+      const parsed = JSON.parse(await readFile(this.currentFile, 'utf8')) as Partial<CurrentTaskSnapshot>
+      const current = readBinding(parsed.current)
+      return { version: INDEX_VERSION, ...(current === undefined ? {} : { current }) }
+    } catch {
+      return null
+    }
+  }
+
+  async saveCurrent(snapshot: CurrentTaskSnapshot): Promise<void> {
+    const body = JSON.stringify(snapshot)
+    await this.enqueue(async () => {
+      await atomicWrite(this.currentFile, body)
+    })
   }
 
   /** 手动清理：删除所有未置顶任务，返回条数与释放的字节数。 */
@@ -209,6 +236,13 @@ async function atomicWrite(file: string, body: string): Promise<void> {
   const temp = `${file}.${process.pid}.${Date.now()}.tmp`
   await writeFile(temp, body, 'utf8')
   await rename(temp, file)
+}
+
+function readBinding(value: unknown): { taskId: string; at: number } | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const record = value as { taskId?: unknown; at?: unknown }
+  if (typeof record.taskId !== 'string' || record.taskId === '') return undefined
+  return { taskId: record.taskId, at: typeof record.at === 'number' ? record.at : 0 }
 }
 
 function truncateForDisk(task: SearchTask): SearchTask {

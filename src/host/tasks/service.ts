@@ -9,12 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import {
-  CURRENT_TASK_TTL_MS,
-  MAX_LIMIT,
-  PLUGIN_VERSION,
-  getSettings,
-} from '../../search/config.js'
+import { MAX_LIMIT, PLUGIN_VERSION, getSettings } from '../../search/config.js'
 import { SearchError } from '../../search/errors.js'
 import { cooldownUntil, sourceHealthList } from '../../search/health.js'
 import { PROVIDER_INFOS } from '../../search/providers/index.js'
@@ -103,7 +98,6 @@ export interface CreateTaskInput {
   types?: string[]
   sort?: SortMode
   origin: TaskOrigin
-  sessionId?: string
   fromTaskId?: string
   runNow?: boolean
 }
@@ -148,27 +142,58 @@ export class TaskService {
   private readonly runner = new TaskRunner()
 
   /**
-   * 进程内「当前任务」。
+   * 全局「当前任务」：最后一次使用或打开的任务。
    *
-   * 工具执行上下文没有会话 id（已核实 @deepseek-ai/dsh-tools 的
-   * ToolExecutionInput），只能用「最近使用的任务 + TTL」做降级：同一主题
-   * 的多次检索默认落在同一个任务里，从而从根上避免重复开 tab。
-   * 跨会话误并的风险由 TTL、工具返回里自报任务名、以及模型可显式
-   * `newTask` / `taskId` 覆盖来缓解。
+   * 不按对话、也不按时间过期——同一主题的后续检索必须在原任务里加一轮，
+   * 跨对话、宿主重启都成立。只有用户显式新建任务或点开别的任务时才会改变。
    */
   private currentTaskId: string | undefined
 
   private currentTaskAt = 0
 
   constructor() {
-    this.ready = this.store
-      .load({
+    this.ready = this.restore()
+  }
+
+  /**
+   * 先加载任务索引，再恢复「当前任务」快照。
+   *
+   * 快照缺失或指向已删除任务时，自举为最近更新的任务，避免下一轮检索
+   * 又新建一个同名任务。
+   */
+  private async restore(): Promise<void> {
+    try {
+      await this.store.load({
         retentionDays: getSettings().taskRetentionDays,
         retentionCount: getSettings().taskRetentionCount,
       })
-      .catch((error: unknown) => {
-        console.warn('[dsh-plugin-litsearch] 任务目录加载失败：', error)
-      })
+    } catch (error) {
+      console.warn('[dsh-plugin-litsearch] 任务目录加载失败：', error)
+    }
+    let restored = false
+    try {
+      const snapshot = await this.store.loadCurrent()
+      if (
+        snapshot?.current !== undefined &&
+        this.store.summary(snapshot.current.taskId) !== undefined
+      ) {
+        this.currentTaskId = snapshot.current.taskId
+        this.currentTaskAt = snapshot.current.at
+        restored = true
+      }
+    } catch (error) {
+      console.warn('[dsh-plugin-litsearch] 当前任务快照加载失败：', error)
+    }
+    if (!restored) this.bootstrapCurrentTask()
+  }
+
+  /** 没有可用快照时，把最近更新的任务设为当前任务并落盘。 */
+  private bootstrapCurrentTask(): void {
+    const latest = this.store.list()[0]
+    if (latest === undefined) return
+    this.currentTaskId = latest.id
+    this.currentTaskAt = Date.parse(latest.updatedAt) || Date.now()
+    this.persistCurrent()
   }
 
   get globalRev(): number {
@@ -250,25 +275,42 @@ export class TaskService {
     return roundsOf(await this.get(id)).map(cloneRound)
   }
 
-  /** 当前任务（TTL 内且仍存在）；模型不指定 taskId 时默认复用它。 */
+  /**
+   * 当前任务：最近一次使用或打开的任务。
+   *
+   * 没有时间窗口、也不区分对话；只要任务还在就一直有效。任务被全部删除后
+   * 返回 undefined，由调用方决定是否新建。
+   */
   async currentTask(): Promise<SearchTask | undefined> {
+    await this.ready
     if (this.currentTaskId === undefined) return undefined
-    if (Date.now() - this.currentTaskAt > CURRENT_TASK_TTL_MS) {
-      this.currentTaskId = undefined
-      return undefined
-    }
     const task = await this.tryGet(this.currentTaskId)
-    if (task === undefined) {
-      this.currentTaskId = undefined
-      return undefined
-    }
-    return task
+    if (task !== undefined) return task
+    this.currentTaskId = undefined
+    this.bootstrapCurrentTask()
+    if (this.currentTaskId === undefined) return undefined
+    return this.tryGet(this.currentTaskId)
   }
 
-  /** 记住最近使用的任务（模型新建/复用后由工具层调用）。 */
+  /** 记住最近使用的任务（下一次模型检索默认落在这里）。 */
   setCurrentTask(id: string): void {
     this.currentTaskId = id
     this.currentTaskAt = Date.now()
+    this.persistCurrent()
+  }
+
+  /** 请求客户端打开/聚焦某任务 tab（面板被关掉时重新打开）。 */
+  focusTask(id: string, title: string, sessionId?: string): void {
+    this.events.requestFocus(id, title, sessionId)
+  }
+
+  private persistCurrent(): void {
+    void this.store.saveCurrent({
+      version: 1,
+      ...(this.currentTaskId === undefined
+        ? {}
+        : { current: { taskId: this.currentTaskId, at: this.currentTaskAt } }),
+    })
   }
 
   /** 用户从任务列表点开某任务 = 进入该任务，之后的模型检索默认落在这里。 */
@@ -337,12 +379,13 @@ export class TaskService {
       result: { papers: [], sources: [] },
       rounds: [],
       states: inherited === undefined ? {} : inheritStates(inherited),
-      ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
       ...(input.fromTaskId === undefined ? {} : { fromTaskId: input.fromTaskId }),
     }
 
     this.store.put(task)
     await this.store.save(task)
+    // 新建的任务就是「当前任务」：后续检索默认在它里面加轮次。
+    this.setCurrentTask(task.id)
     this.events.publish(toSummary(task))
 
     if (input.runNow !== false) {
@@ -394,7 +437,9 @@ export class TaskService {
     this.runner.cancel(id)
     await this.store.remove(task.id)
     this.events.remove(task.id)
-    if (this.currentTaskId === task.id) this.currentTaskId = undefined
+    if (this.currentTaskId !== task.id) return
+    this.currentTaskId = undefined
+    this.bootstrapCurrentTask()
   }
 
   /**

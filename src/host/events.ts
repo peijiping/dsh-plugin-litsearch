@@ -13,10 +13,20 @@ interface EventEntry {
   summary: TaskSummary
 }
 
+interface FocusEntry {
+  globalRev: number
+  taskId: string
+  title: string
+  at: number
+  sessionId?: string
+}
+
 export class TaskEvents {
   private rev = 0
 
   private readonly entries = new Map<string, EventEntry>()
+
+  private focus: FocusEntry | undefined
 
   get currentRev(): number {
     return this.rev
@@ -27,8 +37,21 @@ export class TaskEvents {
     this.entries.set(summary.id, { globalRev: this.rev, summary })
   }
 
+  /** 请求客户端把某个任务 tab 打开/切到前台（面板关着时重新打开）。 */
+  requestFocus(taskId: string, title: string, sessionId?: string): void {
+    this.rev += 1
+    this.focus = {
+      globalRev: this.rev,
+      taskId,
+      title,
+      at: Date.now(),
+      ...(sessionId === undefined ? {} : { sessionId }),
+    }
+  }
+
   remove(id: string): void {
     this.entries.delete(id)
+    if (this.focus?.taskId === id) this.focus = undefined
   }
 
   since(sinceRev: number): EventsPage {
@@ -42,6 +65,17 @@ export class TaskEvents {
       .filter((entry) => entry.globalRev > sinceRev)
       .sort((a, b) => a.globalRev - b.globalRev)
       .map((entry) => entry.summary)
-    return { rev: this.rev, reset: false, tasks }
+    const focus =
+      this.focus !== undefined && this.focus.globalRev > sinceRev
+        ? {
+            taskId: this.focus.taskId,
+            title: this.focus.title,
+            at: this.focus.at,
+            ...(this.focus.sessionId === undefined
+              ? {}
+              : { sessionId: this.focus.sessionId }),
+          }
+        : undefined
+    return { rev: this.rev, reset: false, tasks, ...(focus === undefined ? {} : { focus }) }
   }
 }

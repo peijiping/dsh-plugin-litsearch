@@ -4,7 +4,7 @@
  * 文本带数据源、DOI 与链接，方便模型接着用 `literature_search` 跟进。
  */
 
-import type { Paper } from '../search/types'
+import type { Paper, TaskDetail } from '../search/types'
 import { tpl, type Translate } from './locales'
 
 /** 插入时摘要最多保留多少字符，避免草稿过长。 */
@@ -35,6 +35,41 @@ export function paperText(t: Translate, paper: Paper): string {
 /** 批量插入：一次捕获后按编号拼接，避免多篇文本重复占用草稿。 */
 export function papersText(t: Translate, papers: readonly Paper[]): string {
   return papers.map((paper, index) => `${index + 1}. ${paperText(t, paper)}`).join('\n\n')
+}
+
+/**
+ * 把任务带到会话：写入任务 id 与当前条件，让新会话能明确续接同一任务。
+ *
+ * 模型侧只要收到带 taskId 的指令就不会新建任务，因此这里把「不要新建」和
+ * 续接方式都写清楚。
+ */
+export function taskText(t: Translate, detail: TaskDetail): string {
+  const conditions = detail.conditions
+  const queries = conditions.queries
+    .filter((query) => query.enabled && query.text.trim() !== '')
+    .map((query) => `- ${query.name}: ${query.text}`)
+  const lines = [
+    t('cmp.task.header'),
+    tpl(t('cmp.task.id'), { value: detail.id }),
+    tpl(t('cmp.task.title'), { value: detail.title }),
+    tpl(t('cmp.task.rounds'), {
+      n: detail.roundCount ?? 0,
+      loaded: detail.result.totalLoaded,
+    }),
+  ]
+  if (queries.length > 0) lines.push(t('cmp.task.queries'), ...queries)
+  lines.push(
+    tpl(t('cmp.task.conditions'), {
+      sources: conditions.sources.map((id) => t(`source.${id}`)).join('、'),
+      pageSize: conditions.pageSize,
+      years: `${conditions.yearFrom ?? t('filter.any')}-${conditions.yearTo ?? t('filter.any')}`,
+      access: conditions.openAccessOnly ? t('filter.openAccess') : t('cmp.task.anyAccess'),
+      language: t(`lang.${conditions.language}`),
+      sort: t(`sort.${conditions.sort}`),
+    }),
+  )
+  lines.push('', tpl(t('cmp.task.continue'), { id: detail.id }))
+  return lines.join('\n')
 }
 
 function truncate(value: string, max: number): string {

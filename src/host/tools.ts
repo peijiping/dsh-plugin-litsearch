@@ -1,9 +1,10 @@
 /**
  * 模型侧工具：直接注册进 dsh 工具表（不经过外部 MCP）。
  *
- * - `literature_search`：一个研究主题 = 一个任务 = 一个 tab。默认复用「当前任务」
- *   并在其中开新一轮；主题变了才新建。等待最多 25 秒后把任务头部与前若干条结果
- *   交给模型，并明确要求本轮到此为止、只给完善建议、不自行发起下一轮。
+ * - `literature_search`：一个研究主题 = 一个任务 = 一个 tab。默认复用「当前
+ *   任务」并在其中开新一轮（当前任务是持久化的最近使用任务，跨对话、宿主重启
+ *   都有效）；只有用户明确要求新任务时才新建。等待最多 25 秒后把任务头部与前
+ *   若干条结果交给模型，并明确要求本轮到此为止、只给完善建议、不发起下一轮。
  * - `literature_sources`：列出已接入的数据源与能力，便于模型决定后续策略。
  * - `literature_task`：读取/修改已保存任务（含轮次历史），写入筛读、分组与备注，
  *   做新老对比与统计。
@@ -51,6 +52,7 @@ const LANGUAGES: readonly TaskLanguage[] = ['any', 'eng', 'chi']
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
 const EXPORT_FORMATS: readonly ExportFormat[] = ['csv', 'ris', 'bibtex', 'md']
 const TASK_ACTIONS = [
+  'current',
   'list',
   'get',
   'update',
@@ -76,6 +78,13 @@ export interface ToolsService {
   register(definition: unknown): () => void
 }
 
+/** 执行时附带的上下文：取消信号 + 发起调用的会话。 */
+interface ToolRunExec {
+  signal?: AbortSignal
+  /** 当前会话；用于把聚焦请求送回发起检索的那个对话。 */
+  agent?: { id: string }
+}
+
 interface ToolDefinition {
   name: string
   description: string
@@ -84,7 +93,7 @@ interface ToolDefinition {
     schema: Record<string, unknown>
     render: (args: unknown, value: { text: string }) => Array<{ type: 'text'; text: string }>
   }
-  execute: (args: unknown, exec: { signal?: AbortSignal }) => Promise<{ text: string }>
+  execute: (args: unknown, exec: ToolRunExec) => Promise<{ text: string }>
 }
 
 const TEXT_OUTPUT = {
@@ -110,12 +119,12 @@ const SEARCH_PARAMETERS = {
     taskId: {
       type: 'string',
       description:
-        '要复用的已有任务 id。同一主题的后续检索必须复用同一个任务；通常省略即可自动复用「当前任务」，也可用 literature_task list 查到 id 后显式指定。指定后不会新建任务、不会新开 tab。',
+        '要复用的已有任务 id。同一主题的后续检索必须复用同一个任务；通常省略即可复用「当前任务」（最近一次使用或打开的任务，跨对话持续有效），也可用 literature_task list 查到 id 后显式指定。指定后不会新建任务、不会新开 tab。',
     },
     newTask: {
       type: 'boolean',
       description:
-        '仅当研究主题与当前任务明显不同时才设为 true，强制新建一个任务（此时请同时给 title）。同一主题改检索式时绝对不要设 true。',
+        '仅当用户明确要求「新建一个查询任务」，或研究主题与当前任务明显不同时才设为 true（此时请同时给 title）。同一主题改检索式（如加宽年份、换同义词）时绝对不要设 true。',
     },
     query: {
       type: 'string',
@@ -186,9 +195,9 @@ const TASK_PARAMETERS = {
       type: 'string',
       enum: [...TASK_ACTIONS],
       description:
-        'list 列任务；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/备注；compare 与旧任务对比；stats 读语料统计。',
+        'current 读「当前任务」（推荐在执行检索/任务操作前先调用，确认这个对话正在用哪个任务，无需 id）；list 列任务；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/备注；compare 与旧任务对比；stats 读语料统计。',
     },
-    id: { type: 'string', description: '任务 id；除 list 外必填。' },
+    id: { type: 'string', description: '任务 id；除 current / list 外必填。' },
     withTaskId: { type: 'string', description: 'compare 时的基准任务 id。' },
     limit: {
       type: 'integer',
@@ -341,7 +350,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
       name: 'literature_search',
       description:
         '检索免费开放学术文献。并发查询 PubMed、Europe PMC、OpenAlex、Crossref、Semantic Scholar、arXiv、PubTator，跨源与跨检索式去重合并成一篇文献一条，返回标题、作者、年份、出处、DOI、被引次数、开放获取状态与摘要，支持一次提交多条检索式（queries）。' +
-        '【任务模型】一个研究主题 = 一个任务 = 一个右侧栏 tab。默认复用「当前任务」并在同一任务内开新一轮：任务 id 不变、tab 不变，结果替换为最新一轮，已有的已读/纳入/排除/备注按文献身份保留；绝不会新建任务或新开 tab。仅当研究主题与当前任务明显不同时，才传 newTask=true 并用 title 自己给新任务起一个概括主题的名称；也可用 taskId 显式指定要复用的任务（先用 literature_task list 查 id）。每次调用请提交【完整】的新检索条件，缺省项回落到插件默认设置而非沿用旧条件。' +
+        '【任务模型】一个研究主题 = 一个任务 = 一个右侧栏 tab；一个对话只保留一个任务 tab，切换任务由用户在任务列表里完成。若不确定这个对话当前用哪个任务，先调用 literature_task（action=current）查清再执行。默认复用「当前任务」并在同一任务内开新一轮：任务 id 不变、tab 不变，结果替换为最新一轮，已有的已读/纳入/排除/备注按文献身份保留；绝不会新建任务或新开 tab。当前任务是持久化的「最近一次使用或打开的任务」，跨对话、宿主重启都有效；用户从右侧栏点开别的任务会切换当前任务。只有用户明确要求新建查询任务，或研究主题与当前任务明显不同时，才传 newTask=true 并用 title 给新任务起一个概括主题的名称；也可用 taskId 显式指定要复用的任务（先用 literature_task current/list 查 id，或让用户点右侧栏的「带入对话」把任务 id 带进对话）。每次调用请提交【完整】的新检索条件，缺省项回落到插件默认设置而非沿用旧条件。' +
         '【轮次约束】本轮检索结束后，只给用户一份「如何完善检索」的建议，禁止自行发起下一轮、禁止重复调用本工具；必须等用户查看结果后，在右侧栏调整条件、或在对话里明确要求调整，才可在同一任务里再搜一次。' +
         '超过 25 秒仍在进行时会先返回当前进度，任务会继续在右侧栏完成。适合找论文、查某主题的代表作、补充参考文献。',
       parameters: SEARCH_PARAMETERS,
@@ -357,11 +366,8 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
           task = await service.get(taskId)
           reused = true
         } else if (newTask !== true) {
-          const current = await service.currentTask()
-          if (current !== undefined) {
-            task = current
-            reused = true
-          }
+          task = await service.currentTask()
+          reused = task !== undefined
         }
 
         if (task === undefined) {
@@ -369,7 +375,6 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
             ...createInput,
             ...(title === undefined ? {} : { title }),
           })
-          service.setCurrentTask(task.id)
         } else {
           // 上一轮还在跑时先等，绝不「换一个任务重搜」——那正是多开 tab 的根因。
           const idle = await service.waitUntilIdle(task.id, WAIT_PREVIOUS_MS, exec.signal)
@@ -383,6 +388,9 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
             }
           }
         }
+
+        // 让客户端把该任务 tab 打开/切到前台（右侧面板关着时重新打开）。
+        service.focusTask(task.id, task.title, exec.agent?.id)
 
         // 复用时不带 title：命名只属于新建任务，避免误改已有任务名。
         const running = reused
@@ -424,12 +432,14 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_task',
       description:
-        '读取与推进已保存的检索任务。list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词过滤）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态、分组、必读顺序、备注与标签；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
-        '注意：run 会在【同一任务】内开新一轮检索，与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。',
+        '读取与推进已保存的检索任务。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词过滤）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态、分组、必读顺序、备注与标签；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
+        '注意：一个对话只保留一个任务 tab，切换任务由用户在任务列表里完成；run 会在指定任务内开新一轮检索（并把它设为当前任务），与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。',
       parameters: TASK_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args, exec): Promise<{ text: string }> {
-        return { text: await runTaskAction(service, readTaskArgs(args), exec.signal) }
+        return {
+          text: await runTaskAction(service, readTaskArgs(args), exec.signal, exec.agent?.id),
+        }
       },
     },
     {
@@ -619,7 +629,7 @@ function readTaskArgs(args: unknown): TaskArgs {
 
   const id = readText(record['id'], 'id')
   if (id !== undefined) input.id = id
-  if (input.action !== 'list' && input.id === undefined) {
+  if (input.action !== 'list' && input.action !== 'current' && input.id === undefined) {
     throw new Error(`action=${input.action} 需要 id`)
   }
 
@@ -829,8 +839,13 @@ async function runTaskAction(
   service: TaskService,
   args: TaskArgs,
   signal: AbortSignal | undefined,
+  sessionId: string | undefined,
 ): Promise<string> {
   switch (args.action) {
+    case 'current': {
+      const task = await service.currentTask()
+      return formatCurrentTask(task)
+    }
     case 'list': {
       const tasks = await service.list()
       return formatTaskList(tasks, args.limit ?? 30)
@@ -854,15 +869,17 @@ async function runTaskAction(
     }
     case 'run': {
       const id = requireId(args)
-      await service.get(id)
+      const task = await service.get(id)
+      // 用户明确要求推进这个任务：它成为当前任务，并让客户端打开/聚焦对应 tab。
       service.setCurrentTask(id)
+      service.focusTask(task.id, task.title, sessionId)
       const outcome = await runWithin(
         service,
         id,
         signal,
         service.run(id, 'new', 'model'),
       )
-      const task = await service.get(id)
+      const latest = await service.get(id)
       const detail = await service.getDetail(id)
       const page = await service.results(id, {
         ...readFilterArgs(args),
@@ -870,7 +887,7 @@ async function runTaskAction(
         offset: args.offset ?? 0,
       })
       // 这条旁路同样附上「不自动下一轮」约束，避免模型绕过 literature_search。
-      return `${formatTaskDetail(detail, page, task.states, task.groups, outcome)}\n\n${NO_AUTO_NEXT_ROUND}`
+      return `${formatTaskDetail(detail, page, latest.states, latest.groups, outcome)}\n\n${NO_AUTO_NEXT_ROUND}`
     }
     case 'rounds': {
       const id = requireId(args)
@@ -935,8 +952,42 @@ function readText(value: unknown, name: string, allowEmpty = false): string | un
   return allowEmpty ? value : value.trim()
 }
 
-function formatTaskList(tasks: readonly TaskSummary[], limit: number): string {
-  if (tasks.length === 0) return '还没有保存的检索任务。可先用 literature_search 检索。'
+/** 「当前任务」的轻量快照：模型在执行检索/任务操作前先确认这个对话正在用哪个任务。 */
+function formatCurrentTask(task: SearchTask | undefined): string {
+  if (task === undefined) {
+    return [
+      '当前没有任务：这个对话还没有任何检索任务。',
+      '若用户要求检索，请直接调用 literature_search（不要传 newTask）；若用户要继续某个已有任务，请让用户从右侧栏任务列表打开它，或点任务页的「带入对话」把任务 id 带进对话。',
+    ].join('\n')
+  }
+  const conditions = task.conditions
+  const queries = conditions.queries.map((query) => `${query.name}=「${query.text}」`).join('；')
+  const last = task.rounds[task.rounds.length - 1]
+  const screening = task.stats.screening
+  const lines = [
+    `当前任务：${task.title}（id: ${task.id}）`,
+    `状态：${statusLabel(task.status)}${task.error === undefined ? '' : `（${task.error}）`}`,
+    `检索轮次：共 ${task.rounds.length} 轮${
+      last === undefined
+        ? ''
+        : `｜最近一轮 ${last.createdAt.slice(0, 19).replace('T', ' ')}（${
+            last.origin === 'model' ? '模型' : '面板'
+          }）`
+    }`,
+    `检索式：${queries === '' ? '（无）' : queries}`,
+    `条件：数据源 ${conditions.sources.join('/')}｜每源 ${conditions.pageSize} 条｜年份 ${
+      conditions.yearFrom ?? '不限'
+    }-${conditions.yearTo ?? '不限'}｜${conditions.openAccessOnly ? '仅开放获取' : '不限获取方式'}｜语言 ${
+      conditions.language
+    }｜排序 ${conditions.sort}`,
+    `漏斗：原始 ${task.stats.rawHits}｜去重 ${task.stats.deduped}｜已加载 ${task.result.papers.length}｜纳入 ${screening.included}、排除 ${screening.excluded}、待读 ${screening.unread}、已读 ${screening.read}`,
+    '',
+    '用法：同一主题继续检索时省略 taskId 即复用该任务；需要调整条件时直接在 literature_search 里提交【完整】的新条件；只有用户明确要求新建查询任务时才传 newTask=true。',
+  ]
+  return lines.join('\n')
+}
+
+function formatTaskList(tasks: readonly TaskSummary[], limit: number): string {  if (tasks.length === 0) return '还没有保存的检索任务。可先用 literature_search 检索。'
   const lines = [`共 ${tasks.length} 个任务${tasks.length > limit ? `，列出前 ${limit} 个` : ''}：`]
   for (const task of tasks.slice(0, limit)) {
     const screening = task.stats.screening

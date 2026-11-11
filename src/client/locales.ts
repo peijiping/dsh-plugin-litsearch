@@ -59,6 +59,9 @@ const zh: Record<string, string> = {
   'task.refresh': '刷新',
   'task.rerun': '重跑',
   'task.cancel': '取消',
+  'task.insertToChat': '带入对话',
+  'task.insertToChatHint': '把任务 id 与当前检索条件写入会话草稿；建议一个对话只跟进一个检索任务',
+  'task.inserted': '已把任务信息带入会话草稿',
   'task.pin': '置顶',
   'task.unpin': '取消置顶',
   'task.running': '检索中…',
@@ -476,6 +479,17 @@ const zh: Record<string, string> = {
   'cmp.paper.pdf': 'PDF：{value}',
   'cmp.paper.abstract': '摘要：{value}',
 
+  'cmp.task.header': '【文献检索任务】请继续使用下面这个现有任务，不要新建任务',
+  'cmp.task.id': '任务 id：{value}',
+  'cmp.task.title': '任务标题：{value}',
+  'cmp.task.rounds': '已有 {n} 轮检索，已加载 {loaded} 篇',
+  'cmp.task.queries': '当前检索式：',
+  'cmp.task.conditions':
+    '检索条件：数据源 {sources}；每源 {pageSize} 条；年份 {years}；{access}；语言 {language}；排序 {sort}',
+  'cmp.task.anyAccess': '不限获取方式',
+  'cmp.task.continue':
+    '后续需要调整条件继续检索时，调用 literature_search 并传入 taskId「{id}」，在这个任务内开新一轮；只有我明确要求新建查询任务时才新建。',
+
   // ---- 检索轮次时间轴 -----------------------------------------------------
   'rounds.open': '查看检索历史',
   'rounds.title': '检索轮次历史',
@@ -500,7 +514,7 @@ const zh: Record<string, string> = {
   // ---- 搜索任务列表 -------------------------------------------------------
   'taskList.open': '搜索任务列表',
   'taskList.title': '搜索任务',
-  'taskList.desc': '一个研究主题对应一个任务、一个 tab；可打开、重命名或删除任务。',
+  'taskList.desc': '一个研究主题对应一个任务；每个对话只保留一个任务 tab，切换任务请在这里进行。',
   'taskList.count': '共 {n} 个任务',
   'taskList.close': '关闭',
   'taskList.loading': '正在读取任务…',
@@ -557,6 +571,10 @@ const en: Record<string, string> = {
   'task.refresh': 'Refresh',
   'task.rerun': 'Run again',
   'task.cancel': 'Cancel',
+  'task.insertToChat': 'Add to chat',
+  'task.insertToChatHint':
+    'Insert the task id and current conditions into the chat draft; prefer one conversation per search task',
+  'task.inserted': 'Task details added to the chat draft',
   'task.pin': 'Pin',
   'task.unpin': 'Unpin',
   'task.running': 'Searching…',
@@ -989,6 +1007,17 @@ const en: Record<string, string> = {
   'cmp.paper.pdf': 'PDF: {value}',
   'cmp.paper.abstract': 'Abstract: {value}',
 
+  'cmp.task.header': '[Literature task] Continue using the existing task below; do not create a new task',
+  'cmp.task.id': 'Task id: {value}',
+  'cmp.task.title': 'Task title: {value}',
+  'cmp.task.rounds': '{n} rounds so far, {loaded} papers loaded',
+  'cmp.task.queries': 'Current queries:',
+  'cmp.task.conditions':
+    'Conditions: sources {sources}; {pageSize} per source; years {years}; {access}; language {language}; sort {sort}',
+  'cmp.task.anyAccess': 'any access',
+  'cmp.task.continue':
+    'To adjust conditions and search again, call literature_search with taskId "{id}" to start a new round inside this task; create a new task only when I explicitly ask for a new query task.',
+
   // ---- Search rounds timeline --------------------------------------------
   'rounds.open': 'Search rounds',
   'rounds.title': 'Search rounds',
@@ -1013,7 +1042,7 @@ const en: Record<string, string> = {
   // ---- Search task list ---------------------------------------------------
   'taskList.open': 'Search tasks',
   'taskList.title': 'Search tasks',
-  'taskList.desc': 'One research topic = one task = one tab. Open, rename or delete tasks.',
+  'taskList.desc': 'One research topic = one task. Each conversation keeps a single task tab — switch tasks here.',
   'taskList.count': '{n} tasks',
   'taskList.close': 'Close',
   'taskList.loading': 'Loading tasks…',

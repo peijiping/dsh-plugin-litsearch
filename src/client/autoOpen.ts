@@ -3,6 +3,8 @@
  *
  * Host→Client 没有广播通道，这里按 `sinceRev` 轮询 `/events`：
  * - 首次轮询只对齐版本号，不把宿主启动前的历史任务全打开；
+ * - 模型每次运行任务都会请求 `focus`：直接打开/聚焦该任务 tab（面板关着时
+ *   重新打开），不受「一轮只开一个」限制，但仍尊重自动打开开关；
  * - 之后只对 `origin === 'model'` 的新任务调 `openResource`；
  * - 同一轮（2 分钟）最多自动打开 1 个 tab，其余进「待打开」队列，由主面板横幅提示；
  * - `maxTaskTabs` 按「最近真的打开过的 tab」计数（带 30 分钟有效期），不再用
@@ -160,6 +162,8 @@ function enqueuePending(task: TaskSummary): void {
 
 interface AutoOpenOptions {
   open(id: string, title: string): void
+  /** 当前屏幕上的会话 id；聚焦请求来自别的对话时不抢占这个面板。 */
+  sessionId?: () => string | undefined
 }
 
 /** 自动打开过的任务记录：id + 首次处理时间 + 是否真的开过 tab。 */
@@ -173,6 +177,9 @@ interface OpenedEntry {
 const TAB_WINDOW_MS = 30 * 60_000
 /** 同一轮对话窗口：这段时间内最多自动打开 1 个 tab，其余进待打开队列。 */
 const ROUND_WINDOW_MS = 2 * 60_000
+
+/** 聚焦请求的有效期：更早的请求可能是上次使用留下的，重新加载页面时不再弹出。 */
+const FOCUS_WINDOW_MS = 10 * 60_000
 
 let opened: OpenedEntry[] = readOpened()
 
@@ -221,6 +228,10 @@ function rememberOpened(id: string, openedTab: boolean): void {
 function activeTabCount(): number {
   const cutoff = Date.now() - TAB_WINDOW_MS
   return opened.filter((entry) => entry.tab === true && entry.at >= cutoff).length
+}
+
+function isFreshFocus(focus: { at: number }): boolean {
+  return Date.now() - focus.at <= FOCUS_WINDOW_MS
 }
 
 function lastAutoOpenAt(): number {
@@ -280,10 +291,22 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
     const first = !seeded
     seeded = true
     rev = page.rev
-    if (first) return
 
     const settings = getHealth()?.settings
-    if (!(settings?.autoOpenTaskTab ?? DEFAULT_AUTO_OPEN)) return
+    const autoOpen = settings?.autoOpenTaskTab ?? DEFAULT_AUTO_OPEN
+    // 聚焦请求优先处理，且不因「首次轮询」而丢弃：页面在后台时轮询会暂停，
+    // 回到前台后的第一次轮询不能把刚发生的检索当成历史。
+    if (autoOpen && page.focus !== undefined && isFreshFocus(page.focus)) {
+      const screen = options.sessionId?.()
+      const target = page.focus.sessionId
+      // 只处理当前屏幕这个对话的聚焦；别的对话的检索不抢占这里的面板。
+      if (target === undefined || (screen !== undefined && target === screen)) {
+        alsoFocus(page.focus.taskId, page.focus.title)
+      } else {
+        rememberOpened(page.focus.taskId, false)
+      }
+    }
+    if (first || !autoOpen) return
     const maxTabs = settings?.maxTaskTabs ?? DEFAULT_MAX_TASK_TABS
 
     for (const task of page.tasks) {
@@ -303,6 +326,12 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
       rememberOpened(task.id, true)
       options.open(task.id, task.title)
     }
+  }
+
+  const alsoFocus = (id: string, title: string): void => {
+    rememberTaskTitle(id, title)
+    rememberOpened(id, true)
+    options.open(id, title)
   }
 
   void tick()
