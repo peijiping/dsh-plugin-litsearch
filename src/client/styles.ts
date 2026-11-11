@@ -8,12 +8,12 @@ export const ACCENT = '#508cff'
 /** 错误色。 */
 export const ERROR = '#d64545'
 
-/** 面板根容器。 */
+/** 面板根容器（主页 / 任务页 / 论文页共用）：上下 10px、左右 15px 页面边距。 */
 export const panelStyle = {
   display: 'flex',
   flexDirection: 'column',
   gap: 10,
-  padding: '4px 2px 12px',
+  padding: '10px 15px',
   minHeight: 0,
   fontSize: 13,
 } as const
