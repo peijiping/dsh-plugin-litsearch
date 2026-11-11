@@ -441,7 +441,7 @@ const zh: Record<string, string> = {
   'field.taskMaxPapers': '单任务结果上限',
   'field.taskMaxPapersHint': '一次任务最多保存的文献条数，默认 1500',
   'field.pdfRoot': 'PDF 下载目录',
-  'field.pdfRootHint': '下载的 PDF 按「作者年份_标题_标识.pdf」命名保存在此目录；留空用 ~/Downloads/dsh-litsearch',
+  'field.pdfRootHint': '下载的 PDF 按「作者年份_标题_标识.pdf」命名保存在此目录；留空用当前会话工作目录下的 dsh-litsearch/',
   'field.pdfMaxMb': '单个 PDF 上限（MB）',
   'field.pdfMaxMbHint': '超过该体积的下载会被放弃，默认 30',
   'field.autoDownloadPdf': '检索后自动下载',
@@ -989,7 +989,7 @@ const en: Record<string, string> = {
   'field.taskMaxPapersHint': 'Maximum papers saved per task, default 1500',
   'field.pdfRoot': 'PDF download directory',
   'field.pdfRootHint':
-    'PDFs are saved as author+year_title_id.pdf here; blank uses ~/Downloads/dsh-litsearch',
+    'PDFs are saved as author+year_title_id.pdf here; blank uses dsh-litsearch/ inside the session working directory',
   'field.pdfMaxMb': 'Max PDF size (MB)',
   'field.pdfMaxMbHint': 'Downloads larger than this are abandoned; default 30',
   'field.autoDownloadPdf': 'Auto-download after search',

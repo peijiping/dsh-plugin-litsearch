@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { createHandler, type WebServerLike } from './host/router.js'
 import { literatureTools, type ToolsService } from './host/tools.js'
 import { TaskService } from './host/tasks/service.js'
+import { setSessionStore, type SessionStoreLike } from './host/workspace.js'
 import {
   DEFAULT_ARXIV_INTERVAL_MS,
   DEFAULT_AUTO_DOWNLOAD_PDF,
@@ -49,6 +50,9 @@ import type { SortMode, SourceId, TaskLanguage } from './search/types.js'
 import { SOURCE_IDS } from './search/types.js'
 
 export const name = 'dsh-plugin-litsearch'
+
+/** 旧版默认下载目录；读取时视为「未配置」，让默认落点切换到工作目录。 */
+const LEGACY_PDF_ROOT = join(homedir(), 'Downloads', 'dsh-litsearch')
 
 /**
  * 插件配置 schema（逐字段 volatile）。
@@ -104,8 +108,8 @@ export const Config = Schema.object({
   taskRetentionCount: Schema.number().default(DEFAULT_RETENTION_COUNT).volatile(),
   /** 单任务结果上限。 */
   taskMaxPapers: Schema.number().default(DEFAULT_TASK_MAX_PAPERS).volatile(),
-  /** PDF 下载根目录。 */
-  pdfRoot: Schema.string().default(join(homedir(), 'Downloads', 'dsh-litsearch')).volatile(),
+  /** PDF 下载根目录；留空时跟随会话工作目录（其下的 dsh-litsearch/）。 */
+  pdfRoot: Schema.string().default('').volatile(),
   /** 单个 PDF 最大体积（MB）。 */
   pdfMaxMb: Schema.number().default(DEFAULT_PDF_MAX_MB).volatile(),
   /** 检索完成后自动下载缺失 PDF。 */
@@ -153,7 +157,7 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
       DEFAULT_RETENTION_COUNT,
     ),
     taskMaxPapers: clampInt(config.taskMaxPapers.get(), 10, 10_000, DEFAULT_TASK_MAX_PAPERS),
-    pdfRoot: config.pdfRoot.get().trim(),
+    pdfRoot: normalizePdfRoot(config.pdfRoot.get()),
     pdfMaxMb: clampInt(config.pdfMaxMb.get(), 1, 200, DEFAULT_PDF_MAX_MB),
     autoDownloadPdf: config.autoDownloadPdf.get(),
     enableEpmcFulltext: config.enableEpmcFulltext.get(),
@@ -166,6 +170,17 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
   // 任务状态是模型工具与 HTTP 路由的唯一事实源。
   const service = new TaskService()
   ctx.effect(() => () => service.dispose(), 'dsh-plugin-litsearch: task service')
+
+  // 会话工作目录：PDF 默认落在其中，跟随用户当前项目。
+  ctx.inject(['sessionPersistence'], (sessionCtx: Context) => {
+    const store = (sessionCtx as unknown as { sessionPersistence: SessionStoreLike })
+      .sessionPersistence
+    setSessionStore(store)
+    sessionCtx.effect(
+      () => () => setSessionStore(undefined),
+      'dsh-plugin-litsearch: session workspace',
+    )
+  })
 
   // 模型侧：原生注册，不依赖外部 MCP。
   ctx.inject(['tools'], (toolCtx: Context) => {
@@ -210,4 +225,10 @@ function normalizeLanguage(value: string): TaskLanguage {
 function normalizeBaseUrl(value: string): string {
   const trimmed = value.trim().replace(/\/+$/u, '')
   return /^https?:\/\//u.test(trimmed) ? trimmed : DEFAULT_ZOTERO_BASE_URL
+}
+
+/** 旧默认值等同未配置：改由会话工作目录决定下载落点。 */
+function normalizePdfRoot(value: string): string {
+  const trimmed = value.trim()
+  return trimmed === LEGACY_PDF_ROOT ? '' : trimmed
 }

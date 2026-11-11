@@ -19,7 +19,7 @@
 - **PubTator 实体**：有 PMID 的论文可查看 PubTator3 标注的基因、疾病、化学物等实体，按标准标识符去重并显示出现次数。
 - **筛选与概览**：结果可按关键词、来源、年份、类型、语言、人工筛读状态、缺全文、全文获取状态等条件过滤并排序；结果页顶部常驻全任务口径的全文覆盖横幅，可一键筛出缺全文或跳到全文台账；「概览」页用彩色条形 / 堆叠图紧凑展示漏斗、指标、全文覆盖、年份分布（横轴为完整 4 位年份）、来源与检索式贡献及类型、语言、出处、作者分布，多指标用「条 + 数字列」紧凑表呈现；点任意条目（含年份柱、全文状态、筛读三态）即可反向筛选结果。
 - **筛读工作流**：每篇论文可标记未读 / 已读 / 纳入 / 排除，写备注、打标签、加入必读顺序；任务内可建「研究分组」，按为什么读归类，并导出分层报告。
-- **全文预览与下载**：在结果卡片里直接预览开放获取 PDF，或下载到本地；文件按「作者年份_标题_标识.pdf」命名，支持断点式 Range 读取。没有 PDF 但有 PMCID 时，用 Europe PMC 全文渲染可读 HTML。
+- **全文预览与下载**：在结果卡片里直接预览开放获取 PDF，或下载到本地（默认落在当前会话工作目录下的 `dsh-litsearch/`）；文件按「作者年份_标题_标识.pdf」命名，支持断点式 Range 读取。没有 PDF 但有 PMCID 时，用 Europe PMC 全文渲染可读 HTML。
 - **全文台账**：「全文」页按全任务口径（与概览一致、不受结果页筛选影响）列出覆盖率；状态数字可点击切换清单，缺全文、有全文直链、已下载、需订阅、被出版商拒绝、获取失败等各自成表，可分页加载、多选批量下载 PDF / 存入 Zotero，并可把当前清单带进结果页（会清空其他筛选，保证篇数一致）。
 - **Zotero 同步**：通过本机 Zotero 桌面端 connector 保存条目，可选同时附上 PDF；未连接 Zotero、同步失败、部分成功都会给出明确提示，并保留一条带当前条目范围的 RIS 导出入口。
 - **批量操作**：结果页与全文页均可多选后批量下载 PDF、存入 Zotero；结果页还支持批量改筛读状态、归入或移出分组、按选中导出。
@@ -67,7 +67,7 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 | `defaultSources` / `defaultSort` / `defaultLanguage` | 新任务默认勾选的数据源、排序与语言 | 全部 / 相关度 / 不限 |
 | `autoOpenTaskTab` / `maxTaskTabs` | 模型发起检索后自动打开 / 聚焦任务 tab；每个对话只保留一个任务 tab，打开新任务会替换旧的。`maxTaskTabs` 为自动打开的兜底上限（按最近真实打开过的 tab 计数，30 分钟后释放名额） | 开 / 5 |
 | `taskRetentionDays` / `taskRetentionCount` / `taskMaxPapers` | 未置顶任务保留天数、保留条数、单任务结果上限 | 90 / 120 / 1500 |
-| `pdfRoot` / `pdfMaxMb` / `autoDownloadPdf` | PDF 保存目录、单文件上限（MB）、检索完成后自动下载 | `~/Downloads/dsh-litsearch` / 30 / 关 |
+| `pdfRoot` / `pdfMaxMb` / `autoDownloadPdf` | PDF 保存目录、单文件上限（MB）、检索完成后自动下载；`pdfRoot` 留空时落在当前会话工作目录下的 `dsh-litsearch/` | 跟随工作目录 / 30 / 关 |
 | `enableEpmcFulltext` | 没有 PDF 时用 Europe PMC JATS 全文兜底为可读 HTML | 开 |
 | `zoteroEnabled` / `zoteroBaseUrl` | 启用 Zotero 同步及 connector 地址（只允许本机回环） | 开 / `http://127.0.0.1:23119` |
 | `zoteroAttachPdf` / `zoteroTag` | 同步时附带 PDF、附加标签 | 开 / `dsh-litsearch` |
@@ -89,7 +89,7 @@ $DSH_HOME/storages/dsh-plugin-litsearch/
 
 - `DSH_HOME` 由宿主注入，未设置时回落 `~/.dsh`；设置页「存储目录」展示当前实际生效的路径。
 - 旧版本的数据写在 `~/.dsh/dsh-litsearch/`。首次启动时若新目录为空而旧目录有任务，会把任务、导出文件与缓存**复制**到新目录并重建索引，**旧目录原样保留作备份**；新目录已有任务时不再迁移，复制失败则暂时回退到旧目录读取，不会丢标注。
-- **PDF 可读文件不在这里**：它由 `pdfRoot` 决定（默认 `~/Downloads/dsh-litsearch`），任务里记录的 `pdfFile` 是该目录下的绝对路径，升级不影响已下载的文件；只有内部去重缓存 `pdfs/` 随任务目录一起搬迁。
+- **PDF 可读文件不在这里**：它由 `pdfRoot` 决定；未显式配置时落在当前会话工作目录下的 `dsh-litsearch/`（读不到工作目录时才回落到旧默认 `~/Downloads/dsh-litsearch`）。任务里记录的 `pdfFile` 是该目录下的绝对路径，升级不影响已下载的文件；只有内部去重缓存 `pdfs/` 随任务目录一起搬迁。
 
 ## Zotero 同步
 

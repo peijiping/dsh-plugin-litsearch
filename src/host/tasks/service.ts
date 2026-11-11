@@ -59,11 +59,13 @@ import {
   persistPdf,
   probePdfRoot,
   readLocalPdf,
+  readSavedPdf,
   readableFilename,
   resolvePdf,
   resolvePdfRoot,
 } from '../pdf/store.js'
 import { ZoteroConnector } from '../zotero/connector.js'
+import { normalizeWorkspace } from '../workspace.js'
 import { compareTasks } from './compare.js'
 import { filterPapers, type PaperFilter } from './filter.js'
 import { TaskRunner } from './runner.js'
@@ -99,6 +101,8 @@ export interface CreateTaskInput {
   sort?: SortMode
   origin: TaskOrigin
   fromTaskId?: string
+  /** 发起方所在会话的工作目录；下载默认落在这里。 */
+  workspace?: string
   runNow?: boolean
 }
 
@@ -231,7 +235,7 @@ export class TaskService {
         maxTaskTabs: settings.maxTaskTabs,
       },
       fullText: {
-        pdfRoot: resolvePdfRoot(),
+        pdfRoot: settings.pdfRoot.trim() === '' ? '' : resolvePdfRoot(),
         pdfMaxMb: settings.pdfMaxMb,
         autoDownload: settings.autoDownloadPdf,
         epmcFulltext: settings.enableEpmcFulltext,
@@ -320,10 +324,19 @@ export class TaskService {
   }
 
   /** 用户从任务列表点开某任务 = 进入该任务，之后的模型检索默认落在这里。 */
-  async activate(id: string): Promise<SearchTask> {
+  async activate(id: string, workspace?: string): Promise<SearchTask> {
     const task = await this.get(id)
+    await this.applyWorkspace(task, workspace)
     this.setCurrentTask(task.id)
     return task
+  }
+
+  /** 记下任务最近一次所在的工作目录；只改变下载落点，不改变 rev。 */
+  private async applyWorkspace(task: SearchTask, workspace?: string): Promise<void> {
+    const next = normalizeWorkspace(workspace)
+    if (next === undefined || next === task.workspace) return
+    task.workspace = next
+    await this.store.save(task)
   }
 
   /** 等待该任务当前这一轮结束；返回是否确实已空闲。 */
@@ -363,6 +376,7 @@ export class TaskService {
     const title = readTitle(input.title, conditions)
     const inherited =
       input.fromTaskId === undefined ? undefined : await this.get(input.fromTaskId)
+    const workspace = normalizeWorkspace(input.workspace)
     const now = new Date().toISOString()
     const task: SearchTask = {
       id: `t${Date.now().toString(36)}${randomUUID().slice(0, 6)}`,
@@ -385,6 +399,7 @@ export class TaskService {
       result: { papers: [], sources: [] },
       rounds: [],
       states: inherited === undefined ? {} : inheritStates(inherited),
+      ...(workspace === undefined ? {} : { workspace }),
       ...(input.fromTaskId === undefined ? {} : { fromTaskId: input.fromTaskId }),
     }
 
@@ -456,16 +471,21 @@ export class TaskService {
    *
    * 任务已缓存时同步登记运行态，调用方紧接着调 `waitUntilIdle` 也不会误判为空闲。
    */
-  run(id: string, mode: 'new' | 'more' = 'new', origin: TaskOrigin = 'panel'): Promise<SearchTask> {
+  run(
+    id: string,
+    mode: 'new' | 'more' = 'new',
+    origin: TaskOrigin = 'panel',
+    workspace?: string,
+  ): Promise<SearchTask> {
     const cached = this.store.cached(id)
     if (cached !== undefined) {
       try {
-        return this.begin(cached, mode, origin)
+        return this.begin(cached, mode, origin, workspace)
       } catch (error) {
         return Promise.reject(error)
       }
     }
-    return this.get(id).then((task) => this.begin(task, mode, origin))
+    return this.get(id).then((task) => this.begin(task, mode, origin, workspace))
   }
 
   /**
@@ -482,6 +502,8 @@ export class TaskService {
     const nextTitle = input.title?.trim() ?? ''
     if (nextTitle !== '') task.title = nextTitle.slice(0, MAX_TITLE)
     task.conditions = this.readConditions(input, getSettings())
+    const workspace = normalizeWorkspace(input.workspace)
+    if (workspace !== undefined) task.workspace = workspace
     task.rev += 1
     task.updatedAt = new Date().toISOString()
     await this.store.save(task)
@@ -622,9 +644,15 @@ export class TaskService {
   }
 
   /** 下载单篇 PDF；失败时写入失败状态，若有 EPMC 全文则降级为 html-only。 */
-  async downloadPdf(id: string, paperId: string): Promise<PdfDownloadResult> {
+  async downloadPdf(
+    id: string,
+    paperId: string,
+    workspace?: string,
+  ): Promise<PdfDownloadResult> {
     const task = await this.get(id)
     const paper = findPaper(task, paperId)
+    const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
+    if (target !== undefined) task.workspace = target
     const settings = getSettings()
     const resolution = await resolvePdf(paper)
     if (!resolution.ok || resolution.buffer === undefined) {
@@ -643,7 +671,7 @@ export class TaskService {
       return result
     }
 
-    const saved = await persistPdf(resolution.buffer, this.store.root, paper)
+    const saved = await persistPdf(resolution.buffer, this.store.root, paper, target)
     await this.setPdfState(task, paperId, {
       pdfStatus: 'downloaded',
       pdfFile: saved.filePath,
@@ -660,11 +688,18 @@ export class TaskService {
   }
 
   /** PDF 预览：优先用已落地文件；没有则临时抓取一次但不落盘。 */
-  async previewPdf(id: string, paperId: string): Promise<{ buffer: Buffer; filename: string }> {
+  async previewPdf(
+    id: string,
+    paperId: string,
+    workspace?: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
     const task = await this.get(id)
     const paper = findPaper(task, paperId)
     const filename = readableFilename(paper)
-    const local = await readLocalPdf(paper)
+    const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
+    const recorded = task.states[paperId]?.pdfFile
+    const saved = recorded === undefined ? null : await readSavedPdf(recorded)
+    const local = saved ?? (await readLocalPdf(paper, target))
     if (local !== null) return { buffer: local, filename }
     const resolution = await resolvePdf(paper)
     if (!resolution.ok || resolution.buffer === undefined) {
@@ -741,10 +776,12 @@ export class TaskService {
   async zoteroSync(
     id: string,
     paperIds?: readonly string[],
+    workspace?: string,
   ): Promise<ZoteroSyncResult> {
     const settings = getSettings()
     if (!settings.zoteroEnabled) throw new SearchError('bad_request', 'Zotero 同步已在设置中关闭')
     const task = await this.get(id)
+    const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
     const wanted =
       paperIds === undefined || paperIds.length === 0
         ? task.result.papers.slice(0, 50)
@@ -765,8 +802,11 @@ export class TaskService {
     const attachPdf = settings.zoteroAttachPdf && !readOnlyAttachments
     const inputs: { paper: Paper; tags: string[]; pdfPath?: string }[] = []
     for (const paper of wanted) {
-      const tags = task.states[paper.paperId]?.tags ?? []
-      const pdfPath = attachPdf ? await this.ensureLocalPdf(paper) : undefined
+      const state = task.states[paper.paperId]
+      const tags = state?.tags ?? []
+      const pdfPath = attachPdf
+        ? await this.ensureLocalPdf(paper, target, state?.pdfFile)
+        : undefined
       inputs.push({ paper, tags, ...(pdfPath === undefined ? {} : { pdfPath }) })
     }
 
@@ -791,8 +831,8 @@ export class TaskService {
   }
 
   /** 下载目录可写性测试（设置页）。 */
-  async storageProbe(): Promise<StorageProbeResult> {
-    const outcome = await probePdfRoot()
+  async storageProbe(workspace?: string): Promise<StorageProbeResult> {
+    const outcome = await probePdfRoot(workspace)
     if (outcome.writable) return { ok: true, root: outcome.root, writable: true }
     return {
       ok: false,
@@ -802,12 +842,20 @@ export class TaskService {
     }
   }
 
-  private async ensureLocalPdf(paper: Paper): Promise<string | undefined> {
-    const local = await readLocalPdf(paper)
-    if (local !== null) return join(resolvePdfRoot(), readableFilename(paper))
+  private async ensureLocalPdf(
+    paper: Paper,
+    workspace?: string,
+    recordedPath?: string,
+  ): Promise<string | undefined> {
+    if (recordedPath !== undefined) {
+      const recorded = await readSavedPdf(recordedPath)
+      if (recorded !== null) return recordedPath
+    }
+    const localPath = join(resolvePdfRoot(workspace), readableFilename(paper))
+    if ((await readSavedPdf(localPath)) !== null) return localPath
     const resolution = await resolvePdf(paper).catch(() => null)
     if (resolution === null || !resolution.ok || resolution.buffer === undefined) return undefined
-    const saved = await persistPdf(resolution.buffer, this.store.root, paper)
+    const saved = await persistPdf(resolution.buffer, this.store.root, paper, workspace)
     return saved.filePath
   }
 
@@ -902,9 +950,15 @@ export class TaskService {
     task: SearchTask,
     mode: 'new' | 'more',
     origin: TaskOrigin = task.origin,
+    workspace?: string,
   ): Promise<SearchTask> {
     if (this.runner.isRunning(task.id)) {
       throw new SearchError('conflict', '任务正在运行')
+    }
+    const nextWorkspace = normalizeWorkspace(workspace)
+    if (nextWorkspace !== undefined && nextWorkspace !== task.workspace) {
+      task.workspace = nextWorkspace
+      void this.store.save(task)
     }
     if (mode === 'more') {
       throw new SearchError('bad_request', '续页加载将在后续版本提供，请先重跑任务')
@@ -960,7 +1014,7 @@ export class TaskService {
         }
         continue
       }
-      const saved = await persistPdf(resolution.buffer, this.store.root, paper)
+      const saved = await persistPdf(resolution.buffer, this.store.root, paper, task.workspace)
       await this.setPdfState(task, paper.paperId, {
         pdfStatus: 'downloaded',
         pdfFile: saved.filePath,

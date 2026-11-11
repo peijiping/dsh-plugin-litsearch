@@ -8,13 +8,13 @@
 import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { isIP } from 'node:net'
 import { join } from 'node:path'
 
 import { getSettings } from '../../search/config.js'
 import { epmcXmlUrl, pdfCandidates, unpaywallPdfCandidates } from '../../search/oa.js'
 import type { Paper, PdfStatus } from '../../search/types.js'
+import { resolvePdfRootPath } from './root.js'
 
 const MAX_REDIRECTS = 5
 const FETCH_TIMEOUT_MS = 20_000
@@ -43,13 +43,9 @@ export interface PdfResolution {
   error?: string
 }
 
-/** 设置里的根目录；空串回落到 ~/Downloads/dsh-litsearch。 */
-export function resolvePdfRoot(): string {
-  const configured = getSettings().pdfRoot.trim()
-  if (configured === '') return join(homedir(), 'Downloads', 'dsh-litsearch')
-  if (configured === '~') return homedir()
-  if (configured.startsWith('~/')) return join(homedir(), configured.slice(2))
-  return configured
+/** 设置里的根目录；未配置时落在会话工作目录下的 dsh-litsearch/。 */
+export function resolvePdfRoot(workspace?: string): string {
+  return resolvePdfRootPath(getSettings().pdfRoot, workspace)
 }
 
 export function pdfCacheDir(storageRoot: string): string {
@@ -167,6 +163,7 @@ export async function persistPdf(
   buffer: Buffer,
   storageRoot: string,
   paper: Paper,
+  workspace?: string,
 ): Promise<{ cachePath: string; filePath: string; filename: string }> {
   const hash = createHash('sha256').update(buffer).digest('hex')
   const cacheDir = pdfCacheDir(storageRoot)
@@ -174,7 +171,7 @@ export async function persistPdf(
   const cachePath = join(cacheDir, `${hash}.pdf`)
   await writeFile(cachePath, buffer)
 
-  const root = resolvePdfRoot()
+  const root = resolvePdfRoot(workspace)
   await mkdir(root, { recursive: true })
   const filename = readableFilename(paper)
   const filePath = join(root, filename)
@@ -210,8 +207,8 @@ export function readableFilename(paper: Paper): string {
 }
 
 /** 预览时读取已保存的可读文件；没有则返回 null（由调用方决定是否联网）。 */
-export async function readLocalPdf(paper: Paper): Promise<Buffer | null> {
-  return readSavedPdf(join(resolvePdfRoot(), readableFilename(paper)))
+export async function readLocalPdf(paper: Paper, workspace?: string): Promise<Buffer | null> {
+  return readSavedPdf(join(resolvePdfRoot(workspace), readableFilename(paper)))
 }
 
 /** 清理 PDF 缓存目录。 */
@@ -239,8 +236,10 @@ export async function cleanupPdfCache(storageRoot: string): Promise<{ removed: n
 }
 
 /** 测试下载目录是否可写（设置页）。 */
-export async function probePdfRoot(): Promise<{ root: string; writable: boolean; error?: string }> {
-  const root = resolvePdfRoot()
+export async function probePdfRoot(
+  workspace?: string,
+): Promise<{ root: string; writable: boolean; error?: string }> {
+  const root = resolvePdfRoot(workspace)
   const probe = join(root, `.write-test-${process.pid}-${Date.now()}`)
   try {
     await mkdir(root, { recursive: true })

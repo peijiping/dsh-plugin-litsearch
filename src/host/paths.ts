@@ -9,8 +9,9 @@
  * - 不覆盖新目录里已有的文件，重复启动不会反复迁移；
  * - 复制失败或校验不通过时回退到旧目录读取，保证任务标注不丢。
  *
- * PDF 的可读文件由设置项 `pdfRoot` 决定（默认 `~/Downloads/dsh-litsearch`），
- * 不受本模块影响；只有插件内部的去重缓存 `<root>/pdfs` 随数据目录一起搬迁。
+ * PDF 的可读文件由设置项 `pdfRoot` 决定（默认落在当前会话工作目录下的
+ * `dsh-litsearch/`），不受本模块影响；只有插件内部的去重缓存 `<root>/pdfs`
+ * 随数据目录一起搬迁。
  */
 
 import { copyFile, mkdir, readdir, rm, stat } from 'node:fs/promises'

@@ -5,7 +5,7 @@
  * 自定义标识头 + JSON content-type，Host 只认这种「非简单请求」。
  */
 
-import { WRITE_HEADER } from '../search/config'
+import { SESSION_HEADER, WRITE_HEADER } from '../search/config'
 import type {
   AnnotationInput,
   AnnotationResult,
@@ -36,6 +36,26 @@ import type {
 
 const BASE = '/dsh-litsearch/api'
 
+/** 当前挂载的会话 id；Host 用它把任务关联到会话工作目录。 */
+let sessionIdProvider: () => string | undefined = () => undefined
+
+export function setSessionIdProvider(provider: () => string | undefined): void {
+  sessionIdProvider = provider
+}
+
+function currentSessionId(): string {
+  return sessionIdProvider()?.trim() ?? ''
+}
+
+/** 给请求带上会话 id；iframe 等发不了头部的场景改用查询参数。 */
+function withSession(init?: RequestInit): RequestInit {
+  const id = currentSessionId()
+  if (id === '') return init ?? {}
+  const headers = new Headers(init?.headers)
+  headers.set(SESSION_HEADER, id)
+  return { ...init, headers }
+}
+
 /** Host 返回的错误，携带错误码。 */
 export class ApiFailure extends Error {
   readonly code: string
@@ -54,7 +74,7 @@ type Envelope<T> =
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
-    res = await fetch(`${BASE}${path}`, init)
+    res = await fetch(`${BASE}${path}`, withSession(init))
   } catch (error) {
     if (init?.signal?.aborted === true) throw new ApiFailure('network_error', '请求已取消')
     const message = error instanceof Error ? error.message : String(error)
@@ -333,9 +353,15 @@ export function syncZotero(
   return request<ZoteroSyncResult>(taskPath(taskId, '/zotero'), writeInit('POST', { paperIds }))
 }
 
-/** 内联 PDF 预览地址（支持 Range）。 */
+/** 内联 PDF 预览地址（支持 Range）；查询参数让 Host 找到会话工作目录。 */
 export function paperPdfUrl(taskId: string, paperId: string): string {
-  return `${BASE}/tasks/${encodeURIComponent(taskId)}/papers/${encodeURIComponent(paperId)}/pdf`
+  const params = new URLSearchParams()
+  const sessionId = currentSessionId()
+  if (sessionId !== '') params.set('session', sessionId)
+  const suffix = params.toString()
+  return `${BASE}/tasks/${encodeURIComponent(taskId)}/papers/${encodeURIComponent(paperId)}/pdf${
+    suffix === '' ? '' : `?${suffix}`
+  }`
 }
 
 /** Europe PMC 全文 HTML 地址（用于 iframe）。 */

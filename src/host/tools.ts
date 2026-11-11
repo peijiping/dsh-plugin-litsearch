@@ -37,6 +37,7 @@ import type {
 import { SOURCE_IDS } from '../search/types.js'
 import type { PaperFilter } from './tasks/filter.js'
 import type { QueryInput, TaskPatch, TaskService } from './tasks/service.js'
+import { resolveSessionWorkspace } from './workspace.js'
 
 /** 模型侧最多等多久；超时后任务继续跑，只返回当前进度与已有结果。 */
 const MODEL_WAIT_MS = 25_000
@@ -358,7 +359,13 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
       async execute(args, exec): Promise<{ text: string }> {
         const input = readSearchArgs(args)
         const { title, taskId, newTask, ...conditions } = input
-        const createInput = { ...conditions, origin: 'model' as const, runNow: false }
+        const workspace = await resolveSessionWorkspace(exec.agent?.id)
+        const createInput = {
+          ...conditions,
+          origin: 'model' as const,
+          runNow: false,
+          ...(workspace === undefined ? {} : { workspace }),
+        }
         let task: SearchTask | undefined
         let reused = false
 
@@ -870,6 +877,7 @@ async function runTaskAction(
     case 'run': {
       const id = requireId(args)
       const task = await service.get(id)
+      const workspace = await resolveSessionWorkspace(sessionId)
       // 用户明确要求推进这个任务：它成为当前任务，并让客户端打开/聚焦对应 tab。
       service.setCurrentTask(id)
       service.focusTask(task.id, task.title, sessionId)
@@ -877,7 +885,7 @@ async function runTaskAction(
         service,
         id,
         signal,
-        service.run(id, 'new', 'model'),
+        service.run(id, 'new', 'model', workspace),
       )
       const latest = await service.get(id)
       const detail = await service.getDetail(id)

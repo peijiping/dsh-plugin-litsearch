@@ -69,6 +69,9 @@ export const MAX_ABSTRACT_CHARS = 800
 /** 写端点的自定义请求头（与 JSON content-type 一起构成非简单请求）。 */
 export const WRITE_HEADER = 'x-dsh-litsearch-write'
 
+/** 面板请求携带的会话 id；Host 用它解析会话工作目录。 */
+export const SESSION_HEADER = 'x-dsh-litsearch-session'
+
 /** Host 路由前缀（Client fetch 路径与 handler 的剥离基准，带尾斜杠）。 */
 export const ROUTE_PREFIX = '/dsh-litsearch/api/'
 
@@ -101,7 +104,7 @@ export interface LitsearchSettings {
   pubmedIntervalMs: number
   s2IntervalMs: number
   arxivIntervalMs: number
-  /** PDF 下载根目录；空串由 Host 回落到 ~/Downloads/dsh-litsearch。 */
+  /** PDF 下载根目录；空串由 Host 回落到会话工作目录下的 dsh-litsearch/。 */
   pdfRoot: string
   pdfMaxMb: number
   autoDownloadPdf: boolean

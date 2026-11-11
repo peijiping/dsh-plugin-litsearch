@@ -13,7 +13,7 @@
 
 import { createElement, useEffect, type ComponentType, type ReactElement } from 'react'
 
-import { activateTask } from './api'
+import { activateTask, setSessionIdProvider } from './api'
 import {
   ensureTaskTitle,
   rememberTaskTitle,
@@ -133,6 +133,8 @@ export const inject = [
 ]
 
 export function apply(ctx: ClientContext): void {
+  // 所有端点都带上当前会话 id，Host 据此把任务关联到会话工作目录。
+  setSessionIdProvider(() => ctx.sidebarRight.mounted.getSnapshot())
   ctx.effect(() => ctx.locale.register(NS, dicts), 'dsh-plugin-litsearch: dictionaries')
   const t = ctx.locale.bind(NS)
 

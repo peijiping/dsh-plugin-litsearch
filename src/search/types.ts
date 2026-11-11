@@ -277,6 +277,8 @@ export interface SearchTask {
   /** 任务级研究笔记。 */
   notes: string
   groups: TaskGroup[]
+  /** 关联的会话工作目录；PDF 默认下载到其下的 dsh-litsearch/。 */
+  workspace?: string
   progress?: TaskProgress
   stats: TaskStats
   result: TaskResult

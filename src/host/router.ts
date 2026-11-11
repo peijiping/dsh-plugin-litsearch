@@ -9,7 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { MAX_LIMIT, ROUTE_PREFIX, WRITE_HEADER } from '../search/config.js'
+import { MAX_LIMIT, ROUTE_PREFIX, SESSION_HEADER, WRITE_HEADER } from '../search/config.js'
 import { SearchError } from '../search/errors.js'
 import { asRecord } from '../search/normalize.js'
 import { isSourceId } from '../search/providers/index.js'
@@ -37,6 +37,7 @@ import type {
   TaskPatch,
   TaskService,
 } from './tasks/service.js'
+import { resolveSessionWorkspace } from './workspace.js'
 
 /** dsh `webServer` 的最小结构接口（类型不在已安装的 dsh 包里）。 */
 export interface WebServerLike {
@@ -76,6 +77,15 @@ function isTrusted(req: IncomingMessage): boolean {
   const site = req.headers['sec-fetch-site']
   if (typeof site === 'string' && site.toLowerCase() === 'cross-site') return false
   return isLoopbackHost(req.headers.host)
+}
+
+/** 面板把当前会话 id 放在请求头里；iframe 预览等无法带头部的 GET 用查询参数。 */
+function readSessionId(req: IncomingMessage, params: URLSearchParams): string | undefined {
+  const header = req.headers[SESSION_HEADER]
+  const raw =
+    typeof header === 'string' && header.trim() !== '' ? header : params.get('session') ?? ''
+  const id = raw.trim()
+  return id === '' ? undefined : id
 }
 
 /** 写端点要求自定义头 + JSON：跨站请求无法在不触发预检的情况下伪造。 */
@@ -592,6 +602,7 @@ async function handleTasks(
   res: ServerResponse,
   seg: string[],
   params: URLSearchParams,
+  sessionId: string | undefined,
 ): Promise<void> {
   const id = seg[1]
   if (id === undefined) {
@@ -601,7 +612,8 @@ async function handleTasks(
     }
     if (req.method === 'POST') {
       const input = readCreateInput(await readJsonBody(req))
-      const task = await service.create({ ...input, origin: 'panel' })
+      const workspace = await resolveSessionWorkspace(sessionId)
+      const task = await service.create({ ...input, origin: 'panel', workspace })
       ok(res, await service.getDetail(task.id), 201)
       return
     }
@@ -665,7 +677,7 @@ async function handleTasks(
       fail(res, 405, 'bad_request', 'activate 仅支持 POST')
       return
     }
-    const task = await service.activate(id)
+    const task = await service.activate(id, await resolveSessionWorkspace(sessionId))
     ok(res, await service.getDetail(task.id))
     return
   }
@@ -707,7 +719,7 @@ async function handleTasks(
         fail(res, 405, 'bad_request', 'download 仅支持 POST')
         return
       }
-      ok(res, await service.downloadPdf(id, paperId))
+      ok(res, await service.downloadPdf(id, paperId, await resolveSessionWorkspace(sessionId)))
       return
     }
     if (op === 'pdf') {
@@ -716,7 +728,11 @@ async function handleTasks(
         return
       }
       try {
-        const file = await service.previewPdf(id, paperId)
+        const file = await service.previewPdf(
+          id,
+          paperId,
+          await resolveSessionWorkspace(sessionId),
+        )
         sendPdf(req, res, file.buffer, file.filename)
       } catch (error) {
         const { status, error: apiError } = toApiError(error)
@@ -747,7 +763,14 @@ async function handleTasks(
     }
     const body = await readJsonBody(req)
     const ids = readStringArray(body['paperIds'], 'paperIds', 50, 80)
-    ok(res, await service.zoteroSync(id, ids === undefined || ids === null ? undefined : ids))
+    ok(
+      res,
+      await service.zoteroSync(
+        id,
+        ids === undefined || ids === null ? undefined : ids,
+        await resolveSessionWorkspace(sessionId),
+      ),
+    )
     return
   }
 
@@ -773,7 +796,8 @@ async function handleTasks(
     if (service.isRunning(id)) throw new SearchError('conflict', '任务正在运行')
     // 面板里主动重跑 = 用户正在这个任务里工作，把它设为「当前任务」。
     service.setCurrentTask(id)
-    void service.run(id, mode, 'panel').catch((error: unknown) => {
+    const workspace = await resolveSessionWorkspace(sessionId)
+    void service.run(id, mode, 'panel', workspace).catch((error: unknown) => {
       console.warn('[dsh-plugin-litsearch] 任务执行失败：', error)
     })
     ok(res, await service.getDetail(id), 202)
@@ -858,7 +882,10 @@ export function createHandler(
           return
         }
         if (seg[1] === 'storage' && req.method === 'POST') {
-          ok(res, await service.storageProbe())
+          const workspace = await resolveSessionWorkspace(
+            readSessionId(req, url.searchParams),
+          )
+          ok(res, await service.storageProbe(workspace))
           return
         }
         fail(res, 404, 'not_found', `未知设置端点 ${seg[1] ?? ''}`)
@@ -866,7 +893,14 @@ export function createHandler(
       }
 
       if (head === 'tasks') {
-        await handleTasks(service, req, res, seg, url.searchParams)
+        await handleTasks(
+          service,
+          req,
+          res,
+          seg,
+          url.searchParams,
+          readSessionId(req, url.searchParams),
+        )
         return
       }
 
