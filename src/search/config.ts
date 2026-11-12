@@ -54,6 +54,8 @@ export const DEFAULT_ARXIV_INTERVAL_MS = 3000
 
 /** 全文下载默认设置。 */
 export const DEFAULT_PDF_MAX_MB = 30
+/** PDF 去重缓存总量上限（MB）；0 表示关闭自动清理。 */
+export const DEFAULT_PDF_CACHE_MAX_MB = 512
 export const DEFAULT_AUTO_DOWNLOAD_PDF = false
 export const DEFAULT_ENABLE_EPMC_FULLTEXT = true
 
@@ -107,6 +109,7 @@ export interface LitsearchSettings {
   /** PDF 下载根目录；空串由 Host 回落到会话工作目录下的 dsh-litsearch/。 */
   pdfRoot: string
   pdfMaxMb: number
+  pdfCacheMaxMb: number
   autoDownloadPdf: boolean
   enableEpmcFulltext: boolean
   zoteroEnabled: boolean
@@ -135,6 +138,7 @@ let readSettings = (): LitsearchSettings => ({
   arxivIntervalMs: DEFAULT_ARXIV_INTERVAL_MS,
   pdfRoot: '',
   pdfMaxMb: DEFAULT_PDF_MAX_MB,
+  pdfCacheMaxMb: DEFAULT_PDF_CACHE_MAX_MB,
   autoDownloadPdf: DEFAULT_AUTO_DOWNLOAD_PDF,
   enableEpmcFulltext: DEFAULT_ENABLE_EPMC_FULLTEXT,
   zoteroEnabled: DEFAULT_ZOTERO_ENABLED,

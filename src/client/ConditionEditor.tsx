@@ -11,7 +11,7 @@ import { Button, Input, Modal, Pill } from '@deepseek-ai/dsh-client-ui-primitive
 
 import { MAX_LIMIT } from '../search/config'
 import type { SortMode, SourceId, TaskDetail, TaskLanguage } from '../search/types'
-import { SOURCE_IDS } from '../search/types'
+import { SOURCE_IDS, TASK_LANGUAGES } from '../search/types'
 import { updateTask, type TaskConditionsPatch } from './api'
 import { useHealth } from './health'
 import { tpl, type Translate } from './locales'
@@ -25,7 +25,7 @@ import {
 } from './QueryEditor'
 import { ERROR, linkButtonStyle, sourceRowStyle } from './styles'
 
-const LANGUAGES: readonly TaskLanguage[] = ['any', 'eng', 'chi']
+const LANGUAGES = TASK_LANGUAGES
 const SORTS: readonly SortMode[] = ['relevance', 'citations', 'year']
 
 interface Props {
@@ -138,6 +138,7 @@ export function ConditionEditor({ t, detail, onSaved, onCancel }: Props): ReactE
       open
       onClose={onCancel}
       title={t('condition.title')}
+      className={WIDE_MODAL_CLASS}
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Button variant="outline" size="sm" type="button" onClick={onCancel}>
@@ -149,6 +150,7 @@ export function ConditionEditor({ t, detail, onSaved, onCancel }: Props): ReactE
         </div>
       }
     >
+      <style>{WIDE_MODAL_CSS}</style>
       <div style={BODY_STYLE}>
         <div style={QUERY_LIST_STYLE}>
           {drafts.map((draft, index) => (
@@ -289,6 +291,12 @@ const BODY_STYLE: CSSProperties = {
   maxHeight: '60vh',
   overflowY: 'auto',
 }
+
+/** 宿主 Modal 默认宽度 min(380px,100%)，条件编辑器字段较多，单独放宽。 */
+const WIDE_MODAL_CLASS = 'litsearch-condition-modal'
+const WIDE_MODAL_CSS = `
+.${WIDE_MODAL_CLASS}{width:min(680px,calc(100vw - 48px))}
+`
 
 const QUERY_LIST_STYLE: CSSProperties = {
   display: 'flex',

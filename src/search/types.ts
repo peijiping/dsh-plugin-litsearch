@@ -20,8 +20,34 @@ export type SourceId = (typeof SOURCE_IDS)[number]
 /** 排序方式。 */
 export type SortMode = 'relevance' | 'citations' | 'year'
 
-/** 语言筛选。 */
-export type TaskLanguage = 'any' | 'eng' | 'chi'
+/** 语言筛选；取值沿用 PubMed 的三字母语言码。 */
+export type TaskLanguage =
+  | 'any'
+  | 'eng'
+  | 'chi'
+  | 'jpn'
+  | 'kor'
+  | 'fre'
+  | 'ger'
+  | 'spa'
+  | 'rus'
+  | 'ita'
+  | 'por'
+
+/** 语言候选项；顺序即下拉与胶囊的展示顺序。 */
+export const TASK_LANGUAGES: readonly TaskLanguage[] = [
+  'any',
+  'eng',
+  'chi',
+  'jpn',
+  'kor',
+  'fre',
+  'ger',
+  'spa',
+  'rus',
+  'ita',
+  'por',
+]
 
 /** 论文的持久标识集合（裸值，不带 URL 前缀）。 */
 export interface PaperIds {
@@ -389,7 +415,9 @@ export interface TaskStatsReport {
   byYear: YearStat[]
   byType: CountEntry[]
   byLanguage: CountEntry[]
+  /** 出现过的出处，按命中数降序；筛选项直接用这份清单（最多 500 条）。 */
   topVenues: CountEntry[]
+  /** 出现过的作者，按命中数降序；筛选项直接用这份清单（最多 500 条）。 */
   topAuthors: CountEntry[]
   metrics: {
     oaRate: number

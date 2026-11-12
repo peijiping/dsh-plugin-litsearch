@@ -109,7 +109,7 @@ export class LitsearchCardController {
 }
 
 const GROUP_STYLE = { marginTop: 4 }
-const GROUP_HEAD_STYLE = { fontSize: 12, fontWeight: 600, opacity: 0.72, margin: '0 0 6px' }
+const GROUP_HEAD_STYLE = { fontSize: 13, fontWeight: 650, opacity: 0.85, margin: '0 0 6px' }
 
 /** 行摘要返回一句话；行「配置」页返回完整表单。 */
 export function ConfigCard(props: CardProps): ReactElement | string {

@@ -140,9 +140,9 @@ export function NotesTab({ t, taskId, detail, onSaved }: Props): ReactElement {
 
 const WRAP_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
 const HEAD_STYLE: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  opacity: 0.72,
+  fontSize: 13,
+  fontWeight: 650,
+  opacity: 0.85,
   margin: '0 0 4px',
 }
 const TEXTAREA_STYLE: CSSProperties = {
@@ -172,7 +172,7 @@ const ENTRY_STYLE: CSSProperties = {
   padding: '6px 0',
   borderTop: '1px solid rgba(127,127,127,0.14)',
 }
-const ENTRY_TITLE_STYLE: CSSProperties = { fontSize: 12, fontWeight: 600, lineHeight: 1.45 }
+const ENTRY_TITLE_STYLE: CSSProperties = { fontSize: 12.5, fontWeight: 650, lineHeight: 1.45 }
 const ENTRY_META_STYLE: CSSProperties = { fontSize: 11, opacity: 0.7 }
 const ENTRY_NOTE_STYLE: CSSProperties = { fontSize: 12, lineHeight: 1.55, opacity: 0.85 }
 const TOAST_STYLE: CSSProperties = { fontSize: 12, color: '#2e9e5b' }

@@ -30,6 +30,7 @@ import {
   DEFAULT_LANGUAGE,
   DEFAULT_MAX_TASK_TABS,
   DEFAULT_PAGE_SIZE,
+  DEFAULT_PDF_CACHE_MAX_MB,
   DEFAULT_PDF_MAX_MB,
   DEFAULT_PUBMED_INTERVAL_MS,
   DEFAULT_RETENTION_COUNT,
@@ -47,7 +48,7 @@ import {
   setSettingsReader,
 } from './search/config.js'
 import type { SortMode, SourceId, TaskLanguage } from './search/types.js'
-import { SOURCE_IDS } from './search/types.js'
+import { SOURCE_IDS, TASK_LANGUAGES } from './search/types.js'
 
 export const name = 'dsh-plugin-litsearch'
 
@@ -96,7 +97,9 @@ export const Config = Schema.object({
   ])
     .default(DEFAULT_SORT)
     .volatile(),
-  defaultLanguage: Schema.union([Schema.const('any'), Schema.const('eng'), Schema.const('chi')])
+  defaultLanguage: Schema.union(
+    TASK_LANGUAGES.map((code) => Schema.const(code)),
+  )
     .default(DEFAULT_LANGUAGE)
     .volatile(),
   /** 模型发起检索后是否自动打开任务 tab。 */
@@ -112,6 +115,8 @@ export const Config = Schema.object({
   pdfRoot: Schema.string().default('').volatile(),
   /** 单个 PDF 最大体积（MB）。 */
   pdfMaxMb: Schema.number().default(DEFAULT_PDF_MAX_MB).volatile(),
+  /** PDF 去重缓存总量上限（MB），启动时随任务清理一起修剪；0 表示关闭。 */
+  pdfCacheMaxMb: Schema.number().default(DEFAULT_PDF_CACHE_MAX_MB).volatile(),
   /** 检索完成后自动下载缺失 PDF。 */
   autoDownloadPdf: Schema.boolean().default(DEFAULT_AUTO_DOWNLOAD_PDF).volatile(),
   /** 无 PDF 时用 Europe PMC HTML 全文兜底。 */
@@ -159,6 +164,12 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     taskMaxPapers: clampInt(config.taskMaxPapers.get(), 10, 10_000, DEFAULT_TASK_MAX_PAPERS),
     pdfRoot: normalizePdfRoot(config.pdfRoot.get()),
     pdfMaxMb: clampInt(config.pdfMaxMb.get(), 1, 200, DEFAULT_PDF_MAX_MB),
+    pdfCacheMaxMb: clampInt(
+      config.pdfCacheMaxMb.get(),
+      0,
+      102_400,
+      DEFAULT_PDF_CACHE_MAX_MB,
+    ),
     autoDownloadPdf: config.autoDownloadPdf.get(),
     enableEpmcFulltext: config.enableEpmcFulltext.get(),
     zoteroEnabled: config.zoteroEnabled.get(),
@@ -219,7 +230,7 @@ function normalizeSort(value: string): SortMode {
 }
 
 function normalizeLanguage(value: string): TaskLanguage {
-  return value === 'eng' || value === 'chi' ? value : 'any'
+  return TASK_LANGUAGES.includes(value as TaskLanguage) ? (value as TaskLanguage) : 'any'
 }
 
 function normalizeBaseUrl(value: string): string {

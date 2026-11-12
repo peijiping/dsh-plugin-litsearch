@@ -53,6 +53,7 @@ const NUMBER_FIELD_NAMES = [
   'taskRetentionCount',
   'taskMaxPapers',
   'pdfMaxMb',
+  'pdfCacheMaxMb',
 ] as const
 
 type NumberFieldName = (typeof NUMBER_FIELD_NAMES)[number]
@@ -99,6 +100,7 @@ export function SettingsSection(props: Props): ReactElement {
     state.taskMaxPapers.text,
     state.pdfRoot.text,
     state.pdfMaxMb.text,
+    state.pdfCacheMaxMb.text,
     state.autoDownloadPdf.text,
     state.enableEpmcFulltext.text,
     state.zoteroEnabled.text,
@@ -346,7 +348,8 @@ export function SettingsSection(props: Props): ReactElement {
             name !== 'pubmedIntervalMs' &&
             name !== 's2IntervalMs' &&
             name !== 'arxivIntervalMs' &&
-            name !== 'pdfMaxMb',
+            name !== 'pdfMaxMb' &&
+            name !== 'pdfCacheMaxMb',
         ).map(renderNumberField)}
 
         <div style={STORAGE_ROW_STYLE}>
@@ -363,6 +366,7 @@ export function SettingsSection(props: Props): ReactElement {
         <div style={HINT_STYLE}>{t('group.fulltextHint')}</div>
         {renderText(PDF_ROOT_FIELD)}
         {renderNumberField('pdfMaxMb')}
+        {renderNumberField('pdfCacheMaxMb')}
         {renderToggle(AUTO_DOWNLOAD_FIELD)}
         {renderToggle(EPMC_FULLTEXT_FIELD)}
         <StorageProbeRow t={t} disabled={locked} />
@@ -782,9 +786,9 @@ const SAVE_FAILED_STYLE: CSSProperties = {
 }
 const GROUP_STYLE: CSSProperties = { marginTop: 4 }
 const GROUP_HEAD_STYLE: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  opacity: 0.72,
+  fontSize: 13,
+  fontWeight: 650,
+  opacity: 0.85,
   margin: '0 0 6px',
 }
 const CHOICE_ROW_STYLE: CSSProperties = {

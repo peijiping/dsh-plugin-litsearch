@@ -66,19 +66,19 @@ export const cardStyle = {
 /** 标题。 */
 export const titleStyle = {
   display: 'block',
-  fontSize: 13,
-  fontWeight: 600,
-  lineHeight: 1.45,
+  fontSize: 14.5,
+  fontWeight: 650,
+  lineHeight: 1.5,
   color: 'inherit',
   textDecoration: 'none',
 } as const
 
 /** 元信息行（作者、年份、出处）。 */
 export const metaStyle = {
-  marginTop: 4,
-  fontSize: 12,
-  opacity: 0.72,
-  lineHeight: 1.5,
+  marginTop: 5,
+  fontSize: 12.5,
+  opacity: 0.7,
+  lineHeight: 1.55,
 } as const
 
 /** 小徽章行。 */
@@ -91,9 +91,9 @@ export const badgeRowStyle = {
 
 /** 徽章。 */
 export const badgeStyle = {
-  fontSize: 11,
+  fontSize: 11.5,
   lineHeight: 1.4,
-  padding: '1px 6px',
+  padding: '2px 7px',
   borderRadius: 4,
   border: `1px solid rgba(80,140,255,0.4)`,
   color: ACCENT,
@@ -102,10 +102,10 @@ export const badgeStyle = {
 
 /** 摘要。 */
 export const abstractStyle = {
-  marginTop: 6,
-  fontSize: 12,
-  opacity: 0.8,
-  lineHeight: 1.55,
+  marginTop: 7,
+  fontSize: 12.5,
+  opacity: 0.82,
+  lineHeight: 1.65,
 } as const
 
 /** 类链接按钮。 */
@@ -114,7 +114,7 @@ export const linkButtonStyle = {
   border: 'none',
   background: 'transparent',
   color: ACCENT,
-  fontSize: 12,
+  fontSize: 12.5,
   cursor: 'pointer',
 } as const
 
@@ -122,7 +122,7 @@ export const linkButtonStyle = {
 export const linkStyle = {
   color: ACCENT,
   textDecoration: 'none',
-  fontSize: 12,
+  fontSize: 12.5,
 } as const
 
 /** 操作行。 */

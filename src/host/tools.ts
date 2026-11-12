@@ -34,7 +34,7 @@ import type {
   TaskStatsReport,
   TaskSummary,
 } from '../search/types.js'
-import { SOURCE_IDS } from '../search/types.js'
+import { SOURCE_IDS, TASK_LANGUAGES } from '../search/types.js'
 import type { PaperFilter } from './tasks/filter.js'
 import type { QueryInput, TaskPatch, TaskService } from './tasks/service.js'
 import { resolveSessionWorkspace } from './workspace.js'
@@ -49,7 +49,7 @@ const TOOL_PAPER_LIMIT = 10
 const WAIT_PREVIOUS_MS = 12_000
 
 const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
-const LANGUAGES: readonly TaskLanguage[] = ['any', 'eng', 'chi']
+const LANGUAGES = TASK_LANGUAGES
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
 const EXPORT_FORMATS: readonly ExportFormat[] = ['csv', 'ris', 'bibtex', 'md']
 const TASK_ACTIONS = [

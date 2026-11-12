@@ -16,7 +16,7 @@ import {
   type SnapshotStore,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import { SOURCE_IDS, type SourceId } from '../search/types'
+import { SOURCE_IDS, TASK_LANGUAGES, type SourceId } from '../search/types'
 
 /** 设置命名空间 id（= cordis.patch.yml 的 insert 行 id）。 */
 export const ROW_ID = 'dsh-plugin-litsearch'
@@ -41,6 +41,7 @@ export type FieldName =
   | 'taskMaxPapers'
   | 'pdfRoot'
   | 'pdfMaxMb'
+  | 'pdfCacheMaxMb'
   | 'autoDownloadPdf'
   | 'enableEpmcFulltext'
   | 'zoteroEnabled'
@@ -74,6 +75,7 @@ const NUMBER_FIELDS: readonly FieldName[] = [
   'taskRetentionCount',
   'taskMaxPapers',
   'pdfMaxMb',
+  'pdfCacheMaxMb',
 ]
 
 const TEXT_FIELDS: readonly FieldName[] = [
@@ -92,7 +94,7 @@ const BOOLEAN_FIELDS: readonly FieldName[] = [
 ]
 
 export const SORT_MODES = ['relevance', 'citations', 'year'] as const
-export const LANGUAGES = ['any', 'eng', 'chi'] as const
+export const LANGUAGES = TASK_LANGUAGES
 
 /** 布尔字段：表单只认文本，开关以 'true' / 'false' 暂存。 */
 function booleanField(field: string): SettingsFieldSpec {
@@ -181,6 +183,7 @@ export interface SettingsState extends SettingsFormState {
   taskMaxPapers: SettingsFieldState
   pdfRoot: SettingsFieldState
   pdfMaxMb: SettingsFieldState
+  pdfCacheMaxMb: SettingsFieldState
   autoDownloadPdf: SettingsFieldState
   enableEpmcFulltext: SettingsFieldState
   zoteroEnabled: SettingsFieldState
@@ -234,6 +237,7 @@ export class LitsearchSettingsController {
       taskMaxPapers: this.form.field('taskMaxPapers'),
       pdfRoot: this.form.field(PDF_ROOT_FIELD),
       pdfMaxMb: this.form.field('pdfMaxMb'),
+      pdfCacheMaxMb: this.form.field('pdfCacheMaxMb'),
       autoDownloadPdf: this.form.field(AUTO_DOWNLOAD_FIELD),
       enableEpmcFulltext: this.form.field(EPMC_FULLTEXT_FIELD),
       zoteroEnabled: this.form.field(ZOTERO_ENABLED_FIELD),

@@ -1,39 +1,59 @@
 /**
  * 任务结果的筛选条。
  *
- * 文本类条件（关键词、年份、类型）本地暂存 300ms 再上抛，避免每敲一个字都
- * 打一次 Host；下拉类条件立即生效。父组件的筛选对象必须能直接喂给
- * `/results` 与 `/stats`。
+ * 除关键词（本质是检索词）外，所有条件都是下拉选择：
+ * - 年份用预设区间（不限 / 近 1 年 / 近 5 年 / 近 10 年 / 自定义范围）；
+ * - 类型、出处、作者候选取自当前结果的统计口径（`/stats`），避免手输完整值对不上；
+ * - 来源、状态、分组、语言、排序沿用固定枚举。
+ *
+ * 关键词本地暂存 300ms 再上抛，避免每敲一个字都打一次 Host；下拉类条件立即生效。
  *
  * 「筛选（N）」按钮与顶部标签共用 collectActiveFilters：新增筛选维度时
  * 只在那里加一项，不要另外单写 chip，否则两处会再次不同步。
  */
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
 
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { QueryBlock, SortMode, SourceId, TaskGroup, TaskLanguage } from '../search/types'
+import type {
+  CountEntry,
+  QueryBlock,
+  SortMode,
+  SourceId,
+  TaskGroup,
+  TaskLanguage,
+  TaskStatsReport,
+} from '../search/types'
+import { TASK_LANGUAGES } from '../search/types'
 import type { ResultsQuery } from './api'
+import { FilterIcon } from './icons'
 import { tpl, type Translate } from './locales'
 
 const TEXT_DEBOUNCE_MS = 300
 
 const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
 // 空 option 已经是「不限」，不再重复列出 TaskLanguage 的 any。
-const LANGUAGES: readonly TaskLanguage[] = ['eng', 'chi']
+const LANGUAGES = TASK_LANGUAGES.filter((code) => code !== 'any')
 const SCREENINGS = ['unread', 'read', 'included', 'excluded'] as const
+
+const CURRENT_YEAR = new Date().getFullYear()
+const YEAR_OPTIONS: readonly number[] = Array.from(
+  { length: CURRENT_YEAR - 1899 },
+  (_, index) => CURRENT_YEAR - index,
+)
 
 type Screening = (typeof SCREENINGS)[number]
 
-interface Draft {
-  q: string
-  yearFrom: string
-  yearTo: string
-  type: string
-  venue: string
-  author: string
-}
+const YEAR_PRESETS = ['any', '1', '5', '10', 'custom'] as const
+type YearPreset = (typeof YEAR_PRESETS)[number]
 
 interface Props {
   t: Translate
@@ -41,38 +61,37 @@ interface Props {
   sources: readonly SourceId[]
   queries: readonly QueryBlock[]
   groups?: readonly TaskGroup[]
+  /** 任务级统计（不含当前筛选），用于生成类型/出处/作者候选值。 */
+  stats?: TaskStatsReport | null
+  /** 显示在「筛选」按钮之前的同排内容（如筛读计数），由调用方决定。 */
+  leading?: ReactNode
   onChange(next: ResultsQuery): void
 }
 
-function toDraft(value: ResultsQuery): Draft {
-  return {
-    q: value.q ?? '',
-    yearFrom: value.yearFrom === undefined ? '' : String(value.yearFrom),
-    yearTo: value.yearTo === undefined ? '' : String(value.yearTo),
-    type: value.type ?? '',
-    venue: value.venue ?? '',
-    author: value.author ?? '',
+/** 由当前年份区间反推预设；非预设区间时归入「自定义范围」。 */
+function yearPresetOf(value: ResultsQuery): YearPreset {
+  if (value.yearFrom === undefined && value.yearTo === undefined) return 'any'
+  if (value.yearTo === undefined) {
+    if (value.yearFrom === CURRENT_YEAR - 1) return '1'
+    if (value.yearFrom === CURRENT_YEAR - 5) return '5'
+    if (value.yearFrom === CURRENT_YEAR - 10) return '10'
   }
+  return 'custom'
 }
 
-function mergeDraft(base: ResultsQuery, draft: Draft): ResultsQuery {
-  const next: ResultsQuery = { ...base }
-  // 保留原始文本（服务端会 trim），避免防抖回写把用户刚敲的空格吃掉、光标跳动。
-  next.q = draft.q === '' ? undefined : draft.q
-  next.type = draft.type === '' ? undefined : draft.type
-  next.venue = draft.venue === '' ? undefined : draft.venue
-  next.author = draft.author === '' ? undefined : draft.author
-  const yearFrom = Number(draft.yearFrom)
-  next.yearFrom =
-    draft.yearFrom.trim() === '' || !Number.isFinite(yearFrom) || yearFrom <= 0
-      ? undefined
-      : Math.floor(yearFrom)
-  const yearTo = Number(draft.yearTo)
-  next.yearTo =
-    draft.yearTo.trim() === '' || !Number.isFinite(yearTo) || yearTo <= 0
-      ? undefined
-      : Math.floor(yearTo)
-  return next
+/** 统计候选值 → 下拉项；标签带命中数，当前值不在清单里时补在最前面。 */
+function facetOptions(
+  entries: readonly CountEntry[] | undefined,
+  current: string | undefined,
+): { key: string; label: string }[] {
+  const options = (entries ?? []).map((entry) => ({
+    key: entry.key,
+    label: `${entry.key}（${entry.count}）`,
+  }))
+  if (current !== undefined && current !== '' && !options.some((option) => option.key === current)) {
+    options.unshift({ key: current, label: current })
+  }
+  return options
 }
 
 interface ActiveFilter {
@@ -185,30 +204,40 @@ export function TaskFilters({
   sources,
   queries,
   groups = [],
+  stats = null,
+  leading,
   onChange,
 }: Props): ReactElement {
   const [open, setOpen] = useState(false)
-  const [draft, setDraft] = useState<Draft>(() => toDraft(value))
+  const [keyword, setKeyword] = useState(value.q ?? '')
+  // 「自定义」在没有年份区间时无法从 value 反推出来，需要单独记住用户的选择。
+  const [customYear, setCustomYear] = useState(false)
   const latest = useRef({ value, onChange })
   latest.current = { value, onChange }
 
-  const draftKey = JSON.stringify(draft)
   const valueKey = JSON.stringify(value)
 
   // 外部点击筛选（概览里点柱子）时，把值同步回输入框。
   useEffect(() => {
-    setDraft(toDraft(value))
+    setKeyword(value.q ?? '')
+  }, [valueKey])
+
+  // 外部写入了固定的年份预设时退出「自定义」入口。
+  useEffect(() => {
+    const derived = yearPresetOf(value)
+    if (derived !== 'any' && derived !== 'custom') setCustomYear(false)
   }, [valueKey])
 
   useEffect(() => {
     const timer = setTimeout(() => {
       const current = latest.current
-      current.onChange(mergeDraft(current.value, draft))
+      if ((current.value.q ?? '') === keyword) return
+      current.onChange({ ...current.value, q: keyword.trim() === '' ? undefined : keyword })
     }, TEXT_DEBOUNCE_MS)
     return () => {
       clearTimeout(timer)
     }
-  }, [draftKey])
+  }, [keyword])
 
   const patch = (next: Partial<ResultsQuery>): void => {
     onChange({ ...value, ...next })
@@ -216,17 +245,36 @@ export function TaskFilters({
 
   const chips = collectActiveFilters(value, t, queries, groups)
   const count = chips.length
+  const preset = customYear ? 'custom' : yearPresetOf(value)
 
-  const setDraftValue = (key: keyof Draft, text: string): void => {
-    setDraft((previous) => ({ ...previous, [key]: text }))
+  const setPreset = (next: YearPreset): void => {
+    setCustomYear(next === 'custom')
+    if (next === 'any' || next === 'custom') {
+      // 自定义先清空，避免保留的年份区间又被识别回某个预设。
+      patch({ yearFrom: undefined, yearTo: undefined })
+      return
+    }
+    patch({ yearFrom: CURRENT_YEAR - Number(next), yearTo: undefined })
   }
+
+  const typeOptions = facetOptions(stats?.byType, value.type)
+  const venueOptions = facetOptions(stats?.topVenues, value.venue)
+  const authorOptions = facetOptions(stats?.topAuthors, value.author)
 
   return (
     <div style={WRAP_STYLE}>
       <div style={HEAD_ROW_STYLE}>
-        <button type="button" style={TOGGLE_STYLE} onClick={() => setOpen(true)}>
-          {t('filter.show')}
-          {count === 0 ? '' : `（${count}）`}
+        {leading}
+        <button
+          type="button"
+          style={count > 0 ? TOGGLE_ACTIVE_STYLE : TOGGLE_STYLE}
+          onClick={() => setOpen(true)}
+        >
+          <FilterIcon />
+          <span>
+            {t('filter.show')}
+            {count === 0 ? '' : `（${count}）`}
+          </span>
         </button>
         {count > 0 && (
           <button type="button" style={RESET_STYLE} onClick={() => onChange({})}>
@@ -242,6 +290,7 @@ export function TaskFilters({
         open={open}
         onClose={() => setOpen(false)}
         title={t('filter.title')}
+        contentClassName={FILTER_CONTENT_CLASS}
         footer={
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <button type="button" style={RESET_STYLE} onClick={() => onChange({})}>
@@ -253,14 +302,15 @@ export function TaskFilters({
           </div>
         }
       >
+        <style>{FILTER_CONTENT_CSS}</style>
         <div style={GRID_STYLE}>
           <label style={FIELD_STYLE}>
             <span>{t('filter.keyword')}</span>
             <input
               style={INPUT_STYLE}
-              value={draft.q}
+              value={keyword}
               placeholder={t('filter.keywordPlaceholder')}
-              onChange={(event) => setDraftValue('q', event.target.value)}
+              onChange={(event) => setKeyword(event.target.value)}
             />
           </label>
 
@@ -287,24 +337,62 @@ export function TaskFilters({
 
           <label style={FIELD_STYLE}>
             <span>{t('filter.year')}</span>
-            <span style={INLINE_STYLE}>
-              <input
-                style={{ ...INPUT_STYLE, width: 66 }}
-                inputMode="numeric"
-                value={draft.yearFrom}
-                placeholder="1900"
-                onChange={(event) => setDraftValue('yearFrom', event.target.value)}
-              />
-              <span style={DASH_STYLE}>–</span>
-              <input
-                style={{ ...INPUT_STYLE, width: 66 }}
-                inputMode="numeric"
-                value={draft.yearTo}
-                placeholder="2026"
-                onChange={(event) => setDraftValue('yearTo', event.target.value)}
-              />
-            </span>
+            <select
+              style={INPUT_STYLE}
+              value={preset}
+              onChange={(event) => setPreset(event.target.value as YearPreset)}
+            >
+              <option value="any">{t('filter.any')}</option>
+              <option value="1">{t('filter.yearPreset1')}</option>
+              <option value="5">{t('filter.yearPreset5')}</option>
+              <option value="10">{t('filter.yearPreset10')}</option>
+              <option value="custom">{t('filter.yearCustom')}</option>
+            </select>
           </label>
+
+          {preset === 'custom' && (
+            <div style={CUSTOM_YEAR_STYLE}>
+              <label style={FIELD_STYLE}>
+                <span>{t('condition.yearFrom')}</span>
+                <select
+                  style={INPUT_STYLE}
+                  value={value.yearFrom === undefined ? '' : String(value.yearFrom)}
+                  onChange={(event) =>
+                    patch({
+                      yearFrom:
+                        event.target.value === '' ? undefined : Number(event.target.value),
+                    })
+                  }
+                >
+                  <option value="">{t('filter.any')}</option>
+                  {YEAR_OPTIONS.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={FIELD_STYLE}>
+                <span>{t('condition.yearTo')}</span>
+                <select
+                  style={INPUT_STYLE}
+                  value={value.yearTo === undefined ? '' : String(value.yearTo)}
+                  onChange={(event) =>
+                    patch({
+                      yearTo: event.target.value === '' ? undefined : Number(event.target.value),
+                    })
+                  }
+                >
+                  <option value="">{t('filter.any')}</option>
+                  {YEAR_OPTIONS.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
 
           <label style={FIELD_STYLE}>
             <span>{t('filter.screening')}</span>
@@ -420,32 +508,56 @@ export function TaskFilters({
 
           <label style={FIELD_STYLE}>
             <span>{t('filter.type')}</span>
-            <input
+            <select
               style={INPUT_STYLE}
-              value={draft.type}
-              placeholder={t('filter.typePlaceholder')}
-              onChange={(event) => setDraftValue('type', event.target.value)}
-            />
+              value={value.type ?? ''}
+              onChange={(event) =>
+                patch({ type: event.target.value === '' ? undefined : event.target.value })
+              }
+            >
+              <option value="">{t('filter.any')}</option>
+              {typeOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
 
           <label style={FIELD_STYLE}>
             <span>{t('filter.venue')}</span>
-            <input
+            <select
               style={INPUT_STYLE}
-              value={draft.venue}
-              placeholder={t('filter.venuePlaceholder')}
-              onChange={(event) => setDraftValue('venue', event.target.value)}
-            />
+              value={value.venue ?? ''}
+              onChange={(event) =>
+                patch({ venue: event.target.value === '' ? undefined : event.target.value })
+              }
+            >
+              <option value="">{t('filter.any')}</option>
+              {venueOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
 
           <label style={FIELD_STYLE}>
             <span>{t('filter.author')}</span>
-            <input
+            <select
               style={INPUT_STYLE}
-              value={draft.author}
-              placeholder={t('filter.authorPlaceholder')}
-              onChange={(event) => setDraftValue('author', event.target.value)}
-            />
+              value={value.author ?? ''}
+              onChange={(event) =>
+                patch({ author: event.target.value === '' ? undefined : event.target.value })
+              }
+            >
+              <option value="">{t('filter.any')}</option>
+              {authorOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
       </Modal>
@@ -477,58 +589,86 @@ const HEAD_ROW_STYLE: CSSProperties = {
   flexWrap: 'wrap',
   gap: 8,
 }
+/** 与筛读计数按钮同款的胶囊按钮，前置漏斗图标；蓝色文字保证入口可发现。 */
 const TOGGLE_STYLE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 8px',
+  borderRadius: 10,
+  border: '1px solid rgba(80,140,255,0.35)',
+  background: 'rgba(80,140,255,0.06)',
+  color: '#508cff',
+  fontSize: 11.5,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+/** 有生效条件时高亮，提示点击可查看/清除。 */
+const TOGGLE_ACTIVE_STYLE: CSSProperties = {
+  ...TOGGLE_STYLE,
+  borderColor: '#508cff',
+  background: 'rgba(80,140,255,0.14)',
+  color: '#508cff',
+  fontWeight: 600,
+}
+const RESET_STYLE: CSSProperties = {
   padding: 0,
   border: 'none',
   background: 'transparent',
-  color: '#508cff',
-  fontSize: 12,
-  cursor: 'pointer',
-}
-const RESET_STYLE: CSSProperties = {
-  ...TOGGLE_STYLE,
   color: 'inherit',
+  fontSize: 12,
   opacity: 0.7,
+  cursor: 'pointer',
 }
 const GRID_STYLE: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  gap: 6,
+  gap: '10px 12px',
 }
 const FIELD_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 2,
-  fontSize: 11,
-  opacity: 0.86,
+  gap: 4,
+  fontSize: 12,
   minWidth: 0,
 }
 const INPUT_STYLE: CSSProperties = {
-  fontSize: 12,
-  padding: '3px 5px',
-  borderRadius: 4,
+  fontSize: 12.5,
+  padding: '5px 8px',
+  borderRadius: 6,
   border: '1px solid rgba(127,127,127,0.28)',
   background: 'transparent',
   color: 'inherit',
   minWidth: 0,
 }
-const INLINE_STYLE: CSSProperties = { display: 'flex', alignItems: 'center', gap: 4 }
-const DASH_STYLE: CSSProperties = { opacity: 0.5, fontSize: 11 }
+const CUSTOM_YEAR_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  gridColumn: '1 / -1',
+}
 const CHECK_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 4,
-  fontSize: 11,
-  opacity: 0.86,
+  gap: 5,
+  fontSize: 12,
+  opacity: 0.92,
   alignSelf: 'end',
-  paddingBottom: 3,
+  paddingBottom: 4,
 }
+
+/** 分组标题需要比下拉框内容更醒目，样式只能通过 contentClassName 命中内部 label。 */
+const FILTER_CONTENT_CLASS = 'litsearch-filter-content'
+const FILTER_CONTENT_CSS = `
+.${FILTER_CONTENT_CLASS} label>span{font-size:12px;font-weight:650;line-height:1.5}
+`
+
 const CHIP_STYLE: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
-  fontSize: 11,
-  padding: '1px 6px',
+  fontSize: 11.5,
+  padding: '2px 7px',
   borderRadius: 4,
   border: '1px solid rgba(80,140,255,0.4)',
   color: '#508cff',

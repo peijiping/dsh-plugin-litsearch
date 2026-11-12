@@ -100,11 +100,54 @@ export function pdfStatusOf(task: SearchTask, paper: Paper): PdfStatus {
   return paper.pdfUrl === '' ? 'unknown' : 'available'
 }
 
-export function matchesLanguage(paper: Paper, language: TaskLanguage): boolean {
+export function matchesLanguage(paper: { language?: string }, language: TaskLanguage): boolean {
   if (language === 'any') return true
-  const value = (paper.language ?? '').toLowerCase()
-  if (language === 'chi') return value.startsWith('chi') || value.startsWith('zh')
-  return value.startsWith('eng') || value.startsWith('en')
+  const raw = (paper.language ?? '').trim().toLowerCase()
+  // 兼容 `en-US` / `zh-CN` 这类带地区的写法，只取主语言码。
+  const code = LANGUAGE_ALIASES[raw] ?? LANGUAGE_ALIASES[raw.split(/[-_]/u)[0] ?? '']
+  return code !== undefined && code === language
+}
+
+/**
+ * 上游语言标记 → 统一的 PubMed 三字母码。
+ *
+ * PubMed / Europe PMC 给三字母码，OpenAlex 等给两字母码，这里都收敛到同一套，
+ * 避免语言筛选把同一种语言判成两种。
+ */
+const LANGUAGE_ALIASES: Record<string, TaskLanguage> = {
+  eng: 'eng',
+  en: 'eng',
+  english: 'eng',
+  chi: 'chi',
+  zho: 'chi',
+  zh: 'chi',
+  chinese: 'chi',
+  jpn: 'jpn',
+  ja: 'jpn',
+  japanese: 'jpn',
+  kor: 'kor',
+  ko: 'kor',
+  korean: 'kor',
+  fre: 'fre',
+  fra: 'fre',
+  fr: 'fre',
+  french: 'fre',
+  ger: 'ger',
+  deu: 'ger',
+  de: 'ger',
+  german: 'ger',
+  spa: 'spa',
+  es: 'spa',
+  spanish: 'spa',
+  rus: 'rus',
+  ru: 'rus',
+  russian: 'rus',
+  ita: 'ita',
+  it: 'ita',
+  italian: 'ita',
+  por: 'por',
+  pt: 'por',
+  portuguese: 'por',
 }
 
 /** 稳定的筛选指纹（统计缓存 key 的一部分）。 */

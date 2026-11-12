@@ -15,9 +15,9 @@ import type {
   SourceId,
   SourceStatus,
   TaskConditions,
-  TaskLanguage,
   TaskOrigin,
 } from '../../search/types.js'
+import { matchesLanguage } from './filter.js'
 import { finishRound, startRound } from './rounds.js'
 import { countScreening } from './states.js'
 
@@ -235,11 +235,4 @@ function matchesConditions(
     if (!conditions.types.some((wanted) => wanted.toLowerCase() === type)) return false
   }
   return true
-}
-
-function matchesLanguage(paper: PaperRecord, language: TaskLanguage): boolean {
-  if (language === 'any') return true
-  const value = (paper.language ?? '').toLowerCase()
-  if (language === 'chi') return value.startsWith('chi') || value.startsWith('zh')
-  return value.startsWith('eng') || value.startsWith('en')
 }

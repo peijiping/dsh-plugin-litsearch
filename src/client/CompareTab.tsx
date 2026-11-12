@@ -263,10 +263,10 @@ const HEAD_ROW_STYLE: CSSProperties = {
   gap: 8,
 }
 const HEAD_STYLE: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  opacity: 0.72,
-  margin: '6px 0 2px',
+  fontSize: 13,
+  fontWeight: 650,
+  opacity: 0.85,
+  margin: '8px 0 3px',
 }
 const LIST_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column' }
 const ROW_STYLE: CSSProperties = {

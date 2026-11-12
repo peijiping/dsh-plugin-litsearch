@@ -1174,24 +1174,24 @@ const SCOPED_STYLE: CSSProperties = {
   marginBottom: 2,
 }
 const SUMMARY_STYLE: CSSProperties = {
-  margin: '2px 0 4px',
-  fontSize: 11.5,
-  lineHeight: 1.6,
+  margin: '2px 0 6px',
+  fontSize: 12,
+  lineHeight: 1.65,
   opacity: 0.85,
   fontVariantNumeric: 'tabular-nums',
 }
 const SECTION_STYLE: CSSProperties = {
-  padding: '6px 0',
+  padding: '8px 0',
   borderBottom: '1px solid rgba(127,127,127,0.12)',
 }
 const SECTION_HEAD_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 5,
-  fontSize: 12,
-  fontWeight: 600,
-  opacity: 0.82,
-  margin: '0 0 5px',
+  gap: 6,
+  fontSize: 12.5,
+  fontWeight: 650,
+  opacity: 0.9,
+  margin: '0 0 6px',
 }
 const SECTION_HINT_STYLE: CSSProperties = {
   marginLeft: 'auto',
@@ -1202,14 +1202,14 @@ const SECTION_HINT_STYLE: CSSProperties = {
 }
 const SECTION_MARK_STYLE: CSSProperties = {
   width: 3,
-  height: 11,
+  height: 12,
   borderRadius: 2,
   flex: '0 0 3px',
 }
-const TEXT_STYLE: CSSProperties = { fontSize: 12, lineHeight: 1.5 }
+const TEXT_STYLE: CSSProperties = { fontSize: 12.5, lineHeight: 1.55 }
 const CAPTION_STYLE: CSSProperties = {
   margin: '5px 0 0',
-  fontSize: 10,
+  fontSize: 10.5,
   lineHeight: 1.5,
   opacity: 0.62,
   fontVariantNumeric: 'tabular-nums',

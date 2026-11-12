@@ -327,7 +327,7 @@ export function PaperCard({
             ...FIELD_BODY_STYLE,
             marginTop: 0,
             flexWrap: 'wrap',
-            rowGap: 4,
+            rowGap: 2,
           }}
         >
           <Button
@@ -507,21 +507,23 @@ const CARD_ROW_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 8,
-  marginTop: 8,
+  marginTop: 3,
 }
 const ROW_LABEL_STYLE: CSSProperties = {
   flexShrink: 0,
   width: 92,
   paddingTop: 1,
-  fontSize: 11,
-  lineHeight: '18px',
-  fontWeight: 600,
+  fontSize: 11.5,
+  lineHeight: '16px',
+  fontWeight: 650,
   whiteSpace: 'nowrap',
 }
 const INFO_LABEL_STYLE: CSSProperties = { ...ROW_LABEL_STYLE, color: INFO_COLOR }
 const ACTION_LABEL_STYLE: CSSProperties = { ...ROW_LABEL_STYLE, color: ACCENT }
 const INFO_BADGE_STYLE: CSSProperties = {
   ...badgeStyle,
+  padding: '1px 6px',
+  lineHeight: 1.3,
   color: INFO_COLOR,
   border: '1px solid rgba(18,131,108,0.45)',
 }

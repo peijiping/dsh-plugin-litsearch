@@ -58,6 +58,7 @@ import {
   epmcFullTextAvailable,
   persistPdf,
   probePdfRoot,
+  prunePdfCache,
   readLocalPdf,
   readSavedPdf,
   readableFilename,
@@ -174,6 +175,8 @@ export class TaskService {
     } catch (error) {
       console.warn('[dsh-plugin-litsearch] 任务目录加载失败：', error)
     }
+    // 与任务自动清理同批执行：按总量上限修剪 PDF 去重缓存（0 表示关闭）。
+    await this.trimPdfCache()
     let restored = false
     try {
       const snapshot = await this.store.loadCurrent()
@@ -189,6 +192,22 @@ export class TaskService {
       console.warn('[dsh-plugin-litsearch] 当前任务快照加载失败：', error)
     }
     if (!restored) this.bootstrapCurrentTask()
+  }
+
+  /** 按设置的总量上限修剪 PDF 去重缓存；失败只告警，不阻断启动。 */
+  private async trimPdfCache(): Promise<void> {
+    const maxMb = getSettings().pdfCacheMaxMb
+    if (maxMb <= 0) return
+    try {
+      const outcome = await prunePdfCache(this.store.root, maxMb * 1024 * 1024)
+      if (outcome.removed > 0) {
+        console.info(
+          `[dsh-plugin-litsearch] PDF 缓存已修剪：删除 ${outcome.removed} 个文件，释放 ${Math.round(outcome.freedBytes / 1024 / 1024)} MB（上限 ${maxMb} MB）`,
+        )
+      }
+    } catch (error) {
+      console.warn('[dsh-plugin-litsearch] PDF 缓存修剪失败：', error)
+    }
   }
 
   /** 没有可用快照时，把最近更新的任务设为当前任务并落盘。 */

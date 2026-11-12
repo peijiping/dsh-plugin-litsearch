@@ -343,7 +343,7 @@ function statusKey(status: PdfStatus): keyof NonNullable<TaskStatsReport['fullTe
 }
 
 const WRAP_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 6 }
-const TEXT_STYLE: CSSProperties = { fontSize: 12, lineHeight: 1.6 }
+const TEXT_STYLE: CSSProperties = { fontSize: 12.5, lineHeight: 1.6 }
 const HINT_STYLE: CSSProperties = { fontSize: 11, opacity: 0.7, lineHeight: 1.6 }
 const CHIP_ROW_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 }
 const CHIP_BUTTON_STYLE: CSSProperties = {
@@ -367,8 +367,8 @@ const ROW_HEAD_STYLE: CSSProperties = {
   justifyContent: 'space-between',
   gap: 8,
   marginTop: 4,
-  fontSize: 12,
-  fontWeight: 600,
+  fontSize: 12.5,
+  fontWeight: 650,
 }
 const LINK_STYLE: CSSProperties = {
   padding: 0,
@@ -416,8 +416,8 @@ const ROW_MAIN_STYLE: CSSProperties = {
   minWidth: 0,
 }
 const ROW_TITLE_STYLE: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
+  fontSize: 12.5,
+  fontWeight: 650,
   lineHeight: 1.45,
   color: 'inherit',
   textDecoration: 'none',

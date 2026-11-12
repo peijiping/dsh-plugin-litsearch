@@ -13,6 +13,7 @@ import { MAX_LIMIT, ROUTE_PREFIX, SESSION_HEADER, WRITE_HEADER } from '../search
 import { SearchError } from '../search/errors.js'
 import { asRecord } from '../search/normalize.js'
 import { isSourceId } from '../search/providers/index.js'
+import { TASK_LANGUAGES } from '../search/types.js'
 import type {
   AnnotationInput,
   ApiEnvelope,
@@ -51,7 +52,7 @@ export interface WebServerLike {
 const MAX_BODY_BYTES = 1_000_000
 
 const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
-const LANGUAGES: readonly TaskLanguage[] = ['any', 'eng', 'chi']
+const LANGUAGES = TASK_LANGUAGES
 const ORIGINS: readonly TaskOrigin[] = ['model', 'panel', 'history', 'api']
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
 const PDF_STATUSES: readonly PdfStatus[] = [

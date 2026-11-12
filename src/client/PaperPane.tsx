@@ -281,9 +281,9 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
 
       <div>
         {paper.url === '' ? (
-          <span style={titleStyle}>{paper.title}</span>
+          <span style={PAPER_TITLE_STYLE}>{paper.title}</span>
         ) : (
-          <a style={titleStyle} href={paper.url} target="_blank" rel="noreferrer noopener">
+          <a style={PAPER_TITLE_STYLE} href={paper.url} target="_blank" rel="noreferrer noopener">
             {paper.title}
           </a>
         )}
@@ -544,11 +544,19 @@ const SCREENING_COLOR: Record<Screening, string> = {
   excluded: '#d64545',
 }
 
+/** 独立论文页是整页主视图，标题比结果卡片再大一级。 */
+const PAPER_TITLE_STYLE: CSSProperties = {
+  ...titleStyle,
+  fontSize: 16,
+  fontWeight: 700,
+  lineHeight: 1.45,
+}
+
 const HEAD_STYLE: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  opacity: 0.72,
-  margin: '8px 0 3px',
+  fontSize: 13,
+  fontWeight: 650,
+  opacity: 0.85,
+  margin: '10px 0 4px',
 }
 
 const STATE_ROW_STYLE: CSSProperties = {
@@ -559,7 +567,7 @@ const STATE_ROW_STYLE: CSSProperties = {
   fontSize: 12,
 }
 const SELECT_STYLE: CSSProperties = {
-  fontSize: 11,
+  fontSize: 11.5,
   padding: '2px 4px',
   borderRadius: 4,
   border: '1px solid rgba(127,127,127,0.28)',

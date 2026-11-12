@@ -235,6 +235,54 @@ export async function cleanupPdfCache(storageRoot: string): Promise<{ removed: n
   return { removed, freedBytes }
 }
 
+/**
+ * 按总量上限修剪去重缓存：超出时从最旧（mtime）开始删，直到不超过上限。
+ * `maxBytes <= 0` 表示关闭自动清理。
+ */
+export async function prunePdfCache(
+  storageRoot: string,
+  maxBytes: number,
+): Promise<{ removed: number; freedBytes: number }> {
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return { removed: 0, freedBytes: 0 }
+  const dir = pdfCacheDir(storageRoot)
+  let names: string[]
+  try {
+    names = await readdir(dir)
+  } catch {
+    return { removed: 0, freedBytes: 0 }
+  }
+  const files: { path: string; size: number; mtimeMs: number }[] = []
+  let total = 0
+  for (const name of names) {
+    if (!name.endsWith('.pdf')) continue
+    const path = join(dir, name)
+    try {
+      const info = await stat(path)
+      if (!info.isFile()) continue
+      files.push({ path, size: info.size, mtimeMs: info.mtimeMs })
+      total += info.size
+    } catch {
+      // 单个缓存文件读不到元信息时跳过，不影响修剪其余文件。
+    }
+  }
+  if (total <= maxBytes) return { removed: 0, freedBytes: 0 }
+  files.sort((a, b) => a.mtimeMs - b.mtimeMs)
+  let removed = 0
+  let freedBytes = 0
+  for (const file of files) {
+    if (total <= maxBytes) break
+    try {
+      await rm(file.path, { force: true })
+      total -= file.size
+      freedBytes += file.size
+      removed += 1
+    } catch {
+      // 删除失败继续尝试更近的文件。
+    }
+  }
+  return { removed, freedBytes }
+}
+
 /** 测试下载目录是否可写（设置页）。 */
 export async function probePdfRoot(
   workspace?: string,

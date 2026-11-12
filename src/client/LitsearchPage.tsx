@@ -175,7 +175,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   return (
     <div style={panelStyle}>
       <div style={pageHeaderStyle}>
-        <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.72 }}>{t('tab.title')}</span>
+        <span style={{ fontSize: 13, fontWeight: 650, opacity: 0.85 }}>{t('tab.title')}</span>
         <IconButton label={t('taskList.open')} onClick={() => setShowTaskList(true)}>
           <TaskListIcon />
         </IconButton>
@@ -341,10 +341,10 @@ const queryListStyle = {
 } as const
 
 const sectionTitleStyle = {
-  fontSize: 12,
-  fontWeight: 600,
-  opacity: 0.72,
-  margin: '6px 0 4px',
+  fontSize: 13,
+  fontWeight: 650,
+  opacity: 0.85,
+  margin: '8px 0 4px',
 } as const
 
 const historyListStyle = {
@@ -363,7 +363,7 @@ const historyRowStyle = {
 
 const historyTitleStyle = {
   ...titleStyle,
-  fontSize: 12.5,
+  fontSize: 13,
   textAlign: 'left',
   padding: 0,
   border: 'none',
@@ -378,7 +378,7 @@ const historyMetaStyle = {
   display: 'flex',
   flexWrap: 'wrap',
   gap: 8,
-  fontSize: 11,
+  fontSize: 11.5,
   opacity: 0.66,
 } as const
 

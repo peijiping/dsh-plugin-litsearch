@@ -30,7 +30,18 @@ import { ConditionEditor } from './ConditionEditor'
 import { paperText, papersText, taskText } from './compose'
 import { FullTextTab, type FullTextView } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
-import { AlertIcon, HistoryIcon, IconButton, ResultIcon, RoundIcon, TaskListIcon } from './icons'
+import {
+  AlertIcon,
+  ChatIcon,
+  ClockIcon,
+  DownloadIcon,
+  HistoryIcon,
+  IconButton,
+  ResultIcon,
+  RoundIcon,
+  TaskListIcon,
+  ZoteroIcon,
+} from './icons'
 import { insertBuilt, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
 import { NotesTab } from './NotesTab'
@@ -45,7 +56,6 @@ import {
   linkButtonStyle,
   linkStyle,
   listStyle,
-  metaStyle,
   panelStyle,
   statusStyle,
   titleStyle,
@@ -253,7 +263,11 @@ export function TaskPane({
 
   const annotateMany = (patch: Partial<Pick<AnnotationInput, 'screening' | 'groupId'>>): void => {
     if (ids.length === 0) return
-    void view.annotate(ids.map((paperId) => ({ paperId, ...patch })))
+    // 改完筛选状态就清空选中：命中的文献可能被当前筛选移出列表，
+    // 残留的选中会让批量条一直挂在那里。
+    void view.annotate(ids.map((paperId) => ({ paperId, ...patch }))).then(() => {
+      setSelected(new Set())
+    })
   }
 
   /** Host 单次最多注解 50 篇，对比页整批纳入时分段提交。 */
@@ -336,8 +350,6 @@ export function TaskPane({
   const page = view.page
   /** 当前生效的排序：面板选择优先，未选择时跟随任务条件。 */
   const sortValue: SortMode = filters.sort ?? detail.conditions.sort
-  const pageStart = page === null ? 0 : page.offset
-  const pageEnd = page === null ? 0 : page.offset + page.papers.length
   // 覆盖率恒为任务级口径（scope=task），不随结果页筛选变化。
   const coverage = overview?.fullText
   const overviewAvailable =
@@ -435,12 +447,8 @@ export function TaskPane({
       <header style={HEADER_STYLE}>
         <div style={HEADER_TOP_STYLE}>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ ...titleStyle, fontSize: 14 }}>{detail.title}</div>
-            <div style={metaStyle}>
-              {tpl(t('task.meta'), {
-                origin: t(`task.origin.${detail.origin}`),
-                date: formatDate(detail.createdAt),
-              })}
+            <div style={{ ...titleStyle, fontSize: 16, fontWeight: 700, lineHeight: 1.4 }}>
+              {detail.title}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -485,7 +493,7 @@ export function TaskPane({
             <div style={BOX_HEAD_STYLE}>
               <button
                 type="button"
-                style={linkButtonStyle}
+                style={BOX_HEAD_TITLE_STYLE}
                 disabled={active}
                 title={active ? t('task.running') : t('condition.title')}
                 onClick={() => setEditingConditions(true)}
@@ -519,6 +527,17 @@ export function TaskPane({
           </section>
 
           <section style={ROUND_BOX_STYLE}>
+            <div style={ROUND_LINE_STYLE}>
+              <span style={ROUND_ICON_STYLE} aria-hidden>
+                <ClockIcon />
+              </span>
+              <span style={ROUND_TEXT_STYLE}>
+                {tpl(t('task.meta'), {
+                  origin: t(`task.origin.${detail.origin}`),
+                  date: formatDate(detail.createdAt),
+                })}
+              </span>
+            </div>
             <div
               style={ROUND_LINE_STYLE}
               role={active ? 'status' : undefined}
@@ -672,8 +691,23 @@ export function TaskPane({
                 <button type="button" style={linkButtonStyle} onClick={() => setTab('fulltext')}>
                   {t('fulltext.openTab')}
                 </button>
+                <div style={EXPORT_ROW_STYLE} title={t('export.hint')}>
+                  <span style={EXPORT_DIVIDER_STYLE} aria-hidden>
+                    |
+                  </span>
+                  <span style={EXPORT_LABEL_STYLE}>{t('ledger.export')}</span>
+                  {EXPORT_FORMATS.map((format) => (
+                    <a
+                      key={format}
+                      style={EXPORT_LINK_STYLE}
+                      href={exportUrl(taskId, format, filters)}
+                      download
+                    >
+                      {t(`export.${format}`)}
+                    </a>
+                  ))}
+                </div>
               </div>
-              <div style={COVERAGE_HINT_STYLE}>{t('fulltext.barHint')}</div>
             </div>
           )}
           <TaskFilters
@@ -682,53 +716,41 @@ export function TaskPane({
             sources={detail.conditions.sources}
             queries={detail.conditions.queries}
             groups={detail.groups}
+            stats={overview}
             onChange={setFilters}
-          />
-
-          <ScreeningBar
-            t={t}
-            taskId={taskId}
-            detail={detail}
-            filters={filters}
-            onChange={setFilters}
+            leading={
+              <ScreeningPills t={t} detail={detail} filters={filters} onChange={setFilters} />
+            }
           />
 
           {page !== null && page.total > 0 && (
-            <div style={PAGE_TOOLBAR_STYLE}>
-              <div style={PAGE_TOOLBAR_ROW_STYLE}>
-                <label style={PAGE_SORT_LABEL_STYLE}>
-                  <span>{t('filter.sort')}</span>
-                  <select
-                    style={PAGE_SORT_SELECT_STYLE}
-                    value={sortValue}
-                    onChange={(event) => {
-                      const next = event.target.value as SortMode
-                      // 与任务默认排序一致时不写进筛选对象，避免多出一条生效条件。
-                      setFilters((previous) => ({
-                        ...previous,
-                        sort: next === detail.conditions.sort ? undefined : next,
-                      }))
-                    }}
-                  >
-                    {SORT_MODES.map((mode) => (
-                      <option key={mode} value={mode}>
-                        {t(`sort.${mode}`)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <span style={PAGE_RANGE_STYLE}>
-                  {tpl(t('pager.range'), {
-                    from: pageStart + 1,
-                    to: pageEnd,
-                    total: page.total,
-                  })}
-                </span>
-              </div>
+            <div style={PAGE_TOOLBAR_ROW_STYLE}>
+              <label style={PAGE_SORT_LABEL_STYLE}>
+                <span>{t('filter.sort')}</span>
+                <select
+                  style={PAGE_SORT_SELECT_STYLE}
+                  value={sortValue}
+                  onChange={(event) => {
+                    const next = event.target.value as SortMode
+                    // 与任务默认排序一致时不写进筛选对象，避免多出一条生效条件。
+                    setFilters((previous) => ({
+                      ...previous,
+                      sort: next === detail.conditions.sort ? undefined : next,
+                    }))
+                  }}
+                >
+                  {SORT_MODES.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {t(`sort.${mode}`)}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <Pager
                 t={t}
                 index={view.pageIndex}
                 count={view.pageCount}
+                total={page.total}
                 onChange={view.goToPage}
               />
             </div>
@@ -787,6 +809,7 @@ export function TaskPane({
                 t={t}
                 index={view.pageIndex}
                 count={view.pageCount}
+                total={page.total}
                 onChange={view.goToPage}
               />
             </>
@@ -914,10 +937,10 @@ const HEADER_SPLIT_STYLE: CSSProperties = {
 const CONDITION_BOX_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 4,
+  gap: 5,
   minWidth: 0,
-  padding: '6px 8px',
-  borderRadius: 7,
+  padding: '7px 9px',
+  borderRadius: 8,
   border: '1px solid rgba(127,127,127,0.2)',
   background: 'rgba(127,127,127,0.05)',
 }
@@ -929,40 +952,49 @@ const BOX_HEAD_STYLE: CSSProperties = {
   gap: 8,
 }
 
+/** 条件框标题「修改查询条件」：既要点得动，也要像小节标题。 */
+const BOX_HEAD_TITLE_STYLE: CSSProperties = {
+  ...linkButtonStyle,
+  fontSize: 12.5,
+  fontWeight: 650,
+}
+
 const CONDITION_BODY_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 3,
+  gap: 4,
   minWidth: 0,
   maxHeight: 132,
   overflowY: 'auto',
 }
 
 const CONDITION_QUERY_STYLE: CSSProperties = {
-  fontSize: 11.5,
-  lineHeight: 1.45,
+  fontSize: 12,
+  lineHeight: 1.5,
   wordBreak: 'break-word',
 }
 
 const CONDITION_QUERY_NAME_STYLE: CSSProperties = {
   marginRight: 4,
-  opacity: 0.6,
+  fontSize: 11.5,
+  fontWeight: 600,
+  opacity: 0.55,
 }
 
 const CONDITION_META_STYLE: CSSProperties = {
-  fontSize: 11,
-  lineHeight: 1.45,
-  opacity: 0.72,
+  fontSize: 11.5,
+  lineHeight: 1.5,
+  opacity: 0.7,
   wordBreak: 'break-word',
 }
 
 const ROUND_BOX_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 4,
+  gap: 5,
   minWidth: 0,
-  padding: '6px 8px',
-  borderRadius: 7,
+  padding: '7px 9px',
+  borderRadius: 8,
   border: '1px solid rgba(80,140,255,0.22)',
   background: 'rgba(80,140,255,0.05)',
 }
@@ -972,14 +1004,15 @@ const ROUND_LINE_STYLE: CSSProperties = {
   alignItems: 'flex-start',
   gap: 6,
   minWidth: 0,
-  fontSize: 11.5,
-  lineHeight: 1.45,
+  fontSize: 12,
+  lineHeight: 1.5,
 }
 
 const ROUND_ICON_STYLE: CSSProperties = {
   display: 'inline-flex',
   flexShrink: 0,
   marginTop: 1,
+  color: ACCENT,
   opacity: 0.8,
 }
 
@@ -1003,16 +1036,14 @@ const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'exclude
 const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
 const EXPORT_FORMATS = ['csv', 'ris', 'bibtex', 'md'] as const
 
-/** 筛读台账条：四态计数（点击筛选）+ 只看新增 + 导出当前筛选。 */
-function ScreeningBar({
+/** 筛读计数（点击筛选）：与「筛选」按钮同排，接在筛选条最前面。 */
+function ScreeningPills({
   t,
-  taskId,
   detail,
   filters,
   onChange,
 }: {
   t: Translate
-  taskId: string
   detail: TaskDetail
   filters: ResultsQuery
   onChange(next: ResultsQuery): void
@@ -1026,41 +1057,26 @@ function ScreeningBar({
   }
 
   return (
-    <div style={SCREENING_BAR_STYLE}>
-      <div style={SCREENING_PILLS_STYLE}>
-        {SCREENINGS.map((screening) => (
-          <button
-            key={screening}
-            type="button"
-            style={filters.screening === screening ? SCREENING_PILL_ACTIVE : SCREENING_PILL}
-            onClick={() => toggle(screening)}
-          >
-            {t(`screening.${screening}`)} {counts[screening]}
-          </button>
-        ))}
-        {detail.fromTaskId !== undefined && (
-          <button
-            type="button"
-            style={filters.newOnly === true ? SCREENING_PILL_ACTIVE : SCREENING_PILL}
-            onClick={() => onChange({ ...filters, newOnly: filters.newOnly === true ? undefined : true })}
-          >
-            {t('ledger.newOnly')}
-          </button>
-        )}
-      </div>
-      <div style={EXPORT_ROW_STYLE} title={t('export.hint')}>
-        <span style={EXPORT_LABEL_STYLE}>{t('ledger.export')}</span>
-        {EXPORT_FORMATS.map((format) => (
-          <a
-            key={format}
-            style={EXPORT_LINK_STYLE}
-            href={exportUrl(taskId, format, filters)}
-            download
-          >
-            {t(`export.${format}`)}
-          </a>
-        ))}
-      </div>
+    <div style={SCREENING_PILLS_STYLE}>
+      {SCREENINGS.map((screening) => (
+        <button
+          key={screening}
+          type="button"
+          style={filters.screening === screening ? SCREENING_PILL_ACTIVE : SCREENING_PILL}
+          onClick={() => toggle(screening)}
+        >
+          {t(`screening.${screening}`)} {counts[screening]}
+        </button>
+      ))}
+      {detail.fromTaskId !== undefined && (
+        <button
+          type="button"
+          style={filters.newOnly === true ? SCREENING_PILL_ACTIVE : SCREENING_PILL}
+          onClick={() => onChange({ ...filters, newOnly: filters.newOnly === true ? undefined : true })}
+        >
+          {t('ledger.newOnly')}
+        </button>
+      )}
     </div>
   )
 }
@@ -1145,15 +1161,19 @@ function BulkBar({
             </option>
           ))}
         </select>
-        <button type="button" style={linkButtonStyle} onClick={onInsert}>
-          {t('bulk.insert')}
-        </button>
-        <button type="button" style={linkButtonStyle} disabled={busy} onClick={onDownload}>
-          {t('bulk.download')}
-        </button>
-        <button type="button" style={linkButtonStyle} disabled={busy} onClick={onZotero}>
-          {t('bulk.zotero')}
-        </button>
+        <BulkActionButton icon={<ChatIcon />} label={t('bulk.insert')} onClick={onInsert} />
+        <BulkActionButton
+          icon={<DownloadIcon />}
+          label={t('bulk.download')}
+          onClick={onDownload}
+          disabled={busy}
+        />
+        <BulkActionButton
+          icon={<ZoteroIcon />}
+          label={t('bulk.zotero')}
+          onClick={onZotero}
+          disabled={busy}
+        />
       </div>
       <div style={BULK_ROW_STYLE}>
         <span style={{ fontSize: 11, opacity: 0.66 }}>{t('bulk.export')}</span>
@@ -1172,16 +1192,54 @@ function BulkBar({
   )
 }
 
+/** 批量条里的图标按钮：与下拉框同处一行，悬停时加深底色。 */
+function BulkActionButton({
+  icon,
+  label,
+  onClick,
+  disabled = false,
+}: {
+  icon: ReactElement
+  label: string
+  onClick(): void
+  disabled?: boolean
+}): ReactElement {
+  const [hover, setHover] = useState(false)
+  const highlighted = hover && !disabled
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        ...BULK_BUTTON_STYLE,
+        ...(highlighted
+          ? { borderColor: 'rgba(80,140,255,0.75)', background: 'rgba(80,140,255,0.16)' }
+          : null),
+        ...(disabled ? { opacity: 0.45, cursor: 'default' } : null),
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  )
+}
+
 /** 结果页翻页条：首页 / 上一页 / 页码 / 下一页 / 末页。单页时不渲染。 */
 function Pager({
   t,
   index,
   count,
+  total,
   onChange,
 }: {
   t: Translate
   index: number
   count: number
+  /** 总篇数；给了就并进页码文案，省掉单独一行统计。 */
+  total?: number
   onChange(index: number): void
 }): ReactElement | null {
   if (count <= 1) return null
@@ -1206,7 +1264,9 @@ function Pager({
         {t('pager.prev')}
       </button>
       <span style={PAGER_STATUS_STYLE}>
-        {tpl(t('pager.status'), { page: index + 1, pages: count })}
+        {total === undefined
+          ? tpl(t('pager.status'), { page: index + 1, pages: count })
+          : tpl(t('pager.statusTotal'), { page: index + 1, pages: count, total })}
       </span>
       <button
         type="button"
@@ -1267,10 +1327,10 @@ const RIS_FALLBACK_STYLE: CSSProperties = {
 const TAB_ROW_STYLE: CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
-  gap: 2,
+  gap: 6,
 }
 const TAB_STYLE: CSSProperties = {
-  padding: '4px 8px 6px',
+  padding: '4px 9px 7px',
   border: 'none',
   borderBottom: 'none',
   boxShadow: 'none',
@@ -1278,28 +1338,20 @@ const TAB_STYLE: CSSProperties = {
   textDecoration: 'none',
   background: 'transparent',
   color: 'inherit',
-  fontSize: 12,
-  opacity: 0.66,
+  fontSize: 13,
+  fontWeight: 500,
+  opacity: 0.75,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
   userSelect: 'none',
 }
 const TAB_ACTIVE_STYLE: CSSProperties = {
   ...TAB_STYLE,
-  padding: '4px 8px',
+  padding: '4px 9px',
   borderBottom: `2px solid ${ACCENT}`,
   color: ACCENT,
   opacity: 1,
-  fontWeight: 600,
-}
-const SCREENING_BAR_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  flexWrap: 'wrap',
-  gap: 8,
-  padding: '2px 0 4px',
-  borderBottom: '1px solid rgba(127,127,127,0.12)',
+  fontWeight: 700,
 }
 const SCREENING_PILLS_STYLE: CSSProperties = {
   display: 'flex',
@@ -1307,8 +1359,8 @@ const SCREENING_PILLS_STYLE: CSSProperties = {
   gap: 4,
 }
 const SCREENING_PILL: CSSProperties = {
-  fontSize: 11,
-  padding: '1px 7px',
+  fontSize: 11.5,
+  padding: '2px 8px',
   borderRadius: 10,
   border: '1px solid rgba(127,127,127,0.3)',
   background: 'transparent',
@@ -1332,10 +1384,15 @@ const EXPORT_ROW_STYLE: CSSProperties = {
   fontSize: 11,
 }
 const EXPORT_LABEL_STYLE: CSSProperties = { opacity: 0.66 }
+/** 导出区与前文之间的竖线分隔。 */
+const EXPORT_DIVIDER_STYLE: CSSProperties = {
+  opacity: 0.3,
+  marginRight: -2,
+}
 const EXPORT_LINK_STYLE: CSSProperties = {
   color: ACCENT,
   textDecoration: 'none',
-  fontSize: 11,
+  fontSize: 11.5,
 }
 const BULK_STYLE: CSSProperties = {
   display: 'flex',
@@ -1361,6 +1418,19 @@ const BULK_SELECT_STYLE: CSSProperties = {
   color: 'inherit',
   maxWidth: 140,
 }
+const BULK_BUTTON_STYLE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 8px',
+  borderRadius: 5,
+  border: '1px solid rgba(80,140,255,0.4)',
+  background: 'transparent',
+  color: ACCENT,
+  fontSize: 11.5,
+  lineHeight: 1.4,
+  cursor: 'pointer',
+}
 
 const COVERAGE_WRAP_STYLE: CSSProperties = {
   display: 'flex',
@@ -1378,14 +1448,13 @@ const COVERAGE_ROW_STYLE: CSSProperties = {
   flexWrap: 'wrap',
   gap: 8,
 }
-const COVERAGE_HINT_STYLE: CSSProperties = { fontSize: 11, opacity: 0.66 }
 const QUICK_FILTER_STYLE: CSSProperties = {
-  padding: '1px 7px',
+  padding: '2px 8px',
   borderRadius: 10,
   border: '1px solid rgba(127,127,127,0.3)',
   background: 'transparent',
   color: 'inherit',
-  fontSize: 11,
+  fontSize: 11.5,
   cursor: 'pointer',
 }
 const QUICK_FILTER_ACTIVE_STYLE: CSSProperties = {
@@ -1412,37 +1481,29 @@ const SCROLL_BODY_STYLE: CSSProperties = {
   overflowX: 'hidden',
 }
 
-const PAGE_TOOLBAR_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  padding: '2px 0',
-}
+/** 排序与翻页同一行：排序靠左，翻页（含总篇数）靠右。 */
 const PAGE_TOOLBAR_ROW_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
+  justifyContent: 'space-between',
+  flexWrap: 'wrap',
   gap: 8,
+  padding: '2px 0',
 }
 const PAGE_SORT_LABEL_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 4,
-  fontSize: 11,
+  fontSize: 11.5,
   opacity: 0.8,
 }
 const PAGE_SORT_SELECT_STYLE: CSSProperties = {
-  fontSize: 11,
+  fontSize: 11.5,
   padding: '2px 4px',
   borderRadius: 4,
   border: '1px solid rgba(127,127,127,0.28)',
   background: 'transparent',
   color: 'inherit',
-}
-const PAGE_RANGE_STYLE: CSSProperties = {
-  marginLeft: 'auto',
-  fontSize: 11,
-  opacity: 0.66,
-  whiteSpace: 'nowrap',
 }
 const PAGER_STYLE: CSSProperties = {
   display: 'flex',
@@ -1450,15 +1511,15 @@ const PAGER_STYLE: CSSProperties = {
   justifyContent: 'center',
   flexWrap: 'wrap',
   gap: 6,
-  fontSize: 11,
+  fontSize: 11.5,
 }
 const PAGER_BUTTON: CSSProperties = {
-  padding: '1px 7px',
+  padding: '2px 8px',
   borderRadius: 10,
   border: '1px solid rgba(127,127,127,0.3)',
   background: 'transparent',
   color: 'inherit',
-  fontSize: 11,
+  fontSize: 11.5,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 }

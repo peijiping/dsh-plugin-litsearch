@@ -23,6 +23,8 @@ const CACHE_TTL_MS = 30_000
 const CACHE_MAX = 16
 const TOP_LIST = 15
 const TOP_PAPERS = 10
+/** 出处 / 作者候选值的上限：筛选下拉直接用这份清单，按命中数取前 500。 */
+const FACET_LIST = 500
 
 interface CacheEntry {
   at: number
@@ -85,8 +87,13 @@ function buildReport(
     byYear: buildYearStats(task, papers),
     byType: countBy(task, papers, (paper) => paper.type),
     byLanguage: countBy(task, papers, (paper) => paper.language ?? ''),
-    topVenues: topBy(task, papers, (paper) => (paper.venue === '' ? [] : [paper.venue])),
-    topAuthors: topBy(task, papers, (paper) => paper.authors),
+    topVenues: topBy(
+      task,
+      papers,
+      (paper) => (paper.venue === '' ? [] : [paper.venue]),
+      FACET_LIST,
+    ),
+    topAuthors: topBy(task, papers, (paper) => paper.authors, FACET_LIST),
     metrics: buildMetrics(papers, base),
     screeningProgress: { included, excluded, pending: unread },
     unavailableFullText: {
@@ -210,6 +217,7 @@ function topBy(
   task: SearchTask,
   papers: Paper[],
   keysOf: (paper: Paper) => string[],
+  limit: number,
 ): CountEntry[] {
   const counts = new Map<string, { count: number; included: number }>()
   for (const paper of papers) {
@@ -226,7 +234,7 @@ function topBy(
   return [...counts.entries()]
     .map(([key, entry]) => ({ key, ...entry }))
     .sort((a, b) => b.count - a.count)
-    .slice(0, TOP_LIST)
+    .slice(0, limit)
 }
 
 function buildMetrics(

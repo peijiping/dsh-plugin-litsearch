@@ -140,3 +140,52 @@ export function AlertIcon(): ReactElement {
     </svg>
   )
 }
+
+/** 筛选：漏斗。 */
+export function FilterIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M3.5 5h17l-6.5 7.5V19l-4 2v-8.5z" />
+    </svg>
+  )
+}
+
+/** 发起时间：时钟。 */
+export function ClockIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3.2 1.9" />
+    </svg>
+  )
+}
+
+/** 加入对话：带文字行的对话气泡。 */
+export function ChatIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M4 5.5h16v11H9l-5 4z" />
+      <path d="M8 9.5h8M8 12.5h5" />
+    </svg>
+  )
+}
+
+/** 下载：箭头落入托盘。 */
+export function DownloadIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M12 4v11" />
+      <path d="M7.5 10.5 12 15l4.5-4.5" />
+      <path d="M4.5 19.5h15" />
+    </svg>
+  )
+}
+
+/** Zotero：书签。 */
+export function ZoteroIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M6.5 4.5h11v16L12 16.5l-5.5 4z" />
+    </svg>
+  )
+}
