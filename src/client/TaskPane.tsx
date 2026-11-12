@@ -366,7 +366,35 @@ export function TaskPane({
               })}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              title={t('task.insertToChatHint')}
+              onClick={insertTask}
+            >
+              {t('task.insertToChat')}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              disabled={active || view.busy}
+              onClick={() => {
+                void view.rerun()
+              }}
+            >
+              {t('task.rerun')}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => view.reload()}
+            >
+              {t('task.refresh')}
+            </Button>
             <IconButton label={t('rounds.open')} onClick={() => setShowRounds(true)}>
               <HistoryIcon />
             </IconButton>
@@ -475,28 +503,8 @@ export function TaskPane({
         <div style={{ ...statusStyle, color: ERROR }}>{detail.error}</div>
       )}
 
-      <div style={{ ...formStyle, gap: 8 }}>
-        <Button
-          variant="outline"
-          size="sm"
-          type="button"
-          disabled={active || view.busy}
-          onClick={() => {
-            void view.rerun()
-          }}
-        >
-          {t('task.rerun')}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          type="button"
-          title={t('task.insertToChatHint')}
-          onClick={insertTask}
-        >
-          {t('task.insertToChat')}
-        </Button>
-        {active && (
+      {active && (
+        <div style={{ ...formStyle, gap: 8 }}>
           <Button
             variant="ghost"
             size="sm"
@@ -508,11 +516,8 @@ export function TaskPane({
           >
             {t('task.cancel')}
           </Button>
-        )}
-        <button type="button" style={linkButtonStyle} onClick={() => view.reload()}>
-          {t('task.refresh')}
-        </button>
-      </div>
+        </div>
+      )}
 
       {toast !== '' && <div style={toastStyle}>{toast}</div>}
 
