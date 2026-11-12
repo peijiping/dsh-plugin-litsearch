@@ -39,6 +39,7 @@ import {
   IconButton,
   ResultIcon,
   RoundIcon,
+  SpinnerIcon,
   TaskListIcon,
   ZoteroIcon,
 } from './icons'
@@ -526,7 +527,7 @@ export function TaskPane({
             </div>
           </section>
 
-          <section style={ROUND_BOX_STYLE}>
+          <section style={active ? ROUND_BOX_ACTIVE_STYLE : ROUND_BOX_STYLE}>
             <div style={ROUND_LINE_STYLE}>
               <span style={ROUND_ICON_STYLE} aria-hidden>
                 <ClockIcon />
@@ -539,12 +540,12 @@ export function TaskPane({
               </span>
             </div>
             <div
-              style={ROUND_LINE_STYLE}
+              style={active ? ROUND_RUNNING_ROW_STYLE : ROUND_LINE_STYLE}
               role={active ? 'status' : undefined}
               aria-live={active ? 'polite' : undefined}
             >
-              <span style={ROUND_ICON_STYLE} aria-hidden>
-                <RoundIcon />
+              <span style={active ? ROUND_RUNNING_ICON_STYLE : ROUND_ICON_STYLE} aria-hidden>
+                {active ? <SpinnerIcon /> : <RoundIcon />}
               </span>
               <span style={active ? ROUND_RUNNING_TEXT_STYLE : ROUND_TEXT_STYLE}>{roundLine}</span>
             </div>
@@ -814,10 +815,15 @@ export function TaskPane({
               />
             </>
           ) : active ? (
-            <div style={ROUND_RESULTS_HINT_STYLE}>
-              {roundCount > 0
-                ? tpl(t('task.roundRunningResults'), { round: roundCount })
-                : t('task.running')}
+            <div style={ROUND_RESULTS_HINT_STYLE} role="status" aria-live="polite">
+              <span style={ROUND_RESULTS_ICON_STYLE} aria-hidden>
+                <SpinnerIcon />
+              </span>
+              <span>
+                {roundCount > 0
+                  ? tpl(t('task.roundRunningResults'), { round: roundCount })
+                  : t('task.running')}
+              </span>
             </div>
           ) : (
             !view.loading && (
@@ -999,6 +1005,14 @@ const ROUND_BOX_STYLE: CSSProperties = {
   background: 'rgba(80,140,255,0.05)',
 }
 
+/** 检索进行中：整框加深蓝色底与描边，让「还在跑」一眼可见。 */
+const ROUND_BOX_ACTIVE_STYLE: CSSProperties = {
+  ...ROUND_BOX_STYLE,
+  border: '1px solid rgba(80,140,255,0.65)',
+  background: 'rgba(80,140,255,0.12)',
+  boxShadow: '0 0 0 1px rgba(80,140,255,0.18)',
+}
+
 const ROUND_LINE_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
@@ -1021,10 +1035,28 @@ const ROUND_TEXT_STYLE: CSSProperties = {
   wordBreak: 'break-word',
 }
 
+/** 运行中的那一行：独立高亮带，配旋转图标。 */
+const ROUND_RUNNING_ROW_STYLE: CSSProperties = {
+  ...ROUND_LINE_STYLE,
+  alignItems: 'center',
+  margin: '0 -3px',
+  padding: '4px 6px',
+  borderRadius: 6,
+  border: '1px solid rgba(80,140,255,0.5)',
+  background: 'rgba(80,140,255,0.18)',
+  fontSize: 12.5,
+}
+
+const ROUND_RUNNING_ICON_STYLE: CSSProperties = {
+  ...ROUND_ICON_STYLE,
+  opacity: 1,
+  marginTop: 0,
+}
+
 const ROUND_RUNNING_TEXT_STYLE: CSSProperties = {
   ...ROUND_TEXT_STYLE,
   color: ACCENT,
-  fontWeight: 600,
+  fontWeight: 650,
 }
 
 const ROUND_ACTION_STYLE: CSSProperties = {
@@ -1303,10 +1335,25 @@ function zoteroToast(
   return tpl(t('pdf.zoteroPartial'), { saved, failed, message: detail })
 }
 
+/** 结果页「检索还在进行」的提示条：蓝色高亮块 + 旋转图标。 */
 const ROUND_RESULTS_HINT_STYLE: CSSProperties = {
-  padding: '10px 8px',
-  fontSize: 12,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 7,
+  marginTop: 2,
+  padding: '9px 11px',
+  borderRadius: 8,
+  border: '1px solid rgba(80,140,255,0.5)',
+  background: 'rgba(80,140,255,0.12)',
+  fontSize: 12.5,
+  fontWeight: 600,
+  lineHeight: 1.45,
   color: ACCENT,
+}
+
+const ROUND_RESULTS_ICON_STYLE: CSSProperties = {
+  display: 'inline-flex',
+  flexShrink: 0,
 }
 
 const RIS_FALLBACK_STYLE: CSSProperties = {

@@ -243,6 +243,11 @@ export function TaskFilters({
     onChange({ ...value, ...next })
   }
 
+  const resetAll = (): void => {
+    setCustomYear(false)
+    onChange({})
+  }
+
   const chips = collectActiveFilters(value, t, queries, groups)
   const count = chips.length
   const preset = customYear ? 'custom' : yearPresetOf(value)
@@ -277,7 +282,7 @@ export function TaskFilters({
           </span>
         </button>
         {count > 0 && (
-          <button type="button" style={RESET_STYLE} onClick={() => onChange({})}>
+          <button type="button" style={RESET_STYLE} onClick={resetAll}>
             {t('filter.reset')}
           </button>
         )}
@@ -293,7 +298,7 @@ export function TaskFilters({
         contentClassName={FILTER_CONTENT_CLASS}
         footer={
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <button type="button" style={RESET_STYLE} onClick={() => onChange({})}>
+            <button type="button" style={RESET_STYLE} onClick={resetAll}>
               {t('filter.reset')}
             </button>
             <Button variant="outline" size="sm" type="button" onClick={() => setOpen(false)}>

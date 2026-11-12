@@ -103,6 +103,7 @@ export function QueryEditor({
         >
           {draft.enabled ? '●' : '○'}
         </button>
+        <span style={nameLabelStyle}>{t('search.nameLabel')}</span>
         <Input
           value={draft.name}
           placeholder={t('search.namePlaceholder')}
@@ -124,12 +125,12 @@ export function QueryEditor({
         {canRemove && (
           <button
             type="button"
-            style={linkButtonStyle}
+            style={{ ...linkButtonStyle, whiteSpace: 'nowrap', flexShrink: 0 }}
             title={t('search.removeQuery')}
             aria-label={t('search.removeQuery')}
             onClick={onRemove}
           >
-            ×
+            {t('search.removeQueryText')}
           </button>
         )}
       </div>
@@ -209,6 +210,13 @@ const enableButtonStyle: CSSProperties = {
   fontSize: 13,
   lineHeight: 1,
   cursor: 'pointer',
+}
+
+const nameLabelStyle: CSSProperties = {
+  flex: '0 0 auto',
+  fontSize: 11,
+  opacity: 0.7,
+  whiteSpace: 'nowrap',
 }
 
 const nameInputStyle: CSSProperties = {

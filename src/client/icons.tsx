@@ -120,6 +120,25 @@ export function RoundIcon(): ReactElement {
   )
 }
 
+/** 检索进行中：旋转的缺口圆环（SMIL 动画，无需注入 keyframes）。 */
+export function SpinnerIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <circle cx="12" cy="12" r="8.5" opacity="0.3" />
+      <path d="M20.5 12a8.5 8.5 0 0 0-8.5-8.5" strokeWidth={2.6}>
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          from="0 12 12"
+          to="360 12 12"
+          dur="0.9s"
+          repeatCount="indefinite"
+        />
+      </path>
+    </svg>
+  )
+}
+
 /** 本轮结果：清单行。 */
 export function ResultIcon(): ReactElement {
   return (
