@@ -7,7 +7,7 @@
 
 import { useState, type CSSProperties, type ReactElement } from 'react'
 
-import { Button, Input, Pill } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Input, Modal, Pill } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import { MAX_LIMIT } from '../search/config'
 import type { SortMode, SourceId, TaskDetail, TaskLanguage } from '../search/types'
@@ -134,166 +134,160 @@ export function ConditionEditor({ t, detail, onSaved, onCancel }: Props): ReactE
   }
 
   return (
-    <section style={PANEL_STYLE}>
-      <div style={HEAD_STYLE}>
-        <strong style={{ fontSize: 12 }}>{t('condition.title')}</strong>
-        <button type="button" style={linkButtonStyle} onClick={onCancel}>
-          {t('condition.cancel')}
-        </button>
-      </div>
-
-      <div style={QUERY_LIST_STYLE}>
-        {drafts.map((draft, index) => (
-          <QueryEditor
-            key={index}
-            t={t}
-            index={index}
-            draft={draft}
-            canRemove={drafts.length > 1}
-            onChange={(patch) => patchQuery(index, patch)}
-            onRemove={() => setDrafts((previous) => previous.filter((_, i) => i !== index))}
-          />
-        ))}
-        <button
-          type="button"
-          style={linkButtonStyle}
-          onClick={() => setDrafts((previous) => [...previous, newQuery()])}
-        >
-          {t('search.addQuery')}
-        </button>
-      </div>
-
-      <div style={sourceRowStyle}>
-        <span style={FIELD_LABEL_STYLE}>{t('search.sources')}</span>
-        {SOURCE_IDS.map((id) => (
-          <span key={id} title={sourceSyntaxTitle(health?.sources, id)}>
-            <Pill
-              type="button"
-              active={sources.includes(id)}
-              aria-pressed={sources.includes(id)}
-              onClick={() => toggleSource(id)}
-            >
-              {t(`source.${id}`)}
-            </Pill>
-          </span>
-        ))}
-      </div>
-
-      <SyntaxHint
-        t={t}
-        sources={sources}
-        texts={drafts.filter((draft) => draft.enabled).map((draft) => draft.text)}
-        infos={health?.sources}
-      />
-
-      <div style={ROW_STYLE}>
-        <label style={FIELD_STYLE}>
-          <span style={FIELD_LABEL_STYLE}>{t('condition.pageSize')}</span>
-          <Input
-            type="number"
-            min={1}
-            max={MAX_LIMIT}
-            value={pageSize}
-            style={NUMBER_INPUT_STYLE}
-            onChange={(event) => setPageSize(event.target.value)}
-          />
-        </label>
-        <label style={FIELD_STYLE}>
-          <span style={FIELD_LABEL_STYLE}>{t('condition.yearFrom')}</span>
-          <Input
-            inputMode="numeric"
-            placeholder="2000"
-            value={yearFrom}
-            style={NUMBER_INPUT_STYLE}
-            onChange={(event) => setYearFrom(event.target.value)}
-          />
-        </label>
-        <label style={FIELD_STYLE}>
-          <span style={FIELD_LABEL_STYLE}>{t('condition.yearTo')}</span>
-          <Input
-            inputMode="numeric"
-            placeholder="2026"
-            value={yearTo}
-            style={NUMBER_INPUT_STYLE}
-            onChange={(event) => setYearTo(event.target.value)}
-          />
-        </label>
-      </div>
-
-      <div style={ROW_STYLE}>
-        <label style={CHECK_STYLE}>
-          <input
-            type="checkbox"
-            checked={openAccessOnly}
-            onChange={(event) => setOpenAccessOnly(event.target.checked)}
-          />
-          {t('condition.openAccess')}
-        </label>
-        <label style={FIELD_STYLE}>
-          <span style={FIELD_LABEL_STYLE}>{t('filter.language')}</span>
-          <select
-            style={SELECT_STYLE}
-            value={language}
-            onChange={(event) => setLanguage(event.target.value as TaskLanguage)}
+    <Modal
+      open
+      onClose={onCancel}
+      title={t('condition.title')}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button variant="outline" size="sm" type="button" onClick={onCancel}>
+            {t('condition.cancel')}
+          </Button>
+          <Button variant="primary" size="sm" type="button" disabled={saving} onClick={save}>
+            {saving ? t('condition.saving') : t('condition.save')}
+          </Button>
+        </div>
+      }
+    >
+      <div style={BODY_STYLE}>
+        <div style={QUERY_LIST_STYLE}>
+          {drafts.map((draft, index) => (
+            <QueryEditor
+              key={index}
+              t={t}
+              index={index}
+              draft={draft}
+              canRemove={drafts.length > 1}
+              onChange={(patch) => patchQuery(index, patch)}
+              onRemove={() => setDrafts((previous) => previous.filter((_, i) => i !== index))}
+            />
+          ))}
+          <button
+            type="button"
+            style={linkButtonStyle}
+            onClick={() => setDrafts((previous) => [...previous, newQuery()])}
           >
-            {LANGUAGES.map((value) => (
-              <option key={value} value={value}>
-                {t(`lang.${value}`)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={FIELD_STYLE}>
-          <span style={FIELD_LABEL_STYLE}>{t('filter.sort')}</span>
-          <select
-            style={SELECT_STYLE}
-            value={sort}
-            onChange={(event) => setSort(event.target.value as SortMode)}
-          >
-            {SORTS.map((value) => (
-              <option key={value} value={value}>
-                {t(`sort.${value}`)}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+            {t('search.addQuery')}
+          </button>
+        </div>
 
-      <label style={{ ...FIELD_STYLE, flexDirection: 'column', alignItems: 'stretch' }}>
-        <span style={FIELD_LABEL_STYLE}>{t('condition.types')}</span>
-        <Input
-          value={types}
-          placeholder={t('condition.typesPlaceholder')}
-          onChange={(event) => setTypes(event.target.value)}
+        <div style={sourceRowStyle}>
+          <span style={FIELD_LABEL_STYLE}>{t('search.sources')}</span>
+          {SOURCE_IDS.map((id) => (
+            <span key={id} title={sourceSyntaxTitle(health?.sources, id)}>
+              <Pill
+                type="button"
+                active={sources.includes(id)}
+                aria-pressed={sources.includes(id)}
+                onClick={() => toggleSource(id)}
+              >
+                {t(`source.${id}`)}
+              </Pill>
+            </span>
+          ))}
+        </div>
+
+        <SyntaxHint
+          t={t}
+          sources={sources}
+          texts={drafts.filter((draft) => draft.enabled).map((draft) => draft.text)}
+          infos={health?.sources}
         />
-      </label>
 
-      {error !== null && <div style={{ fontSize: 12, color: ERROR }}>{error}</div>}
+        <div style={ROW_STYLE}>
+          <label style={FIELD_STYLE}>
+            <span style={FIELD_LABEL_STYLE}>{t('condition.pageSize')}</span>
+            <Input
+              type="number"
+              min={1}
+              max={MAX_LIMIT}
+              value={pageSize}
+              style={NUMBER_INPUT_STYLE}
+              onChange={(event) => setPageSize(event.target.value)}
+            />
+          </label>
+          <label style={FIELD_STYLE}>
+            <span style={FIELD_LABEL_STYLE}>{t('condition.yearFrom')}</span>
+            <Input
+              inputMode="numeric"
+              placeholder="2000"
+              value={yearFrom}
+              style={NUMBER_INPUT_STYLE}
+              onChange={(event) => setYearFrom(event.target.value)}
+            />
+          </label>
+          <label style={FIELD_STYLE}>
+            <span style={FIELD_LABEL_STYLE}>{t('condition.yearTo')}</span>
+            <Input
+              inputMode="numeric"
+              placeholder="2026"
+              value={yearTo}
+              style={NUMBER_INPUT_STYLE}
+              onChange={(event) => setYearTo(event.target.value)}
+            />
+          </label>
+        </div>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <Button variant="primary" size="sm" type="button" disabled={saving} onClick={save}>
-          {saving ? t('condition.saving') : t('condition.save')}
-        </Button>
+        <div style={ROW_STYLE}>
+          <label style={CHECK_STYLE}>
+            <input
+              type="checkbox"
+              checked={openAccessOnly}
+              onChange={(event) => setOpenAccessOnly(event.target.checked)}
+            />
+            {t('condition.openAccess')}
+          </label>
+          <label style={FIELD_STYLE}>
+            <span style={FIELD_LABEL_STYLE}>{t('filter.language')}</span>
+            <select
+              style={SELECT_STYLE}
+              value={language}
+              onChange={(event) => setLanguage(event.target.value as TaskLanguage)}
+            >
+              {LANGUAGES.map((value) => (
+                <option key={value} value={value}>
+                  {t(`lang.${value}`)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={FIELD_STYLE}>
+            <span style={FIELD_LABEL_STYLE}>{t('filter.sort')}</span>
+            <select
+              style={SELECT_STYLE}
+              value={sort}
+              onChange={(event) => setSort(event.target.value as SortMode)}
+            >
+              {SORTS.map((value) => (
+                <option key={value} value={value}>
+                  {t(`sort.${value}`)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <label style={{ ...FIELD_STYLE, flexDirection: 'column', alignItems: 'stretch' }}>
+          <span style={FIELD_LABEL_STYLE}>{t('condition.types')}</span>
+          <Input
+            value={types}
+            placeholder={t('condition.typesPlaceholder')}
+            onChange={(event) => setTypes(event.target.value)}
+          />
+        </label>
+
+        {error !== null && <div style={{ fontSize: 12, color: ERROR }}>{error}</div>}
       </div>
-    </section>
+    </Modal>
   )
 }
 
-const PANEL_STYLE: CSSProperties = {
+const BODY_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 8,
-  padding: '8px 9px',
-  borderRadius: 7,
-  border: '1px solid rgba(80,140,255,0.3)',
-  background: 'rgba(80,140,255,0.06)',
-}
-
-const HEAD_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
+  maxHeight: '60vh',
+  overflowY: 'auto',
 }
 
 const QUERY_LIST_STYLE: CSSProperties = {

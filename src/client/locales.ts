@@ -75,8 +75,12 @@ const zh: Record<string, string> = {
   'task.pageSize': '每源 {n} 条',
   'task.meta': '{origin} · {date}',
   'task.empty': '没有检索到匹配文献，可重跑或调整检索式。',
+  'task.conditionSources': '数据源：{sources}',
+  'task.conditionYear': '年份 {value}',
+  'task.roundLine': '第 {round} 轮 · {status} · {date}',
+  'task.roundStatusLine': '{status} · {date}',
 
-  'condition.edit': '改条件',
+  'condition.edit': '修改查询条件',
   'condition.title': '编辑检索条件',
   'condition.pageSize': '每源条数',
   'condition.yearFrom': '起始年份',
@@ -101,6 +105,8 @@ const zh: Record<string, string> = {
 
   'filter.show': '筛选',
   'filter.hide': '收起筛选',
+  'filter.title': '筛选条件',
+  'filter.done': '完成',
   'filter.reset': '重置',
   'filter.keyword': '关键词',
   'filter.keywordPlaceholder': '标题/摘要',
@@ -618,6 +624,10 @@ const en: Record<string, string> = {
   'task.pageSize': '{n} per source',
   'task.meta': '{origin} · {date}',
   'task.empty': 'No matching papers. Run again or adjust the query.',
+  'task.conditionSources': 'Sources: {sources}',
+  'task.conditionYear': 'Year {value}',
+  'task.roundLine': 'Round {round} · {status} · {date}',
+  'task.roundStatusLine': '{status} · {date}',
 
   'condition.edit': 'Edit conditions',
   'condition.title': 'Edit search conditions',
@@ -644,6 +654,8 @@ const en: Record<string, string> = {
 
   'filter.show': 'Filters',
   'filter.hide': 'Hide filters',
+  'filter.title': 'Filters',
+  'filter.done': 'Done',
   'filter.reset': 'Reset',
   'filter.keyword': 'Keyword',
   'filter.keywordPlaceholder': 'title/abstract',

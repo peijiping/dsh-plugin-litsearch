@@ -30,7 +30,7 @@ import { ConditionEditor } from './ConditionEditor'
 import { paperText, papersText, taskText } from './compose'
 import { FullTextTab, type FullTextView } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
-import { HistoryIcon, IconButton, TaskListIcon } from './icons'
+import { AlertIcon, HistoryIcon, IconButton, ResultIcon, RoundIcon, TaskListIcon } from './icons'
 import { insertBuilt, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
 import { NotesTab } from './NotesTab'
@@ -42,7 +42,6 @@ import { TaskListDialog } from './TaskListDialog'
 import {
   ACCENT,
   ERROR,
-  formStyle,
   linkButtonStyle,
   linkStyle,
   listStyle,
@@ -352,6 +351,75 @@ export function TaskPane({
       ? 0
       : Math.round((overviewAvailable / overview.loaded) * 100)
 
+  // 左栏：任务当前生效的检索条件（纯文本回显，改条件走弹窗）。
+  const conditionMeta: string[] = [tpl(t('task.pageSize'), { n: detail.conditions.pageSize })]
+  if (detail.conditions.yearFrom !== undefined || detail.conditions.yearTo !== undefined) {
+    conditionMeta.push(
+      tpl(t('task.conditionYear'), {
+        value: `${detail.conditions.yearFrom ?? ''}–${detail.conditions.yearTo ?? ''}`,
+      }),
+    )
+  }
+  if (detail.conditions.language !== 'any') {
+    conditionMeta.push(
+      tpl(t('filter.languageChip'), { value: t(`lang.${detail.conditions.language}`) }),
+    )
+  }
+  if (detail.conditions.openAccessOnly) conditionMeta.push(t('condition.openAccess'))
+  if ((detail.conditions.types ?? []).length > 0) {
+    conditionMeta.push(
+      tpl(t('filter.typeChip'), { value: (detail.conditions.types ?? []).join(', ') }),
+    )
+  }
+  conditionMeta.push(tpl(t('filter.sortChip'), { value: t(`sort.${detail.conditions.sort}`) }))
+
+  // 右栏：当前轮次的进度 / 结果与提醒。
+  const rounds = detail.rounds ?? []
+  const currentRound = rounds.length === 0 ? undefined : rounds[rounds.length - 1]
+  const currentRoundNo = currentRound?.index ?? roundCount
+  const currentStats = currentRound?.stats ?? detail.stats
+  const roundLine = active
+    ? currentRoundNo > 0
+      ? detail.progress === undefined
+        ? tpl(t('task.roundRunning'), { round: currentRoundNo })
+        : tpl(t('task.roundRunningDetail'), {
+            round: currentRoundNo,
+            i: detail.progress.queryIndex,
+            n: detail.progress.queryTotal,
+          })
+      : detail.progress === undefined
+        ? t('task.running')
+        : tpl(t('task.progress'), {
+            i: detail.progress.queryIndex,
+            n: detail.progress.queryTotal,
+          })
+    : currentRoundNo > 0
+      ? tpl(t('task.roundLine'), {
+          round: currentRoundNo,
+          status: t(`task.status.${currentRound?.status ?? detail.status}`),
+          date: formatDate(currentRound?.createdAt ?? detail.createdAt),
+        })
+      : tpl(t('task.roundStatusLine'), {
+          status: t(`task.status.${detail.status}`),
+          date: formatDate(detail.createdAt),
+        })
+  const statsLine = tpl(t('task.stats'), {
+    raw: currentStats.rawHits,
+    deduped: currentStats.deduped,
+    loaded: currentRound?.stats?.loaded ?? detail.result.totalLoaded,
+  })
+  const failedLine = failed
+    .map((source) =>
+      tpl(t('error.sourceFailed'), {
+        source: t(`source.${source.id}`),
+        message: source.error ?? '',
+      }),
+    )
+    .join('；')
+  const skippedLine = tpl(t('task.sourceSkipped'), {
+    sources: skipped.map((source) => t(`source.${source.id}`)).join(t('task.sourceListSeparator')),
+  })
+
   // tab 用非 button 容器渲染：宿主的 button 全局样式会给未选中项画出深色底线。
   const tabItems: { key: TabKey; label: string }[] = [
     { key: 'results', label: tpl(t('tab.results'), { n: page?.total ?? detail.result.totalLoaded }) },
@@ -364,7 +432,7 @@ export function TaskPane({
 
   return (
     <div style={TASK_PANEL_STYLE}>
-      <header>
+      <header style={HEADER_STYLE}>
         <div style={HEADER_TOP_STYLE}>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ ...titleStyle, fontSize: 14 }}>{detail.title}</div>
@@ -412,27 +480,101 @@ export function TaskPane({
             </IconButton>
           </div>
         </div>
-        <div style={{ ...metaStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ ...statusChipStyle, color: statusColor(detail) }}>
-            {t(`task.status.${detail.status}`)}
-          </span>
-          <span>{tpl(t('rounds.badge'), { n: detail.roundCount ?? 0 })}</span>
-          <span>{tpl(t('task.sourceCount'), { n: detail.conditions.sources.length })}</span>
-          <span>{tpl(t('task.pageSize'), { n: detail.conditions.pageSize })}</span>
-          <button
-            type="button"
-            style={linkButtonStyle}
-            disabled={active}
-            title={active ? t('task.running') : t('condition.title')}
-            onClick={() => setEditingConditions((previous) => !previous)}
-          >
-            {t('condition.edit')}
-          </button>
-          {detail.fromTaskId !== undefined && (
-            <span title={detail.fromTaskId}>
-              {tpl(t('ledger.fromTask'), { id: detail.fromTaskId })}
-            </span>
-          )}
+        <div style={HEADER_SPLIT_STYLE}>
+          <section style={CONDITION_BOX_STYLE}>
+            <div style={BOX_HEAD_STYLE}>
+              <button
+                type="button"
+                style={linkButtonStyle}
+                disabled={active}
+                title={active ? t('task.running') : t('condition.title')}
+                onClick={() => setEditingConditions(true)}
+              >
+                {t('condition.edit')}
+              </button>
+            </div>
+            <div style={CONDITION_BODY_STYLE}>
+              {detail.conditions.queries
+                .filter((query) => query.enabled)
+                .map((query) => (
+                  <div key={query.id} style={CONDITION_QUERY_STYLE} title={query.text}>
+                    {query.name !== '' && (
+                      <span style={CONDITION_QUERY_NAME_STYLE}>{query.name}</span>
+                    )}
+                    <span>{query.text}</span>
+                  </div>
+                ))}
+              <div style={CONDITION_META_STYLE}>
+                {tpl(t('task.conditionSources'), {
+                  sources: detail.conditions.sources.map((id) => t(`source.${id}`)).join(' / '),
+                })}
+              </div>
+              <div style={CONDITION_META_STYLE}>{conditionMeta.join(' · ')}</div>
+              {detail.fromTaskId !== undefined && (
+                <div style={CONDITION_META_STYLE} title={detail.fromTaskId}>
+                  {tpl(t('ledger.fromTask'), { id: detail.fromTaskId })}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section style={ROUND_BOX_STYLE}>
+            <div
+              style={ROUND_LINE_STYLE}
+              role={active ? 'status' : undefined}
+              aria-live={active ? 'polite' : undefined}
+            >
+              <span style={ROUND_ICON_STYLE} aria-hidden>
+                <RoundIcon />
+              </span>
+              <span style={active ? ROUND_RUNNING_TEXT_STYLE : ROUND_TEXT_STYLE}>{roundLine}</span>
+            </div>
+            <div style={ROUND_LINE_STYLE}>
+              <span style={ROUND_ICON_STYLE} aria-hidden>
+                <ResultIcon />
+              </span>
+              <span style={ROUND_TEXT_STYLE}>{statsLine}</span>
+            </div>
+            {failed.length > 0 && (
+              <div style={{ ...ROUND_LINE_STYLE, color: ERROR }}>
+                <span style={ROUND_ICON_STYLE} aria-hidden>
+                  <AlertIcon />
+                </span>
+                <span style={ROUND_TEXT_STYLE}>{failedLine}</span>
+              </div>
+            )}
+            {skipped.length > 0 && (
+              <div style={ROUND_LINE_STYLE}>
+                <span style={ROUND_ICON_STYLE} aria-hidden>
+                  <AlertIcon />
+                </span>
+                <span style={ROUND_TEXT_STYLE}>{skippedLine}</span>
+              </div>
+            )}
+            {detail.error !== undefined && (
+              <div style={{ ...ROUND_LINE_STYLE, color: ERROR }}>
+                <span style={ROUND_ICON_STYLE} aria-hidden>
+                  <AlertIcon />
+                </span>
+                <span style={ROUND_TEXT_STYLE}>{detail.error}</span>
+              </div>
+            )}
+            {active && (
+              <div style={ROUND_ACTION_STYLE}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  disabled={view.busy}
+                  onClick={() => {
+                    void view.cancel()
+                  }}
+                >
+                  {t('task.cancel')}
+                </Button>
+              </div>
+            )}
+          </section>
         </div>
       </header>
 
@@ -447,76 +589,6 @@ export function TaskPane({
             view.reload()
           }}
         />
-      )}
-
-      {active && (
-        <div style={ROUND_BANNER_STYLE} role="status" aria-live="polite">
-          {roundCount > 0
-            ? detail.progress === undefined
-              ? tpl(t('task.roundRunning'), { round: roundCount })
-              : tpl(t('task.roundRunningDetail'), {
-                  round: roundCount,
-                  i: detail.progress.queryIndex,
-                  n: detail.progress.queryTotal,
-                })
-            : detail.progress === undefined
-              ? t('task.running')
-              : tpl(t('task.progress'), {
-                  i: detail.progress.queryIndex,
-                  n: detail.progress.queryTotal,
-                })}
-        </div>
-      )}
-
-      <div style={statusStyle}>
-        {tpl(t('task.stats'), {
-          raw: detail.stats.rawHits,
-          deduped: detail.stats.deduped,
-          loaded: detail.result.totalLoaded,
-        })}
-      </div>
-
-      {failed.length > 0 && (
-        <div style={{ ...statusStyle, color: ERROR }}>
-          {failed
-            .map((source) =>
-              tpl(t('error.sourceFailed'), {
-                source: t(`source.${source.id}`),
-                message: source.error ?? '',
-              }),
-            )
-            .join('；')}
-        </div>
-      )}
-
-      {skipped.length > 0 && (
-        <div style={statusStyle}>
-          {tpl(t('task.sourceSkipped'), {
-            sources: skipped
-              .map((source) => t(`source.${source.id}`))
-              .join(t('task.sourceListSeparator')),
-          })}
-        </div>
-      )}
-
-      {detail.error !== undefined && (
-        <div style={{ ...statusStyle, color: ERROR }}>{detail.error}</div>
-      )}
-
-      {active && (
-        <div style={{ ...formStyle, gap: 8 }}>
-          <Button
-            variant="ghost"
-            size="sm"
-            type="button"
-            disabled={view.busy}
-            onClick={() => {
-              void view.cancel()
-            }}
-          >
-            {t('task.cancel')}
-          </Button>
-        </div>
       )}
 
       {toast !== '' && <div style={toastStyle}>{toast}</div>}
@@ -819,11 +891,112 @@ export function TaskPane({
   )
 }
 
+const HEADER_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+}
+
 const HEADER_TOP_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   justifyContent: 'space-between',
   gap: 8,
+}
+
+/** 标题下方左右两栏：左=查询条件，右=本轮结果与提醒。窄面板下自动上下堆叠。 */
+const HEADER_SPLIT_STYLE: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+  gap: 8,
+}
+
+const CONDITION_BOX_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  minWidth: 0,
+  padding: '6px 8px',
+  borderRadius: 7,
+  border: '1px solid rgba(127,127,127,0.2)',
+  background: 'rgba(127,127,127,0.05)',
+}
+
+const BOX_HEAD_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+}
+
+const CONDITION_BODY_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 3,
+  minWidth: 0,
+  maxHeight: 132,
+  overflowY: 'auto',
+}
+
+const CONDITION_QUERY_STYLE: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.45,
+  wordBreak: 'break-word',
+}
+
+const CONDITION_QUERY_NAME_STYLE: CSSProperties = {
+  marginRight: 4,
+  opacity: 0.6,
+}
+
+const CONDITION_META_STYLE: CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.45,
+  opacity: 0.72,
+  wordBreak: 'break-word',
+}
+
+const ROUND_BOX_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  minWidth: 0,
+  padding: '6px 8px',
+  borderRadius: 7,
+  border: '1px solid rgba(80,140,255,0.22)',
+  background: 'rgba(80,140,255,0.05)',
+}
+
+const ROUND_LINE_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 6,
+  minWidth: 0,
+  fontSize: 11.5,
+  lineHeight: 1.45,
+}
+
+const ROUND_ICON_STYLE: CSSProperties = {
+  display: 'inline-flex',
+  flexShrink: 0,
+  marginTop: 1,
+  opacity: 0.8,
+}
+
+const ROUND_TEXT_STYLE: CSSProperties = {
+  minWidth: 0,
+  wordBreak: 'break-word',
+}
+
+const ROUND_RUNNING_TEXT_STYLE: CSSProperties = {
+  ...ROUND_TEXT_STYLE,
+  color: ACCENT,
+  fontWeight: 600,
+}
+
+const ROUND_ACTION_STYLE: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'flex-end',
 }
 
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
@@ -1068,31 +1241,6 @@ function zoteroToast(
   const detail = messages[0] ?? ''
   if (failed === 0 && detail === '') return tpl(t('pdf.zoteroDone'), { n: saved })
   return tpl(t('pdf.zoteroPartial'), { saved, failed, message: detail })
-}
-
-function statusColor(detail: TaskDetail): string {
-  if (detail.status === 'error') return ERROR
-  if (detail.status === 'partial') return '#b26a00'
-  if (detail.status === 'running' || detail.status === 'queued') return ACCENT
-  return 'inherit'
-}
-
-const statusChipStyle = {
-  fontWeight: 600,
-  fontSize: 12,
-} as const
-
-const ROUND_BANNER_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '6px 8px',
-  borderRadius: 6,
-  border: '1px solid rgba(80,140,255,0.35)',
-  background: 'rgba(80,140,255,0.10)',
-  color: ACCENT,
-  fontSize: 12,
-  fontWeight: 600,
 }
 
 const ROUND_RESULTS_HINT_STYLE: CSSProperties = {

@@ -109,3 +109,34 @@ export function AbstractIcon(): ReactElement {
     </svg>
   )
 }
+
+/** 检索轮次：循环箭头。 */
+export function RoundIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M20.5 12a8.5 8.5 0 1 1-2.7-6.2" />
+      <path d="M20.5 4v5h-5" />
+    </svg>
+  )
+}
+
+/** 本轮结果：清单行。 */
+export function ResultIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M8 6h12M8 12h12M8 18h8" />
+      <path d="M4 6h.01M4 12h.01M4 18h.01" strokeWidth={2.4} />
+    </svg>
+  )
+}
+
+/** 提醒 / 告警：三角感叹号。 */
+export function AlertIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M12 3.5 2.8 19.5a1.2 1.2 0 0 0 1 1.8h16.4a1.2 1.2 0 0 0 1-1.8z" />
+      <path d="M12 9.5v4.5" />
+      <path d="M12 17.5h.01" strokeWidth={2.4} />
+    </svg>
+  )
+}

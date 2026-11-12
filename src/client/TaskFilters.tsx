@@ -5,11 +5,13 @@
  * 打一次 Host；下拉类条件立即生效。父组件的筛选对象必须能直接喂给
  * `/results` 与 `/stats`。
  *
- * 顶部标签与「收起筛选（N）」共用 collectActiveFilters：新增筛选维度时
+ * 「筛选（N）」按钮与顶部标签共用 collectActiveFilters：新增筛选维度时
  * 只在那里加一项，不要另外单写 chip，否则两处会再次不同步。
  */
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+
+import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { QueryBlock, SortMode, SourceId, TaskGroup, TaskLanguage } from '../search/types'
 import type { ResultsQuery } from './api'
@@ -222,8 +224,8 @@ export function TaskFilters({
   return (
     <div style={WRAP_STYLE}>
       <div style={HEAD_ROW_STYLE}>
-        <button type="button" style={TOGGLE_STYLE} onClick={() => setOpen((next) => !next)}>
-          {open ? t('filter.hide') : t('filter.show')}
+        <button type="button" style={TOGGLE_STYLE} onClick={() => setOpen(true)}>
+          {t('filter.show')}
           {count === 0 ? '' : `（${count}）`}
         </button>
         {count > 0 && (
@@ -236,7 +238,21 @@ export function TaskFilters({
         ))}
       </div>
 
-      {open && (
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title={t('filter.title')}
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <button type="button" style={RESET_STYLE} onClick={() => onChange({})}>
+              {t('filter.reset')}
+            </button>
+            <Button variant="outline" size="sm" type="button" onClick={() => setOpen(false)}>
+              {t('filter.done')}
+            </Button>
+          </div>
+        }
+      >
         <div style={GRID_STYLE}>
           <label style={FIELD_STYLE}>
             <span>{t('filter.keyword')}</span>
@@ -432,7 +448,7 @@ export function TaskFilters({
             />
           </label>
         </div>
-      )}
+      </Modal>
     </div>
   )
 }
