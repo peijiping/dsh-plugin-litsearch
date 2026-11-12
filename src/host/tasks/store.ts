@@ -170,7 +170,7 @@ export class TaskStore {
     })
   }
 
-  /** 手动清理：删除所有未置顶任务，返回条数与释放的字节数。 */
+  /** 手动清理：删除所有未保留任务，返回条数与释放的字节数。 */
   async cleanupUnpinned(): Promise<{ removed: number; freedBytes: number }> {
     const targets = this.list().filter((summary) => !summary.pinned)
     let freedBytes = 0

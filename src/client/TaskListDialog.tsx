@@ -1,5 +1,5 @@
 /**
- * 右上角「搜索任务列表」弹窗：列出全部任务，可打开、重命名、删除。
+ * 右上角「搜索任务列表」弹窗：列出全部任务，可打开、重命名、保留、删除。
  *
  * 打开任务时用 `activateTask` 告诉 Host「进入该任务」，之后的模型检索默认
  * 落在这里；删除后同时清理本地 tab / 标题 / 待打开缓存。
@@ -121,6 +121,20 @@ export function TaskListDialog({
     }
   }
 
+  const toggleKeep = async (task: TaskSummary): Promise<void> => {
+    if (busyId !== null) return
+    setBusyId(task.id)
+    try {
+      await updateTask(task.id, { pinned: !task.pinned })
+      notifyTaskListChanged()
+      await load()
+    } catch (err) {
+      setError(messageOf(err))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const remove = async (task: TaskSummary): Promise<void> => {
     if (busyId !== null) return
     setBusyId(task.id)
@@ -226,6 +240,17 @@ export function TaskListDialog({
                 </div>
                 {editingId !== task.id && (
                   <div style={{ ...metaStyle, display: 'flex', gap: 10 }}>
+                    <button
+                      type="button"
+                      style={linkButtonStyle}
+                      title={t('task.pinHint')}
+                      disabled={busyId !== null}
+                      onClick={() => {
+                        void toggleKeep(task)
+                      }}
+                    >
+                      {task.pinned ? t('task.unpin') : t('task.pin')}
+                    </button>
                     <button
                       type="button"
                       style={linkButtonStyle}

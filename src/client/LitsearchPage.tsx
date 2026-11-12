@@ -285,7 +285,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
                   <button
                     type="button"
                     style={linkButtonStyle}
-                    title={task.pinned ? t('task.unpin') : t('task.pin')}
+                    title={t('task.pinHint')}
                     onClick={() => {
                       void togglePin(task)
                     }}

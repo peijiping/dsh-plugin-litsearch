@@ -103,7 +103,7 @@ export const Config = Schema.object({
   autoOpenTaskTab: Schema.boolean().default(DEFAULT_AUTO_OPEN).volatile(),
   /** 同时保留的任务 tab 上限。 */
   maxTaskTabs: Schema.number().default(DEFAULT_MAX_TASK_TABS).volatile(),
-  /** 任务保留天数与条数（置顶任务不受限）。 */
+  /** 任务保留天数与条数（已保留任务不受限）。 */
   taskRetentionDays: Schema.number().default(DEFAULT_RETENTION_DAYS).volatile(),
   taskRetentionCount: Schema.number().default(DEFAULT_RETENTION_COUNT).volatile(),
   /** 单任务结果上限。 */

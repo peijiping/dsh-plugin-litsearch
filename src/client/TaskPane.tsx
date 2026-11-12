@@ -5,7 +5,7 @@
  * 运行中的任务，完成即停。关闭 tab 时 `tab.signal` 中止请求。
  */
 
-import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -13,6 +13,7 @@ import type {
   AnnotationInput,
   Paper,
   Screening,
+  SortMode,
   TaskDetail,
   TaskStatsReport,
 } from '../search/types'
@@ -21,7 +22,6 @@ import {
   exportUrl,
   fetchStats,
   syncZotero,
-  updateTask,
   type ResultsQuery,
 } from './api'
 import { rememberTaskTitle } from './autoOpen'
@@ -42,7 +42,6 @@ import { TaskListDialog } from './TaskListDialog'
 import {
   ACCENT,
   ERROR,
-  actionRowStyle,
   formStyle,
   linkButtonStyle,
   linkStyle,
@@ -53,7 +52,7 @@ import {
   titleStyle,
   toastStyle,
 } from './styles'
-import { useTask } from './useTask'
+import { RESULT_PAGE_SIZE, useTask } from './useTask'
 
 /** 任务 tab 的资源地址前缀（与 index.ts 的 openTask 一致）。 */
 export const TASK_ADDRESS_PREFIX = 'dsh-resource://litsearch-task/'
@@ -112,7 +111,8 @@ export function TaskPane({
   const taskId = parseTaskId(info)
   const [filters, setFilters] = useState<ResultsQuery>({})
   const [tab, setTab] = useState<TabKey>('results')
-  const view = useTask(taskId, info.tab.signal, undefined, filters)
+  const view = useTask(taskId, info.tab.signal, RESULT_PAGE_SIZE, filters)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const [toast, setToast] = useState('')
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [editingConditions, setEditingConditions] = useState(false)
@@ -166,6 +166,11 @@ export function TaskPane({
     const timer = setTimeout(() => setToast(''), 2400)
     return () => clearTimeout(timer)
   }, [toast])
+
+  // 翻页或切换 tab 后回到内容顶部，避免停在上一页的滚动位置。
+  useEffect(() => {
+    bodyRef.current?.scrollTo({ top: 0 })
+  }, [view.pageIndex, tab])
 
   const insert = (paper: Paper): void => {
     void (async () => {
@@ -330,6 +335,10 @@ export function TaskPane({
   const failed = detail.result.sources.filter((source) => !source.ok && !source.skipped)
   const skipped = detail.result.sources.filter((source) => source.skipped)
   const page = view.page
+  /** 当前生效的排序：面板选择优先，未选择时跟随任务条件。 */
+  const sortValue: SortMode = filters.sort ?? detail.conditions.sort
+  const pageStart = page === null ? 0 : page.offset
+  const pageEnd = page === null ? 0 : page.offset + page.papers.length
   // 覆盖率恒为任务级口径（scope=task），不随结果页筛选变化。
   const coverage = overview?.fullText
   const overviewAvailable =
@@ -354,7 +363,7 @@ export function TaskPane({
   ]
 
   return (
-    <div style={panelStyle}>
+    <div style={TASK_PANEL_STYLE}>
       <header>
         <div style={HEADER_TOP_STYLE}>
           <div style={{ minWidth: 0, flex: 1 }}>
@@ -410,15 +419,6 @@ export function TaskPane({
           <span>{tpl(t('rounds.badge'), { n: detail.roundCount ?? 0 })}</span>
           <span>{tpl(t('task.sourceCount'), { n: detail.conditions.sources.length })}</span>
           <span>{tpl(t('task.pageSize'), { n: detail.conditions.pageSize })}</span>
-          <button
-            type="button"
-            style={linkButtonStyle}
-            onClick={() => {
-              void updatePin(taskId, detail, view.reload)
-            }}
-          >
-            {detail.pinned ? t('task.unpin') : t('task.pin')}
-          </button>
           <button
             type="button"
             style={linkButtonStyle}
@@ -567,7 +567,8 @@ export function TaskPane({
         ))}
       </div>
 
-      {tab === 'results' ? (
+      <div ref={bodyRef} style={SCROLL_BODY_STYLE}>
+        {tab === 'results' ? (
         <>
           {overview !== null && (
             <div style={COVERAGE_WRAP_STYLE}>
@@ -620,6 +621,47 @@ export function TaskPane({
             onChange={setFilters}
           />
 
+          {page !== null && page.total > 0 && (
+            <div style={PAGE_TOOLBAR_STYLE}>
+              <div style={PAGE_TOOLBAR_ROW_STYLE}>
+                <label style={PAGE_SORT_LABEL_STYLE}>
+                  <span>{t('filter.sort')}</span>
+                  <select
+                    style={PAGE_SORT_SELECT_STYLE}
+                    value={sortValue}
+                    onChange={(event) => {
+                      const next = event.target.value as SortMode
+                      // 与任务默认排序一致时不写进筛选对象，避免多出一条生效条件。
+                      setFilters((previous) => ({
+                        ...previous,
+                        sort: next === detail.conditions.sort ? undefined : next,
+                      }))
+                    }}
+                  >
+                    {SORT_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {t(`sort.${mode}`)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span style={PAGE_RANGE_STYLE}>
+                  {tpl(t('pager.range'), {
+                    from: pageStart + 1,
+                    to: pageEnd,
+                    total: page.total,
+                  })}
+                </span>
+              </div>
+              <Pager
+                t={t}
+                index={view.pageIndex}
+                count={view.pageCount}
+                onChange={view.goToPage}
+              />
+            </div>
+          )}
+
           {selected.size > 0 && (
             <BulkBar
               t={t}
@@ -669,21 +711,12 @@ export function TaskPane({
                   </li>
                 ))}
               </ul>
-              {page.papers.length < page.total && (
-                <div style={actionRowStyle}>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    disabled={view.loadingMore}
-                    onClick={() => {
-                      void view.loadMore()
-                    }}
-                  >
-                    {tpl(t('task.loadMore'), { shown: page.papers.length, total: page.total })}
-                  </Button>
-                </div>
-              )}
+              <Pager
+                t={t}
+                index={view.pageIndex}
+                count={view.pageCount}
+                onChange={view.goToPage}
+              />
             </>
           ) : active ? (
             <div style={ROUND_RESULTS_HINT_STYLE}>
@@ -756,7 +789,8 @@ export function TaskPane({
             setTab('results')
           }}
         />
-      )}
+        )}
+      </div>
 
       <RoundsDialog
         t={t}
@@ -793,6 +827,7 @@ const HEADER_TOP_STYLE: CSSProperties = {
 }
 
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
+const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
 const EXPORT_FORMATS = ['csv', 'ris', 'bibtex', 'md'] as const
 
 /** 筛读台账条：四态计数（点击筛选）+ 只看新增 + 导出当前筛选。 */
@@ -964,6 +999,62 @@ function BulkBar({
   )
 }
 
+/** 结果页翻页条：首页 / 上一页 / 页码 / 下一页 / 末页。单页时不渲染。 */
+function Pager({
+  t,
+  index,
+  count,
+  onChange,
+}: {
+  t: Translate
+  index: number
+  count: number
+  onChange(index: number): void
+}): ReactElement | null {
+  if (count <= 1) return null
+  const atStart = index <= 0
+  const atEnd = index >= count - 1
+  return (
+    <div style={PAGER_STYLE}>
+      <button
+        type="button"
+        style={atStart ? PAGER_BUTTON_DISABLED : PAGER_BUTTON}
+        disabled={atStart}
+        onClick={() => onChange(0)}
+      >
+        {t('pager.first')}
+      </button>
+      <button
+        type="button"
+        style={atStart ? PAGER_BUTTON_DISABLED : PAGER_BUTTON}
+        disabled={atStart}
+        onClick={() => onChange(index - 1)}
+      >
+        {t('pager.prev')}
+      </button>
+      <span style={PAGER_STATUS_STYLE}>
+        {tpl(t('pager.status'), { page: index + 1, pages: count })}
+      </span>
+      <button
+        type="button"
+        style={atEnd ? PAGER_BUTTON_DISABLED : PAGER_BUTTON}
+        disabled={atEnd}
+        onClick={() => onChange(index + 1)}
+      >
+        {t('pager.next')}
+      </button>
+      <button
+        type="button"
+        style={atEnd ? PAGER_BUTTON_DISABLED : PAGER_BUTTON}
+        disabled={atEnd}
+        onClick={() => onChange(count - 1)}
+      >
+        {t('pager.last')}
+      </button>
+    </div>
+  )
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -977,20 +1068,6 @@ function zoteroToast(
   const detail = messages[0] ?? ''
   if (failed === 0 && detail === '') return tpl(t('pdf.zoteroDone'), { n: saved })
   return tpl(t('pdf.zoteroPartial'), { saved, failed, message: detail })
-}
-
-async function updatePin(
-  id: string,
-  detail: TaskDetail,
-  reload: () => void,
-): Promise<void> {
-  try {
-    await updateTask(id, { pinned: !detail.pinned })
-    reload()
-  } catch {
-    // 置顶失败不阻塞正文；刷新一次即可看到真实状态。
-    reload()
-  }
 }
 
 function statusColor(detail: TaskDetail): string {
@@ -1169,3 +1246,77 @@ const QUICK_FILTER_ACTIVE_STYLE: CSSProperties = {
   color: '#508cff',
   fontWeight: 600,
 }
+
+// 任务面板占满 tab 高度，正文区自己滚动：宿主只给固定高度，不负责滚动长列表。
+const TASK_PANEL_STYLE: CSSProperties = {
+  ...panelStyle,
+  height: '100%',
+  minHeight: 0,
+  boxSizing: 'border-box',
+}
+const SCROLL_BODY_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  overflowX: 'hidden',
+}
+
+const PAGE_TOOLBAR_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  padding: '2px 0',
+}
+const PAGE_TOOLBAR_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+}
+const PAGE_SORT_LABEL_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  fontSize: 11,
+  opacity: 0.8,
+}
+const PAGE_SORT_SELECT_STYLE: CSSProperties = {
+  fontSize: 11,
+  padding: '2px 4px',
+  borderRadius: 4,
+  border: '1px solid rgba(127,127,127,0.28)',
+  background: 'transparent',
+  color: 'inherit',
+}
+const PAGE_RANGE_STYLE: CSSProperties = {
+  marginLeft: 'auto',
+  fontSize: 11,
+  opacity: 0.66,
+  whiteSpace: 'nowrap',
+}
+const PAGER_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexWrap: 'wrap',
+  gap: 6,
+  fontSize: 11,
+}
+const PAGER_BUTTON: CSSProperties = {
+  padding: '1px 7px',
+  borderRadius: 10,
+  border: '1px solid rgba(127,127,127,0.3)',
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: 11,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+const PAGER_BUTTON_DISABLED: CSSProperties = {
+  ...PAGER_BUTTON,
+  opacity: 0.4,
+  cursor: 'default',
+}
+const PAGER_STATUS_STYLE: CSSProperties = { opacity: 0.72, whiteSpace: 'nowrap' }

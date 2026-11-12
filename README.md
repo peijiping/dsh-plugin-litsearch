@@ -66,7 +66,7 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 | `requestTimeoutMs` | 单次上游请求超时（毫秒）；Europe PMC 检索另有 25000 下限 | 20000 |
 | `defaultSources` / `defaultSort` / `defaultLanguage` | 新任务默认勾选的数据源、排序与语言 | 全部 / 相关度 / 不限 |
 | `autoOpenTaskTab` / `maxTaskTabs` | 模型发起检索后自动打开 / 聚焦任务 tab；每个对话只保留一个任务 tab，打开新任务会替换旧的。`maxTaskTabs` 为自动打开的兜底上限（按最近真实打开过的 tab 计数，30 分钟后释放名额） | 开 / 5 |
-| `taskRetentionDays` / `taskRetentionCount` / `taskMaxPapers` | 未置顶任务保留天数、保留条数、单任务结果上限 | 90 / 120 / 1500 |
+| `taskRetentionDays` / `taskRetentionCount` / `taskMaxPapers` | 未保留任务保留天数、保留条数、单任务结果上限（在任务列表中可标记「保留」跳过清理） | 90 / 120 / 1500 |
 | `pdfRoot` / `pdfMaxMb` / `autoDownloadPdf` | PDF 保存目录、单文件上限（MB）、检索完成后自动下载；`pdfRoot` 留空时落在当前会话工作目录下的 `dsh-litsearch/` | 跟随工作目录 / 30 / 关 |
 | `enableEpmcFulltext` | 没有 PDF 时用 Europe PMC JATS 全文兜底为可读 HTML | 开 |
 | `zoteroEnabled` / `zoteroBaseUrl` | 启用 Zotero 同步及 connector 地址（只允许本机回环） | 开 / `http://127.0.0.1:23119` |

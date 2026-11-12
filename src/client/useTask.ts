@@ -14,6 +14,9 @@ import { subscribeTaskSummary } from './taskListStore'
 
 const POLL_MS = 1500
 
+/** 结果页每页篇数（与检索条件的「每源条数」无关，只影响面板展示）。 */
+export const RESULT_PAGE_SIZE = 20
+
 interface TaskState {
   detail: TaskDetail | null
   page: ResultsPage | null
@@ -22,10 +25,12 @@ interface TaskState {
 }
 
 export interface TaskView extends TaskState {
-  loadingMore: boolean
   busy: boolean
+  pageIndex: number
+  pageSize: number
+  pageCount: number
+  goToPage(index: number): void
   reload(): void
-  loadMore(): Promise<void>
   rerun(): Promise<void>
   cancel(): Promise<void>
   annotate(papers: readonly AnnotationInput[]): Promise<void>
@@ -44,39 +49,53 @@ function errorMessage(error: unknown): string {
 export function useTask(
   id: string | null,
   signal: AbortSignal | undefined,
-  fallbackLimit = 20,
+  pageSize = RESULT_PAGE_SIZE,
   filters: ResultsQuery = {},
 ): TaskView {
   const [state, setState] = useState<TaskState>(INITIAL)
   const [nonce, setNonce] = useState(0)
-  const [loadingMore, setLoadingMore] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [pageIndex, setPageIndex] = useState(0)
+  const size = Math.max(1, Math.floor(pageSize))
 
   const statusRef = useRef<TaskDetail['status'] | undefined>(undefined)
   const revRef = useRef(-1)
-  const limitRef = useRef(fallbackLimit)
   const seq = useRef(0)
   const filtersRef = useRef(filters)
   filtersRef.current = filters
   const filterKey = JSON.stringify(filters)
 
+  // 换任务或改筛选（含排序）时回到第一页：渲染期调整，避免先按旧页码多取一次。
+  const scopeKey = `${id ?? ''}\u0000${filterKey}`
+  const [prevScope, setPrevScope] = useState(scopeKey)
+  if (prevScope !== scopeKey) {
+    setPrevScope(scopeKey)
+    setPageIndex(0)
+  }
+
+  // 结果变少（例如把最后一页的条目全部标为排除）后，页码可能越界，收回最后一页。
+  useEffect(() => {
+    if (state.page === null || state.page.total === 0) return
+    const last = Math.ceil(state.page.total / size) - 1
+    if (pageIndex > last) setPageIndex(last)
+  }, [state.page, pageIndex, size])
+
   const load = useCallback(
-    async (current: string, pageLimit: number, token?: number): Promise<TaskDetail | null> => {
+    async (current: string, index: number, token?: number): Promise<TaskDetail | null> => {
       const detail = await fetchTask(current, signal)
       const page = await fetchResults(
         current,
-        { ...filtersRef.current, limit: pageLimit },
+        { ...filtersRef.current, offset: index * size, limit: size },
         signal,
       )
       // 期间又触发了新一轮加载（例如 /events 送来新 rev）：丢弃这次较旧的结果。
       if (token !== undefined && seq.current !== token) return detail
       statusRef.current = detail.status
       revRef.current = detail.rev
-      limitRef.current = Math.max(pageLimit, detail.conditions.pageSize)
       setState({ detail, page, loading: false, error: null })
       return detail
     },
-    [signal],
+    [signal, size],
   )
 
   useEffect(() => {
@@ -94,7 +113,7 @@ export function useTask(
         : { ...INITIAL, loading: true },
     )
 
-    void load(id, fallbackLimit, current).catch((error: unknown) => {
+    void load(id, pageIndex, current).catch((error: unknown) => {
       if (seq.current !== current || signal?.aborted === true) return
       setState({ detail: null, page: null, loading: false, error: errorMessage(error) })
     })
@@ -112,11 +131,10 @@ export function useTask(
           if (changed) {
             const page = await fetchResults(
               id,
-              { ...filtersRef.current, limit: Math.max(limitRef.current, detail.conditions.pageSize) },
+              { ...filtersRef.current, offset: pageIndex * size, limit: size },
               signal,
             )
             if (seq.current !== current) return
-            limitRef.current = Math.max(page.limit, page.papers.length)
             setState((previous) => ({ ...previous, detail, page }))
           }
         } catch {
@@ -135,7 +153,7 @@ export function useTask(
       clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [id, nonce, fallbackLimit, load, signal, filterKey])
+  }, [id, nonce, size, load, signal, filterKey, pageIndex])
 
   // 任务空闲时不再轮询；宿主侧一旦改了 rev（模型在同一任务里开新一轮、
   // 批量标注等），靠 /events 的摘要触发一次整页重取。运行中的 rev 变化
@@ -153,35 +171,15 @@ export function useTask(
     setNonce((value) => value + 1)
   }, [])
 
-  const loadMore = useCallback(async (): Promise<void> => {
-    const detail = state.detail
-    const page = state.page
-    if (id === null || detail === null || page === null || loadingMore) return
-    if (page.papers.length >= page.total) return
-    setLoadingMore(true)
-    try {
-      const next = await fetchResults(
-        id,
-        { ...filtersRef.current, offset: page.papers.length, limit: Math.max(limitRef.current, 20) },
-        signal,
-      )
-      setState((previous) => {
-        if (previous.page === null) return previous
-        return {
-          ...previous,
-          page: {
-            ...next,
-            offset: 0,
-            papers: [...previous.page.papers, ...next.papers],
-          },
-        }
-      })
-    } catch (error) {
-      setState((previous) => ({ ...previous, error: errorMessage(error) }))
-    } finally {
-      setLoadingMore(false)
-    }
-  }, [id, state.detail, state.page, loadingMore, signal])
+  const pageCount =
+    state.page === null ? 1 : Math.max(1, Math.ceil(state.page.total / size))
+
+  const goToPage = useCallback(
+    (index: number): void => {
+      setPageIndex(Math.min(Math.max(0, Math.floor(index)), pageCount - 1))
+    },
+    [pageCount],
+  )
 
   const rerun = useCallback(async (): Promise<void> => {
     if (id === null || busy) return
@@ -229,10 +227,12 @@ export function useTask(
 
   return {
     ...state,
-    loadingMore,
     busy,
+    pageIndex,
+    pageSize: size,
+    pageCount,
+    goToPage,
     reload,
-    loadMore,
     rerun,
     cancel,
     annotate,
