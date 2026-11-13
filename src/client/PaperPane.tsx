@@ -25,9 +25,9 @@ import {
   paperPdfUrl,
   syncZotero,
 } from './api'
-import { paperText } from './compose'
+import { paperSummary, paperText } from './compose'
 import { EntityPanel } from './Entities'
-import { insertBuilt, type InputActions } from './inline'
+import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
 import {
   ERROR,
@@ -205,11 +205,9 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
   }
 
   const insert = (): void => {
-    void (async () => {
-      const outcome = await insertBuilt(inputActions, () => paperText(t, paper))
-      if (outcome === 'inserted') setToast(t('result.inserted'))
-      else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
-    })()
+    const outcome = insertQuote(inputActions, paperText(t, paper), paperSummary(t, paper))
+    if (outcome === 'inserted') setToast(t('result.inserted'))
+    else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
   const download = (): void => {

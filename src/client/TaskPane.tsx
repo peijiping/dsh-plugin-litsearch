@@ -27,7 +27,7 @@ import {
 import { rememberTaskTitle } from './autoOpen'
 import { CompareTab } from './CompareTab'
 import { ConditionEditor } from './ConditionEditor'
-import { paperText, papersText, taskText } from './compose'
+import { paperSummary, paperText, papersSummary, papersText, taskSummary, taskText } from './compose'
 import { FullTextTab, type FullTextView } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
 import {
@@ -43,7 +43,7 @@ import {
   TaskListIcon,
   ZoteroIcon,
 } from './icons'
-import { insertBuilt, type InputActions } from './inline'
+import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
 import { NotesTab } from './NotesTab'
 import { OverviewTab } from './OverviewTab'
@@ -183,11 +183,9 @@ export function TaskPane({
   }, [view.pageIndex, tab])
 
   const insert = (paper: Paper): void => {
-    void (async () => {
-      const outcome = await insertBuilt(inputActions, () => paperText(t, paper))
-      if (outcome === 'inserted') setToast(t('result.inserted'))
-      else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
-    })()
+    const outcome = insertQuote(inputActions, paperText(t, paper), paperSummary(t, paper))
+    if (outcome === 'inserted') setToast(t('result.inserted'))
+    else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
   const insertMany = (): void => {
@@ -195,21 +193,17 @@ export function TaskPane({
     if (loaded === null) return
     const papers = loaded.papers.filter((paper) => selected.has(paper.paperId))
     if (papers.length === 0) return
-    void (async () => {
-      const outcome = await insertBuilt(inputActions, () => papersText(t, papers))
-      if (outcome === 'inserted') setToast(tpl(t('bulk.inserted'), { n: papers.length }))
-      else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
-    })()
+    const outcome = insertQuote(inputActions, papersText(t, papers), papersSummary(t, papers))
+    if (outcome === 'inserted') setToast(tpl(t('bulk.inserted'), { n: papers.length }))
+    else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
   /** 把任务 id 与当前条件带入会话草稿，新会话也能续接同一任务。 */
   const insertTask = (): void => {
     if (detail === null) return
-    void (async () => {
-      const outcome = await insertBuilt(inputActions, () => taskText(t, detail))
-      if (outcome === 'inserted') setToast(t('task.inserted'))
-      else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
-    })()
+    const outcome = insertQuote(inputActions, taskText(t, detail), taskSummary(t, detail))
+    if (outcome === 'inserted') setToast(t('task.inserted'))
+    else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
   const downloadPaper = (paper: Paper): void => {

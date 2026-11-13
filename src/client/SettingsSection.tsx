@@ -154,6 +154,9 @@ export function SettingsSection(props: Props): ReactElement {
   const sort = state.defaultSort.text === '' ? 'relevance' : state.defaultSort.text
   const language = state.defaultLanguage.text === '' ? 'any' : state.defaultLanguage.text
 
+  /** 逐来源运行时健康状态，供来源分组内的探活行展示。 */
+  const healthById = new Map((health?.sourceHealth ?? []).map((entry) => [entry.id, entry]))
+
   const toggleSource = (id: (typeof SOURCE_IDS)[number]): void => {
     const next = selectedSources.includes(id)
       ? selectedSources.filter((source) => source !== id)
@@ -227,25 +230,74 @@ export function SettingsSection(props: Props): ReactElement {
           const on = selectedSources.includes(id)
           const needsKey = id === 'googlescholar' && state.serpApiKey.text.trim() === ''
           return (
-            <div style={CHOICE_ROW_STYLE} key={id}>
-              <div style={TOGGLE_INFO_STYLE}>
-                <span style={CHOICE_LABEL_STYLE}>{t(`source.${id}`)}</span>
-                <span style={CHOICE_HINT_STYLE}>{t(`source.${id}.desc`)}</span>
+            <section key={id} style={SOURCE_BOX_STYLE}>
+              <div style={SOURCE_HEAD_STYLE}>
+                <div style={TOGGLE_INFO_STYLE}>
+                  <span style={CHOICE_LABEL_STYLE}>{t(`source.${id}`)}</span>
+                  <span style={CHOICE_HINT_STYLE}>{t(`source.${id}.desc`)}</span>
+                </div>
+                <Switch
+                  checked={on && !needsKey}
+                  disabled={locked || needsKey}
+                  label={t(`source.${id}`)}
+                  title={
+                    needsKey
+                      ? t('settings.sourceNeedsKey')
+                      : on
+                        ? t('settings.on')
+                        : t('settings.off')
+                  }
+                  onChange={() => toggleSource(id)}
+                />
               </div>
-              <Switch
-                checked={on && !needsKey}
-                disabled={locked || needsKey}
-                label={t(`source.${id}`)}
-                title={
-                  needsKey
-                    ? t('settings.sourceNeedsKey')
-                    : on
-                      ? t('settings.on')
-                      : t('settings.off')
-                }
-                onChange={() => toggleSource(id)}
-              />
-            </div>
+              <div style={SOURCE_BODY_STYLE}>
+                {id === 'pubmed' && (
+                  <>
+                    <SecretField
+                      t={t}
+                      id="plugin-config-litsearch-ncbiApiKey"
+                      label={t('field.ncbiApiKey')}
+                      hint={t('field.ncbiApiKeyHint')}
+                      configured={state.ncbiApiKey.text.trim() !== ''}
+                      disabled={locked}
+                      onEdit={(value) => props.edit(NCBI_KEY_FIELD, value)}
+                      onClear={() => props.edit(NCBI_KEY_FIELD, '')}
+                    />
+                    {renderNumberField('pubmedIntervalMs')}
+                  </>
+                )}
+                {id === 'europepmc' && renderToggle(EPMC_FULLTEXT_FIELD)}
+                {id === 'semanticscholar' && (
+                  <>
+                    <SecretField
+                      t={t}
+                      id="plugin-config-litsearch-s2ApiKey"
+                      label={t('field.s2ApiKey')}
+                      hint={t('field.s2ApiKeyHint')}
+                      configured={state.s2ApiKey.text.trim() !== ''}
+                      disabled={locked}
+                      onEdit={(value) => props.edit(S2_KEY_FIELD, value)}
+                      onClear={() => props.edit(S2_KEY_FIELD, '')}
+                    />
+                    {renderNumberField('s2IntervalMs')}
+                  </>
+                )}
+                {id === 'arxiv' && renderNumberField('arxivIntervalMs')}
+                {id === 'googlescholar' && (
+                  <SecretField
+                    t={t}
+                    id="plugin-config-litsearch-serpApiKey"
+                    label={t('field.serpApiKey')}
+                    hint={t('field.serpApiKeyHint')}
+                    configured={state.serpApiKey.text.trim() !== ''}
+                    disabled={locked}
+                    onEdit={(value) => props.edit(SERP_KEY_FIELD, value)}
+                    onClear={() => props.edit(SERP_KEY_FIELD, '')}
+                  />
+                )}
+              </div>
+              <SourceProbeRow t={t} id={id} entry={healthById.get(id)} />
+            </section>
           )
         })}
       </section>
@@ -301,51 +353,6 @@ export function SettingsSection(props: Props): ReactElement {
       </section>
 
       <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.sources')}</h4>
-        <div style={HINT_STYLE}>{t('group.sourcesHint')}</div>
-
-        <SecretField
-          t={t}
-          id="plugin-config-litsearch-ncbiApiKey"
-          label={t('field.ncbiApiKey')}
-          hint={t('field.ncbiApiKeyHint')}
-          configured={state.ncbiApiKey.text.trim() !== ''}
-          disabled={locked}
-          onEdit={(value) => props.edit(NCBI_KEY_FIELD, value)}
-          onClear={() => props.edit(NCBI_KEY_FIELD, '')}
-        />
-        <SecretField
-          t={t}
-          id="plugin-config-litsearch-s2ApiKey"
-          label={t('field.s2ApiKey')}
-          hint={t('field.s2ApiKeyHint')}
-          configured={state.s2ApiKey.text.trim() !== ''}
-          disabled={locked}
-          onEdit={(value) => props.edit(S2_KEY_FIELD, value)}
-          onClear={() => props.edit(S2_KEY_FIELD, '')}
-        />
-        <SecretField
-          t={t}
-          id="plugin-config-litsearch-serpApiKey"
-          label={t('field.serpApiKey')}
-          hint={t('field.serpApiKeyHint')}
-          configured={state.serpApiKey.text.trim() !== ''}
-          disabled={locked}
-          onEdit={(value) => props.edit(SERP_KEY_FIELD, value)}
-          onClear={() => props.edit(SERP_KEY_FIELD, '')}
-        />
-
-        {renderNumberField('pubmedIntervalMs')}
-        {renderNumberField('s2IntervalMs')}
-        {renderNumberField('arxivIntervalMs')}
-      </section>
-
-      <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.diagnostics')}</h4>
-        <Diagnostics t={t} keys={health?.keys} health={health?.sourceHealth ?? []} />
-      </section>
-
-      <section style={GROUP_STYLE}>
         <h4 style={GROUP_HEAD_STYLE}>{t('group.tasks')}</h4>
 
         <div style={CHOICE_ROW_STYLE}>
@@ -391,7 +398,6 @@ export function SettingsSection(props: Props): ReactElement {
         {renderNumberField('pdfMaxMb')}
         {renderNumberField('pdfCacheMaxMb')}
         {renderToggle(AUTO_DOWNLOAD_FIELD)}
-        {renderToggle(EPMC_FULLTEXT_FIELD)}
         <StorageProbeRow t={t} disabled={locked} />
         <CleanupRow
           t={t}
@@ -428,7 +434,7 @@ interface SecretFieldProps {
   onClear(): void
 }
 
-/** 密钥输入：只显示「已配置/未配置」，从不回显当前值。 */
+/** 密钥输入：只显示「已配置/未配置」，从不回显当前值；失焦即保存。 */
 function SecretField({
   t,
   id,
@@ -466,6 +472,7 @@ function SecretField({
             configured ? t('field.keyConfigured') : t('field.keyEmpty')
           }
           onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault()
@@ -473,14 +480,6 @@ function SecretField({
             }
           }}
         />
-        <button
-          type="button"
-          style={SMALL_BUTTON_STYLE}
-          disabled={disabled || draft.trim() === ''}
-          onClick={commit}
-        >
-          {t('field.keySave')}
-        </button>
         {configured && (
           <button
             type="button"
@@ -684,79 +683,56 @@ function formatBytes(value: number): string {
   return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
-interface DiagnosticsProps {
+interface SourceProbeRowProps {
   t: Translate
-  keys: { ncbi: boolean; s2: boolean; serpapi: boolean } | undefined
-  health: readonly { id: SourceId; lastOkAt?: string; lastError?: string; lastLatencyMs?: number; cooldownUntil?: string }[]
+  id: SourceId
+  entry:
+    | { lastOkAt?: string; lastError?: string; lastLatencyMs?: number; cooldownUntil?: string }
+    | undefined
 }
 
-/** 逐源诊断：显示运行时健康状态，并可手动探活一次（不受冷却影响）。 */
-function Diagnostics({ t, keys, health }: DiagnosticsProps): ReactElement {
-  const [results, setResults] = useState<Record<string, { busy: boolean; text: string }>>({})
-  const byId = new Map(health.map((entry) => [entry.id, entry]))
+/** 来源分组内的探活行：显示运行时健康状态，并可手动探活一次（不受冷却影响）。 */
+function SourceProbeRow({ t, id, entry }: SourceProbeRowProps): ReactElement {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ text: string; failed: boolean } | null>(null)
 
-  const run = (source: SourceId): void => {
-    setResults((previous) => ({
-      ...previous,
-      [source]: { busy: true, text: previous[source]?.text ?? '' },
-    }))
-    void probeSource(source)
-      .then((result) => {
-        setResults((previous) => ({
-          ...previous,
-          [source]: { busy: false, text: probeText(t, result) },
-        }))
+  const run = (): void => {
+    if (busy) return
+    setBusy(true)
+    void probeSource(id)
+      .then((probe) => {
+        setResult({ text: probeText(t, probe), failed: !probe.ok })
         void refreshHealth()
       })
       .catch((error: unknown) => {
-        setResults((previous) => ({
-          ...previous,
-          [source]: {
-            busy: false,
-            text: tpl(t('diagnostics.fail'), {
-              message: error instanceof Error ? error.message : String(error),
-            }),
-          },
-        }))
+        setResult({
+          failed: true,
+          text: tpl(t('diagnostics.fail'), {
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        })
+      })
+      .finally(() => {
+        setBusy(false)
       })
   }
 
   return (
-    <div>
-      <div style={HINT_STYLE}>
-        {keys === undefined
-          ? t('diagnostics.loading')
-          : tpl(t('diagnostics.keys'), {
-              ncbi: keys.ncbi ? t('diagnostics.configured') : t('diagnostics.notConfigured'),
-              s2: keys.s2 ? t('diagnostics.configured') : t('diagnostics.notConfigured'),
-              serpapi: keys.serpapi
-                ? t('diagnostics.configured')
-                : t('diagnostics.notConfigured'),
-            })}
-      </div>
-      {SOURCE_IDS.map((id) => {
-        const entry = byId.get(id)
-        const result = results[id]
-        return (
-          <div key={id} style={DIAG_ROW_STYLE}>
-            <div style={DIAG_INFO_STYLE}>
-              <span style={CHOICE_LABEL_STYLE}>{t(`source.${id}`)}</span>
-              <span style={CHOICE_HINT_STYLE}>{healthText(t, entry)}</span>
-              {result !== undefined && result.text !== '' && (
-                <span style={result.busy ? CHOICE_HINT_STYLE : RESULT_STYLE}>{result.text}</span>
-              )}
-            </div>
-            <button
-              type="button"
-              style={SMALL_BUTTON_STYLE}
-              disabled={result?.busy === true}
-              onClick={() => run(id)}
-            >
-              {result?.busy === true ? t('diagnostics.testing') : t('diagnostics.test')}
-            </button>
-          </div>
-        )
-      })}
+    <div style={SOURCE_PROBE_ROW_STYLE}>
+      <span
+        style={
+          result === null
+            ? SOURCE_PROBE_TEXT_STYLE
+            : result.failed
+              ? RESULT_ERROR_STYLE
+              : RESULT_STYLE
+        }
+      >
+        {result === null ? healthText(t, entry) : result.text}
+      </span>
+      <button type="button" style={SMALL_BUTTON_STYLE} disabled={busy} onClick={run}>
+        {busy ? t('diagnostics.testing') : t('diagnostics.test')}
+      </button>
     </div>
   )
 }
@@ -817,6 +793,36 @@ const GROUP_HEAD_STYLE: CSSProperties = {
   opacity: 0.85,
   margin: '0 0 6px',
 }
+/** 某个来源的分组框：开关、密钥、参数与探活都在框内。 */
+const SOURCE_BOX_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  marginBottom: 8,
+  padding: '8px 10px',
+  borderRadius: 8,
+  border: '1px solid rgba(127,127,127,0.22)',
+}
+const SOURCE_HEAD_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+}
+const SOURCE_BODY_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column' }
+const SOURCE_PROBE_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  paddingTop: 4,
+}
+const SOURCE_PROBE_TEXT_STYLE: CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.5,
+  opacity: 0.66,
+  minWidth: 0,
+}
 const CHOICE_ROW_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -861,20 +867,6 @@ const SMALL_BUTTON_STYLE: CSSProperties = {
   color: 'inherit',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
-}
-const DIAG_ROW_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-  padding: '5px 0',
-  borderBottom: '1px solid rgba(127,127,127,0.12)',
-}
-const DIAG_INFO_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 1,
-  minWidth: 0,
 }
 const RESULT_STYLE: CSSProperties = {
   fontSize: 11,

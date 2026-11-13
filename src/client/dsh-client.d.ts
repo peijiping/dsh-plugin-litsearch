@@ -30,6 +30,18 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     children?: ReactNode
   } & ButtonHTMLAttributes<HTMLButtonElement>): ReactElement
 
+  /** 引用胶囊在输入框与历史消息里的显示摘要；发送的正文仍是原始文本。 */
+  export interface QuoteSummary {
+    /** 胶囊内联展示的短标签。 */
+    readonly label: string
+    /** 悬浮卡第一行（也作为无障碍文本）。 */
+    readonly title: string
+    /** 悬浮卡第二行，如出处或范围。 */
+    readonly detail?: string | undefined
+    /** 悬浮卡正文（也会接在标签后内联显示）。 */
+    readonly body: string
+  }
+
   export function Input(props: {
     icon?: ReactNode
     className?: string
