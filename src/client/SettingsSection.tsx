@@ -26,6 +26,7 @@ import {
   NCBI_KEY_FIELD,
   PDF_ROOT_FIELD,
   S2_KEY_FIELD,
+  SERP_KEY_FIELD,
   SOURCES_FIELD,
   SORT_FIELD,
   SORT_MODES,
@@ -85,6 +86,7 @@ export function SettingsSection(props: Props): ReactElement {
     state.contactEmail.text,
     state.ncbiApiKey.text,
     state.s2ApiKey.text,
+    state.serpApiKey.text,
     state.defaultPageSize.text,
     state.requestTimeoutMs.text,
     state.pubmedIntervalMs.text,
@@ -147,7 +149,7 @@ export function SettingsSection(props: Props): ReactElement {
 
   const selectedSources =
     state.defaultSources.text.trim() === ''
-      ? [...SOURCE_IDS]
+      ? SOURCE_IDS.filter((id) => id !== 'googlescholar')
       : readSourceList(state.defaultSources.text)
   const sort = state.defaultSort.text === '' ? 'relevance' : state.defaultSort.text
   const language = state.defaultLanguage.text === '' ? 'any' : state.defaultLanguage.text
@@ -219,26 +221,37 @@ export function SettingsSection(props: Props): ReactElement {
       {!state.failed && state.saving && <p style={SAVE_STATUS_STYLE}>{t('form.autosaving')}</p>}
 
       <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.defaults')}</h4>
+        <h4 style={GROUP_HEAD_STYLE}>{t('group.searchSources')}</h4>
+        <div style={HINT_STYLE}>{t('settings.sourcesHint')}</div>
+        {SOURCE_IDS.map((id) => {
+          const on = selectedSources.includes(id)
+          const needsKey = id === 'googlescholar' && state.serpApiKey.text.trim() === ''
+          return (
+            <div style={CHOICE_ROW_STYLE} key={id}>
+              <div style={TOGGLE_INFO_STYLE}>
+                <span style={CHOICE_LABEL_STYLE}>{t(`source.${id}`)}</span>
+                <span style={CHOICE_HINT_STYLE}>{t(`source.${id}.desc`)}</span>
+              </div>
+              <Switch
+                checked={on && !needsKey}
+                disabled={locked || needsKey}
+                label={t(`source.${id}`)}
+                title={
+                  needsKey
+                    ? t('settings.sourceNeedsKey')
+                    : on
+                      ? t('settings.on')
+                      : t('settings.off')
+                }
+                onChange={() => toggleSource(id)}
+              />
+            </div>
+          )
+        })}
+      </section>
 
-        <div style={CHOICE_ROW_STYLE}>
-          <span style={CHOICE_LABEL_STYLE}>{t('field.defaultSources')}</span>
-          <span style={CHOICE_HINT_STYLE}>{t('field.defaultSourcesHint')}</span>
-          <div style={PILL_ROW_STYLE}>
-            {SOURCE_IDS.map((id) => (
-              <Pill
-                key={id}
-                type="button"
-                active={selectedSources.includes(id)}
-                aria-pressed={selectedSources.includes(id)}
-                disabled={locked}
-                onClick={() => toggleSource(id)}
-              >
-                {t(`source.${id}`)}
-              </Pill>
-            ))}
-          </div>
-        </div>
+      <section style={GROUP_STYLE}>
+        <h4 style={GROUP_HEAD_STYLE}>{t('group.defaults')}</h4>
 
         {renderNumberField('defaultPageSize')}
 
@@ -310,6 +323,16 @@ export function SettingsSection(props: Props): ReactElement {
           disabled={locked}
           onEdit={(value) => props.edit(S2_KEY_FIELD, value)}
           onClear={() => props.edit(S2_KEY_FIELD, '')}
+        />
+        <SecretField
+          t={t}
+          id="plugin-config-litsearch-serpApiKey"
+          label={t('field.serpApiKey')}
+          hint={t('field.serpApiKeyHint')}
+          configured={state.serpApiKey.text.trim() !== ''}
+          disabled={locked}
+          onEdit={(value) => props.edit(SERP_KEY_FIELD, value)}
+          onClear={() => props.edit(SERP_KEY_FIELD, '')}
         />
 
         {renderNumberField('pubmedIntervalMs')}
@@ -663,7 +686,7 @@ function formatBytes(value: number): string {
 
 interface DiagnosticsProps {
   t: Translate
-  keys: { ncbi: boolean; s2: boolean } | undefined
+  keys: { ncbi: boolean; s2: boolean; serpapi: boolean } | undefined
   health: readonly { id: SourceId; lastOkAt?: string; lastError?: string; lastLatencyMs?: number; cooldownUntil?: string }[]
 }
 
@@ -706,6 +729,9 @@ function Diagnostics({ t, keys, health }: DiagnosticsProps): ReactElement {
           : tpl(t('diagnostics.keys'), {
               ncbi: keys.ncbi ? t('diagnostics.configured') : t('diagnostics.notConfigured'),
               s2: keys.s2 ? t('diagnostics.configured') : t('diagnostics.notConfigured'),
+              serpapi: keys.serpapi
+                ? t('diagnostics.configured')
+                : t('diagnostics.notConfigured'),
             })}
       </div>
       {SOURCE_IDS.map((id) => {

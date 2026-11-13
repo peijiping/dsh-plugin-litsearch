@@ -26,6 +26,7 @@ export type FieldName =
   | 'contactEmail'
   | 'ncbiApiKey'
   | 's2ApiKey'
+  | 'serpApiKey'
   | 'pubmedIntervalMs'
   | 's2IntervalMs'
   | 'arxivIntervalMs'
@@ -52,6 +53,7 @@ export type FieldName =
 export const TEXT_FIELD = 'contactEmail' as const
 export const NCBI_KEY_FIELD = 'ncbiApiKey' as const
 export const S2_KEY_FIELD = 's2ApiKey' as const
+export const SERP_KEY_FIELD = 'serpApiKey' as const
 export const SOURCES_FIELD: FieldName = 'defaultSources'
 export const SORT_FIELD: FieldName = 'defaultSort'
 export const LANGUAGE_FIELD: FieldName = 'defaultLanguage'
@@ -168,6 +170,7 @@ export interface SettingsState extends SettingsFormState {
   contactEmail: SettingsFieldState
   ncbiApiKey: SettingsFieldState
   s2ApiKey: SettingsFieldState
+  serpApiKey: SettingsFieldState
   pubmedIntervalMs: SettingsFieldState
   s2IntervalMs: SettingsFieldState
   arxivIntervalMs: SettingsFieldState
@@ -207,6 +210,7 @@ export class LitsearchSettingsController {
       ...TEXT_FIELDS.map((field): SettingsFieldSpec => settingsTextField(field)),
       settingsTextField(NCBI_KEY_FIELD),
       settingsTextField(S2_KEY_FIELD),
+      settingsTextField(SERP_KEY_FIELD),
       ...NUMBER_FIELDS.map((field): SettingsFieldSpec => settingsNumberField(field)),
       sourcesField(SOURCES_FIELD),
       enumField(SORT_FIELD, SORT_MODES, 'relevance'),
@@ -222,6 +226,7 @@ export class LitsearchSettingsController {
       contactEmail: this.form.field('contactEmail'),
       ncbiApiKey: this.form.field(NCBI_KEY_FIELD),
       s2ApiKey: this.form.field(S2_KEY_FIELD),
+      serpApiKey: this.form.field(SERP_KEY_FIELD),
       pubmedIntervalMs: this.form.field('pubmedIntervalMs'),
       s2IntervalMs: this.form.field('s2IntervalMs'),
       arxivIntervalMs: this.form.field('arxivIntervalMs'),

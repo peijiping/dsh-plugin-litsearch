@@ -161,7 +161,7 @@ const SEARCH_PARAMETERS = {
     sources: {
       type: 'array',
       items: { type: 'string', enum: [...SOURCE_IDS] },
-      description: `要查询的数据源：${SOURCE_IDS.join(', ')}；省略表示全部。`,
+      description: `要查询的数据源：${SOURCE_IDS.join(', ')}；省略表示默认数据源（googlescholar 需配置 SerpAPI Key，默认关闭）。`,
     },
     limit: {
       type: 'integer',
@@ -429,7 +429,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_sources',
       description:
-        '列出本插件已接入的免费文献数据源：能力（摘要、被引次数、开放获取、PDF 链接）、限流额度、检索式语法与是否需要可选 API Key。',
+        '列出本插件已接入的文献数据源：能力（摘要、被引次数、开放获取、PDF 链接）、限流额度、检索式语法与是否需要可选 API Key。默认数据源均免费；Google Scholar 需在设置页配置 SerpAPI Key（有免费额度，超出付费），未配置时不参与检索。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: TEXT_OUTPUT,
       async execute(): Promise<{ text: string }> {
@@ -1155,7 +1155,9 @@ function percent(value: number): string {
 }
 
 function formatSources(): string {
-  const lines = ['已接入的免费文献数据源（无需付费；部分支持可选 Key 提高额度）：']
+  const lines = [
+    '已接入的文献数据源（默认均为免费；Google Scholar 需在设置页配置 SerpAPI Key，未配置时不参与检索）：',
+  ]
   for (const info of PROVIDER_INFOS) {
     const caps = [
       info.capabilities.abstract ? '摘要' : '',

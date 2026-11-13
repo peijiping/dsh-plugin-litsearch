@@ -58,7 +58,10 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   const listVersion = useTaskListVersion()
 
   const [queryInputs, setQueryInputs] = useState<QueryDraft[]>([newQuery()])
-  const [selected, setSelected] = useState<SourceId[]>([...SOURCE_IDS])
+  // Google Scholar 需自备密钥，默认不勾选；health 返回后再按配置覆盖。
+  const [selected, setSelected] = useState<SourceId[]>(() =>
+    SOURCE_IDS.filter((id) => id !== 'googlescholar'),
+  )
   const [creating, setCreating] = useState(false)
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [loadingHistory, setLoadingHistory] = useState(true)

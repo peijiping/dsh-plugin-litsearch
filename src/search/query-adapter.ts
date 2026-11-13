@@ -24,6 +24,9 @@ export function adaptQuery(source: SourceId, block: Pick<QueryBlock, 'text' | 'p
       return toArxivQuery(text)
     case 'pubtator':
       return toPlainText(text)
+    case 'googlescholar':
+      // 支持引号短语与 author:/source:，但不认 PubMed 字段标签与布尔式。
+      return toPlainText(text)
   }
 }
 

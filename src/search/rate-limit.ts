@@ -16,6 +16,7 @@ import {
   DEFAULT_ARXIV_INTERVAL_MS,
   DEFAULT_PUBMED_INTERVAL_MS,
   DEFAULT_S2_INTERVAL_MS,
+  DEFAULT_SERPAPI_INTERVAL_MS,
   getSettings,
 } from './config.js'
 import { SearchError } from './errors.js'
@@ -44,6 +45,7 @@ const BASE_INTERVALS: Record<SourceId, number> = {
   semanticscholar: DEFAULT_S2_INTERVAL_MS,
   arxiv: DEFAULT_ARXIV_INTERVAL_MS,
   pubtator: 350,
+  googlescholar: DEFAULT_SERPAPI_INTERVAL_MS,
 }
 
 /** 429 未带 Retry-After 时的冷却时长（原为 30s，过久会拖垮多检索式任务）。 */

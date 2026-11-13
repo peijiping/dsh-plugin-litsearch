@@ -4,7 +4,12 @@
  * 本文件同时被 Host 与 Client 引用，因此不得引入任何 Node 内置模块。
  */
 
-/** 已接入的免费数据源 id；顺序即聚合展示顺序。 */
+/**
+ * 已接入的数据源 id；顺序即聚合展示顺序。
+ *
+ * 除 `googlescholar` 外均为免费公开 API；`googlescholar` 依赖用户自备的
+ * SerpAPI Key，未配置时默认不参与检索。
+ */
 export const SOURCE_IDS = [
   'pubmed',
   'europepmc',
@@ -13,6 +18,7 @@ export const SOURCE_IDS = [
   'semanticscholar',
   'arxiv',
   'pubtator',
+  'googlescholar',
 ] as const
 
 export type SourceId = (typeof SOURCE_IDS)[number]
@@ -147,6 +153,7 @@ export interface ProviderSearchOptions {
   /** 可选密钥；provider 只用于请求参数/请求头，不得写日志。 */
   ncbiApiKey?: string
   s2ApiKey?: string
+  serpApiKey?: string
 }
 
 export interface Provider {
@@ -631,7 +638,7 @@ export interface HealthInfo {
   sources: ProviderInfo[]
   sourceHealth: SourceHealth[]
   /** 密钥是否已配置（只给布尔值，绝不返回密钥）。 */
-  keys: { ncbi: boolean; s2: boolean }
+  keys: { ncbi: boolean; s2: boolean; serpapi: boolean }
   settings: {
     defaultSources: SourceId[]
     defaultPageSize: number

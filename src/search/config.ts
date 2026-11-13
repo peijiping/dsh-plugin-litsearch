@@ -11,6 +11,16 @@ import { SOURCE_IDS } from './types.js'
 /** 插件版本（与 package.json 同步；仅用于 /health 诊断展示）。 */
 export const PLUGIN_VERSION = '0.1.0'
 
+/**
+ * 默认数据源。
+ *
+ * Google Scholar 依赖用户自备的 SerpAPI Key，未配置时默认关闭，
+ * 因此不进入默认勾选列表。
+ */
+export const DEFAULT_SOURCE_IDS: readonly SourceId[] = SOURCE_IDS.filter(
+  (id) => id !== 'googlescholar',
+)
+
 /** 默认每次加载条数。 */
 export const DEFAULT_PAGE_SIZE = 20
 
@@ -51,6 +61,8 @@ export const DEFAULT_TASK_MAX_ROUNDS = 30
 export const DEFAULT_PUBMED_INTERVAL_MS = 350
 export const DEFAULT_S2_INTERVAL_MS = 3000
 export const DEFAULT_ARXIV_INTERVAL_MS = 3000
+/** SerpAPI 按次计费，保守限制为 1 次/秒。 */
+export const DEFAULT_SERPAPI_INTERVAL_MS = 1000
 
 /** 全文下载默认设置。 */
 export const DEFAULT_PDF_MAX_MB = 30
@@ -102,6 +114,8 @@ export interface LitsearchSettings {
   ncbiApiKey: string
   /** 可选 Semantic Scholar API Key；提高配额。 */
   s2ApiKey: string
+  /** 可选 SerpAPI Key；配置后启用 Google Scholar 数据源。 */
+  serpApiKey: string
   /** 各源最小请求间隔覆盖值。 */
   pubmedIntervalMs: number
   s2IntervalMs: number
@@ -123,7 +137,7 @@ let readSettings = (): LitsearchSettings => ({
   contactEmail: '',
   defaultPageSize: DEFAULT_PAGE_SIZE,
   requestTimeoutMs: REQUEST_TIMEOUT_MS,
-  defaultSources: [...SOURCE_IDS],
+  defaultSources: [...DEFAULT_SOURCE_IDS],
   defaultSort: DEFAULT_SORT,
   defaultLanguage: DEFAULT_LANGUAGE,
   autoOpenTaskTab: DEFAULT_AUTO_OPEN,
@@ -133,6 +147,7 @@ let readSettings = (): LitsearchSettings => ({
   taskMaxPapers: DEFAULT_TASK_MAX_PAPERS,
   ncbiApiKey: '',
   s2ApiKey: '',
+  serpApiKey: '',
   pubmedIntervalMs: DEFAULT_PUBMED_INTERVAL_MS,
   s2IntervalMs: DEFAULT_S2_INTERVAL_MS,
   arxivIntervalMs: DEFAULT_ARXIV_INTERVAL_MS,

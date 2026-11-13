@@ -55,6 +55,7 @@ export async function searchSources(options: SearchOptions): Promise<SourceRunRe
         bypassCooldown: options.bypassCooldown === true,
         ncbiApiKey: settings.ncbiApiKey,
         s2ApiKey: settings.s2ApiKey,
+        serpApiKey: settings.serpApiKey,
       })
     }),
   )

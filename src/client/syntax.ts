@@ -8,7 +8,11 @@
 import type { SourceId } from '../search/types'
 
 /** 只接受自然语言、不解析字段标签/布尔式的来源。 */
-export const NATURAL_ONLY_SOURCES: readonly SourceId[] = ['semanticscholar', 'pubtator']
+export const NATURAL_ONLY_SOURCES: readonly SourceId[] = [
+  'semanticscholar',
+  'pubtator',
+  'googlescholar',
+]
 
 const FIELD_SYNTAX =
   /\[[a-z]{1,8}\]|\b(?:AND|OR|NOT)\b|\b(?:AU|TI|AB|TA|MESH|DOI|PMID|KW|JT|IS|VI|IP|PG|LA|PT|SU|SB|AD|AFFL)\s*:/u

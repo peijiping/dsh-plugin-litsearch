@@ -20,6 +20,7 @@ const RRF_WEIGHTS: Record<SourceId, number> = {
   semanticscholar: 0.9,
   arxiv: 0.85,
   pubtator: 0.7,
+  googlescholar: 0.95,
 }
 
 /** RRF 平滑常数。 */

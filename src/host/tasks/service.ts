@@ -244,7 +244,11 @@ export class TaskService {
       globalRev: this.events.currentRev,
       sources: [...PROVIDER_INFOS],
       sourceHealth: sourceHealthList(),
-      keys: { ncbi: settings.ncbiApiKey !== '', s2: settings.s2ApiKey !== '' },
+      keys: {
+        ncbi: settings.ncbiApiKey !== '',
+        s2: settings.s2ApiKey !== '',
+        serpapi: settings.serpApiKey !== '',
+      },
       settings: {
         defaultSources: [...settings.defaultSources],
         defaultPageSize: settings.defaultPageSize,

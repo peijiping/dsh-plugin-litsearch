@@ -10,6 +10,7 @@ import { SOURCE_IDS } from '../types.js'
 import { arxiv } from './arxiv.js'
 import { crossref } from './crossref.js'
 import { europepmc } from './europepmc.js'
+import { googlescholar } from './googlescholar.js'
 import { openalex } from './openalex.js'
 import { pubmed } from './pubmed.js'
 import { pubtator } from './pubtator.js'
@@ -23,6 +24,7 @@ export const PROVIDERS: Record<SourceId, Provider> = {
   semanticscholar,
   arxiv,
   pubtator,
+  googlescholar,
 }
 
 /** 注册顺序即聚合展示顺序。 */

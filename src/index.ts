@@ -36,6 +36,7 @@ import {
   DEFAULT_RETENTION_COUNT,
   DEFAULT_RETENTION_DAYS,
   DEFAULT_S2_INTERVAL_MS,
+  DEFAULT_SOURCE_IDS,
   DEFAULT_SORT,
   DEFAULT_TASK_MAX_PAPERS,
   DEFAULT_ZOTERO_ATTACH_PDF,
@@ -68,6 +69,8 @@ export const Config = Schema.object({
   ncbiApiKey: Schema.string().default('').role('secret').volatile(),
   /** 可选 Semantic Scholar API Key。 */
   s2ApiKey: Schema.string().default('').role('secret').volatile(),
+  /** 可选 SerpAPI Key；配置后启用 Google Scholar 数据源（付费/有免费额度）。 */
+  serpApiKey: Schema.string().default('').role('secret').volatile(),
   /** 各源最小请求间隔（毫秒）。 */
   pubmedIntervalMs: Schema.number().default(DEFAULT_PUBMED_INTERVAL_MS).volatile(),
   s2IntervalMs: Schema.number().default(DEFAULT_S2_INTERVAL_MS).volatile(),
@@ -86,9 +89,10 @@ export const Config = Schema.object({
       Schema.const('semanticscholar'),
       Schema.const('arxiv'),
       Schema.const('pubtator'),
+      Schema.const('googlescholar'),
     ]),
   )
-    .default([...SOURCE_IDS])
+    .default([...DEFAULT_SOURCE_IDS])
     .volatile(),
   defaultSort: Schema.union([
     Schema.const('relevance'),
@@ -134,6 +138,7 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     contactEmail: config.contactEmail.get().trim(),
     ncbiApiKey: config.ncbiApiKey.get().trim(),
     s2ApiKey: config.s2ApiKey.get().trim(),
+    serpApiKey: config.serpApiKey.get().trim(),
     pubmedIntervalMs: clampInt(
       config.pubmedIntervalMs.get(),
       50,
@@ -149,7 +154,9 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
       120_000,
       REQUEST_TIMEOUT_MS,
     ),
-    defaultSources: normalizeSources(config.defaultSources.get()),
+    defaultSources: normalizeSources(config.defaultSources.get()).filter(
+      (id) => id !== 'googlescholar' || config.serpApiKey.get().trim() !== '',
+    ),
     defaultSort: normalizeSort(config.defaultSort.get()),
     defaultLanguage: normalizeLanguage(config.defaultLanguage.get()),
     autoOpenTaskTab: config.autoOpenTaskTab.get(),
@@ -222,7 +229,7 @@ function clampInt(value: number, min: number, max: number, fallback: number): nu
 
 function normalizeSources(value: readonly string[]): SourceId[] {
   const valid = SOURCE_IDS.filter((id) => value.includes(id))
-  return valid.length === 0 ? [...SOURCE_IDS] : valid
+  return valid.length === 0 ? [...DEFAULT_SOURCE_IDS] : valid
 }
 
 function normalizeSort(value: string): SortMode {

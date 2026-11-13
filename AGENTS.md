@@ -49,7 +49,8 @@ pnpm typecheck:client # tsc --noEmit 校验 client
 - **包管理器**：统一使用 **pnpm**，不得与 npm / yarn 混用（锁文件互不兼容，混装会导致 `node_modules` 结构反复重建）。
 - **TypeScript 版本**：tsdown@0.22.0 的 peer 依赖要求 `typescript ^5.0.0 || ^6.0.0`，**不支持 TypeScript 7.x**；固定使用 `^5.9.0`。
 - **构建产物**：不要修改 `lib/`、`client/client.js` 等产物文件。
-- **免费数据源**：只接入无需付费、无需申请密钥、允许程序化访问的 API；改动接入方式前先确认其使用条款与限流要求。
+- **免费数据源**：默认只接入无需付费、无需申请密钥、允许程序化访问的 API；改动接入方式前先确认其使用条款与限流要求。
+  - 例外：Google Scholar 无官方 API 且禁止抓取，仅通过用户自备的 SerpAPI Key 接入，定位为**可选源**，未配置密钥时不可用、默认关闭（见 `docs/谷歌学术接入调研.md`）。
 
 ## 约定
 
