@@ -9,6 +9,7 @@ import type {
   PdfStatus,
   Screening,
   SearchTask,
+  SortMode,
   TaskLanguage,
 } from '../../search/types.js'
 
@@ -91,6 +92,20 @@ export function filterPapers(task: SearchTask, filter: PaperFilter = {}): Paper[
 
 export function screeningOf(task: SearchTask, paper: Paper): Screening {
   return task.states[paper.paperId]?.screening ?? 'unread'
+}
+
+/**
+ * 结果排序：`/results`、`/stats` 与模型侧的按页取数共用这一份口径。
+ *
+ * `relevance` 保持上游合并后的原序（不做二次排序）；被引/年份缺失的排在最后，
+ * 与面板看到的顺序一致。原地排序，调用方传入副本。
+ */
+export function sortPapers(papers: Paper[], sort: SortMode | undefined): void {
+  if (sort === 'citations') {
+    papers.sort((a, b) => (b.citedBy ?? -1) - (a.citedBy ?? -1))
+  } else if (sort === 'year') {
+    papers.sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
+  }
 }
 
 /** 有效全文状态：没有人工/下载记录时，上游给的 PDF 直链视为可用。 */

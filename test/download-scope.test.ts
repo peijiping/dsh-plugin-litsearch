@@ -9,8 +9,10 @@ import type {
 } from '../src/host/tasks/download.ts'
 import {
   buildScopeLabel,
+  describePages,
   mergeDownloadFilter,
   resolveDownloadScope,
+  resolvePageWindow,
   toPaperFilter,
 } from '../src/host/tasks/download.ts'
 
@@ -194,4 +196,124 @@ test('buildScopeLabel 拼出可读的中文范围说明', () => {
   assert.match(label, /关键词「CRISPR」/)
   assert.match(label, /2023–不限 年/)
   assert.match(label, /共 37 篇/)
+})
+
+// ---- scope=pages：把「第 N 页」交给宿主换算 ---------------------------------
+
+/** 45 篇、按结果原序；奇数下标的带 PDF 直链。 */
+function pagedTask(): SearchTask {
+  return task(
+    Array.from({ length: 45 }, (_, index) =>
+      paper(`p${index}`, index % 2 === 1 ? { pdfUrl: `https://example.org/p${index}.pdf` } : {}),
+    ),
+  )
+}
+
+const PAGE = 20
+
+test('scope=pages 按每页 20 条与结果顺序切页', () => {
+  const current = pagedTask()
+  const result = resolve(current, {
+    scope: 'pages',
+    filter: {},
+    pages: [2],
+    pageSize: PAGE,
+  })
+  assert.deepEqual(
+    result.paperIds,
+    current.result.papers.slice(PAGE, PAGE * 2).map((item) => item.paperId),
+  )
+  assert.equal(result.pageCount, 3)
+  assert.deepEqual(result.outOfRange, [])
+  assert.match(result.scopeLabel, /第 2 页/)
+  assert.match(result.scopeLabel, /共 20 篇/)
+})
+
+test('「第二页有 PDF 的文献」= 先切页再取交集，页面基准不因 hasPdf 前移', () => {
+  const current = pagedTask()
+  const viewMatched = filterPapers(current, {})
+  const result = resolve(current, {
+    scope: 'pages',
+    filter: { hasPdf: true },
+    pages: [2],
+    pageBase: 'view',
+    viewMatched,
+    pageSize: PAGE,
+  })
+  const expected = current.result.papers
+    .slice(PAGE, PAGE * 2)
+    .filter((item) => item.pdfUrl !== '')
+    .map((item) => item.paperId)
+  assert.deepEqual(result.paperIds, expected)
+  // 第 1 页里的 PDF 文献不能被算进来（那正是「筛后切页」才会出现的结果）。
+  assert.equal(result.paperIds.includes('p1'), false)
+})
+
+test('pageBase=filtered 时先筛后切页：取「有 PDF 的第 2 页」', () => {
+  const current = pagedTask()
+  const pdfIds = current.result.papers
+    .filter((item) => item.pdfUrl !== '')
+    .map((item) => item.paperId)
+  const result = resolve(current, {
+    scope: 'pages',
+    filter: { hasPdf: true },
+    pages: [2],
+    pageBase: 'filtered',
+    pageSize: PAGE,
+  })
+  assert.deepEqual(result.paperIds, pdfIds.slice(PAGE, PAGE * 2))
+})
+
+test('跨页取数按页序拼接、去重，范围说明合并连续页码', () => {
+  const current = task(
+    Array.from({ length: 100 }, (_, index) => paper(`w${index}`)),
+  )
+  const result = resolve(current, {
+    scope: 'pages',
+    filter: {},
+    pages: [5, 4],
+    pageSize: PAGE,
+  })
+  assert.equal(result.paperIds.length, new Set(result.paperIds).size)
+  assert.deepEqual(
+    result.paperIds.slice(0, 3),
+    current.result.papers.slice(PAGE * 3, PAGE * 3 + 3).map((item) => item.paperId),
+  )
+  assert.match(result.scopeLabel, /第 4–5 页/)
+  assert.equal(result.paperIds.length, PAGE * 2)
+})
+
+test('页码越界记入 outOfRange，不产生任何清单条目', () => {
+  const current = pagedTask()
+  const result = resolve(current, {
+    scope: 'pages',
+    filter: {},
+    pages: [4],
+    pageSize: PAGE,
+  })
+  assert.deepEqual(result.paperIds, [])
+  assert.deepEqual(result.outOfRange, [4])
+  assert.equal(result.pageCount, 3)
+})
+
+test('未显式给每页篇数时按 20 兜底（与面板分页粒度一致）', () => {
+  const current = pagedTask()
+  const window = resolvePageWindow({
+    pages: [2],
+    pageBase: 'view',
+    matched: current.result.papers,
+    viewMatched: current.result.papers,
+  })
+  assert.equal(window.pageSize, 20)
+  assert.deepEqual(
+    window.paperIds,
+    current.result.papers.slice(20, 40).map((item) => item.paperId),
+  )
+})
+
+test('describePages 合并连续页码', () => {
+  assert.equal(describePages([2]), '2')
+  assert.equal(describePages([4, 5, 6]), '4–6')
+  assert.equal(describePages([2, 5, 6]), '2、5–6')
+  assert.equal(describePages([]), '')
 })

@@ -72,7 +72,7 @@ import {
 import { ZoteroConnector } from '../zotero/connector.js'
 import { normalizeWorkspace } from '../workspace.js'
 import { compareTasks } from './compare.js'
-import { filterPapers, type PaperFilter } from './filter.js'
+import { filterPapers, sortPapers, type PaperFilter } from './filter.js'
 import { TaskRunner } from './runner.js'
 import { computeStats } from './stats.js'
 import { applyAnnotations, countScreening, emptyState, normalizeGroups } from './states.js'
@@ -664,12 +664,7 @@ export class TaskService {
     const offset = clampInt(filter.offset ?? 0, 0, Number.MAX_SAFE_INTEGER)
     const papers = filterPapers(task, await this.withBaseFilter(task, filter))
 
-    const sort = filter.sort ?? task.conditions.sort
-    if (sort === 'citations') {
-      papers.sort((a, b) => (b.citedBy ?? -1) - (a.citedBy ?? -1))
-    } else if (sort === 'year') {
-      papers.sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
-    }
+    sortPapers(papers, filter.sort ?? task.conditions.sort)
 
     return {
       taskId: task.id,

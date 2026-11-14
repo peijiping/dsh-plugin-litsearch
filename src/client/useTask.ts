@@ -8,14 +8,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { AnnotationInput, ResultsPage, TaskDetail } from '../search/types'
+import { RESULT_PAGE_SIZE as SHARED_PAGE_SIZE } from '../search/types'
 import { annotateTask, cancelTask, fetchResults, fetchTask, runTask } from './api'
 import type { ResultsQuery } from './api'
 import { subscribeTaskSummary } from './taskListStore'
 
 const POLL_MS = 1500
 
-/** 结果页每页篇数（与检索条件的「每源条数」无关，只影响面板展示）。 */
-export const RESULT_PAGE_SIZE = 20
+/**
+ * 结果页每页篇数（与检索条件的「每源条数」无关，只影响面板展示）。
+ *
+ * 与 Host 侧「第 N 页」共用一个常量：模型说「第 2 页」时，宿主就是按这个
+ * 粒度切片的；两处各写一份会静默错位。
+ */
+export const RESULT_PAGE_SIZE = SHARED_PAGE_SIZE
 
 interface TaskState {
   detail: TaskDetail | null

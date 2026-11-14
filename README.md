@@ -75,11 +75,15 @@
 | --- | --- |
 | 「帮我下载标题带 xxx 的那篇」「下载这几篇」 | 指定文献（用结果里给出的 `paperId`） |
 | 「帮我下载当前页的所有 pdf 文献」 | 右侧栏当前这一页，且仅有 PDF 直链或已下载 |
+| 「把第二页有 pdf 的文献下载下来」「下载第 4–5 页」 | 面板上的第 2 页 / 第 4–5 页（每页 20 条）；叠加 `hasPdf` 时先切页、再在页内筛 |
 | 「下载『综述』分组下的文献」 | 指定分组，跨页全量 |
 | 「下载 2023 年以后、开放获取、已纳入的文献」 | 按条件筛选 |
 | 「帮我下载当前全部文献」 | 当前筛选下的全部结果（跨页）；明确说「整个任务 / 不管筛选」才下全任务 |
 
-- 模型跑在后台，看不到界面。「当前页」「当前全部」由右侧栏定期上报的视图快照 + 服务端筛选精确解析，清单里每个 `paperId` 都会与任务结果逐一校验，模型编造的 id 会被忽略。面板还没打开或快照过期时，工具会提示先打开任务页，不会盲下一通。
+- **页码由宿主换算，模型不翻页、也不搬 id**：`scope=pages` + `pages=[2]`（或 `[4,5]`）交给服务端按视图快照的排序、筛选与每页 20 条切片，再与 `hasPdf` 等条件在页内取交集。`pageBase='view'`（默认）是「第 2 页里有 PDF 的」，`pageBase='filtered'` 是「有 PDF 的文献里的第 2 页」。页码越界会直接拒绝下发并给出总页数。
+- **不确定范围时可以先预演**：`literature_scope` 是只读工具，参数与下载 / 同步完全一致，返回命中篇数、总页数、面板当前视图与清单前 10 篇（含 `paperId` 与有无 PDF），核对无误后再执行，不会产生任何指令。
+- 模型跑在后台，看不到界面。「当前页」「第 N 页」「当前全部」由右侧栏定期上报的视图快照 + 服务端筛选精确解析，清单里每个 `paperId` 都会与任务结果逐一校验，模型编造的 id 会被忽略。面板还没打开或快照过期时，工具会提示先打开任务页，不会按错误的基准切页。
+- 面板每页固定 20 条（`RESULT_PAGE_SIZE`），与任务条件的「每源条数」不是一回事：模型侧按页取数只认前者，`literature_task current/get` 会直接回显「面板视图：第 1/30 页｜每页 20 条｜筛选…」。
 - 弹窗顶部标明「模型发起」、范围说明与篇数，并附上你的原话；每篇显示标题、来源与期刊·年份，方便核对有没有选错。可随时点「取消下载」中止（**关闭弹窗只隐藏，后台仍会继续跑完**）；取消只能中止尚未发出的请求，已到达后台的仍可能落盘，刷新任务页会同步真实状态。手动批量下载的交互保持不变。
 - 连续说几条下载指令会**排队串行执行**，不会丢也不会重复；任务 tab 没打开时先自动拉起。
 - `hasPdf`（有 PDF 直链或已下载）与 `openAccessOnly`（上游标记为开放获取）是两套口径，不会混用；付费墙文献不会静默算作成功。
@@ -88,7 +92,7 @@
 
 ### 在对话里批量存入 Zotero
 
-`literature_zotero` 与下载工具**共用同一套范围解析**（6 种 `scope` + `ResultsQuery` 筛选字段 + 视图快照 + 逐个校验 `paperId`），同样把范围算成一份已校验清单下发给右侧栏，由右侧栏复用「存入 Zotero」弹窗逐篇执行。区别只有一步：**目录**。
+`literature_zotero` 与下载工具**共用同一套范围解析**（7 种 `scope` + `ResultsQuery` 筛选字段 + 视图快照 + 逐个校验 `paperId`），同样把范围算成一份已校验清单下发给右侧栏，由右侧栏复用「存入 Zotero」弹窗逐篇执行。区别只有一步：**目录**。
 
 | 你可以这么说 | 实际行为 |
 | --- | --- |
@@ -202,7 +206,7 @@ pnpm typecheck:client
 pnpm test             # node:test 单元测试（test/**/*.test.ts）
 ```
 
-下载 / Zotero 指令链路另有专项单测：`test/download-scope.test.ts`（范围解析、无效 id 过滤、当前页顺序）、`download-events.test.ts`（事件增量与裁剪 / 重置）、`download-store.test.ts`（指令幂等与会话隔离）、`zotero-command.test.ts`（目录匹配歧义、指令幂等、事件增量）。
+下载 / Zotero 指令链路另有专项单测：`test/download-scope.test.ts`（范围解析、无效 id 过滤、当前页顺序、按页切分与页内再筛、页码越界）、`download-events.test.ts`（事件增量与裁剪 / 重置）、`download-store.test.ts`（指令幂等与会话隔离）、`zotero-command.test.ts`（目录匹配歧义、指令幂等、事件增量）。
 
 构建后用独立的本地 profile 启动调试：
 
@@ -217,8 +221,8 @@ dsh --profile litsearch
 
 - `src/search/`：数据源无关的检索层（类型、聚合、身份合并、查询适配、限流、健康状态）。
 - `src/search/providers/`：每家 API 一个 provider，新增数据源只需实现 `Provider` 并注册；其中 `googlescholar` 为需自备密钥的可选源。
-- `src/host/`：`/dsh-litsearch/api/*` 端点、任务执行 / 持久化 / 统计 / 导出，以及六个模型工具（`literature_search` / `literature_sources` / `literature_task` / `literature_export` / `literature_download` / `literature_zotero`）的注册。
-- `src/host/tasks/download.ts`：把模型的自然语言范围（6 种 `scope` + 复用 `ResultsQuery` 的筛选字段）解析成已校验的 paperId 清单与中文范围说明；复用 `filterPapers`，不自造筛选 DSL。下载与 Zotero 两个工具共用 `tools.ts` 里的 `resolveModelScope()`，不会出现两套筛选口径。
+- `src/host/`：`/dsh-litsearch/api/*` 端点、任务执行 / 持久化 / 统计 / 导出，以及七个模型工具（`literature_search` / `literature_sources` / `literature_task` / `literature_scope` / `literature_export` / `literature_download` / `literature_zotero`）的注册。
+- `src/host/tasks/download.ts`：把模型的自然语言范围（7 种 `scope`，含按页取数的 `pages` + 复用 `ResultsQuery` 的筛选字段）解析成已校验的 paperId 清单与中文范围说明；复用 `filterPapers`，不自造筛选 DSL。下载与 Zotero 两个工具共用 `tools.ts` 里的 `resolveModelScope()`，不会出现两套筛选口径。
 - `src/host/paths.ts`：`$DSH_HOME` 解析、统一存储区路径、旧目录一次性迁移与失败回退。
 - `src/host/pdf/`：PDF 候选链、SSRF 防护的抓取与本地缓存、可读文件名、Europe PMC 全文兜底、下载失败原因归类。
 - `src/host/zotero/`：本机 Zotero connector 协议封装（探测、目录列表、保存条目、上传附件），以及 `match.ts`（把对话里点名的目录唯一匹配到真实目标，歧义返回候选）。

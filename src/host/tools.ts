@@ -29,6 +29,8 @@ import type {
   DownloadCommand,
   DownloadScope,
   ExportFormat,
+  PageBase,
+  Paper,
   PaperState,
   PdfStatus,
   ResultsPage,
@@ -42,17 +44,19 @@ import type {
   TaskLanguage,
   TaskStatsReport,
   TaskSummary,
+  ViewSnapshot,
   ZoteroCommand,
   ZoteroTarget,
 } from '../search/types.js'
-import { SOURCE_IDS, TASK_LANGUAGES } from '../search/types.js'
+import { RESULT_PAGE_SIZE, SOURCE_IDS, TASK_LANGUAGES } from '../search/types.js'
 import {
+  describePages,
   mergeDownloadFilter,
   resolveDownloadScope,
   toPaperFilter,
   type DownloadScopeResult,
 } from './tasks/download.js'
-import { filterPapers, type PaperFilter } from './tasks/filter.js'
+import { filterPapers, pdfStatusOf, sortPapers, type PaperFilter } from './tasks/filter.js'
 import type { QueryInput, TaskPatch, TaskService } from './tasks/service.js'
 import { describeZoteroTargets, matchZoteroTarget } from './zotero/match.js'
 import { resolveSessionWorkspace } from './workspace.js'
@@ -73,11 +77,15 @@ const EXPORT_FORMATS: readonly ExportFormat[] = ['csv', 'ris', 'bibtex', 'md']
 const DOWNLOAD_SCOPES: readonly DownloadScope[] = [
   'ids',
   'currentPage',
+  'pages',
   'currentView',
   'all',
   'group',
   'filters',
 ]
+const PAGE_BASES: readonly PageBase[] = ['view', 'filtered']
+/** `fields=ids` 时一次最多回多少条 id（与 `literature_task` 的 limit 上限一致）。 */
+const IDS_LIMIT = 200
 const PDF_STATUSES: readonly PdfStatus[] = [
   'unknown',
   'available',
@@ -247,6 +255,26 @@ const TASK_PARAMETERS = {
     groupId: { type: 'string', description: '按任务内分组过滤。' },
     queryId: { type: 'string', description: '按检索式 id 过滤命中文献。' },
     q: { type: 'string', description: '标题/摘要关键词。' },
+    hasPdf: {
+      type: 'boolean',
+      description: 'get 时只看有 PDF 直链或已下载的文献；引用「有 PDF 的那批」前先用它核对。',
+    },
+    missingFullText: { type: 'boolean', description: 'get 时只看尚无可用全文的文献。' },
+    pdfStatus: { type: 'string', enum: [...PDF_STATUSES], description: '按全文状态精确过滤。' },
+    yearFrom: { type: 'integer', minimum: 1, maximum: 3000, description: '起始年份。' },
+    yearTo: { type: 'integer', minimum: 1, maximum: 3000, description: '截止年份。' },
+    source: { type: 'string', enum: [...SOURCE_IDS], description: '只看该数据源命中的文献。' },
+    type: { type: 'string', description: '文献类型（精确匹配）。' },
+    language: { type: 'string', enum: [...TASK_LANGUAGES], description: '语言码。' },
+    venue: { type: 'string', description: '期刊/出处（精确匹配）。' },
+    author: { type: 'string', description: '作者全名（精确匹配）。' },
+    newOnly: { type: 'boolean', description: '只看相对基准任务新增的文献。' },
+    fields: {
+      type: 'string',
+      enum: ['full', 'ids'],
+      description:
+        'get 的返回格式。full（默认）= 条件 + 摘要 + paperId，适合阅读；ids = 每条只回「paperId｜标题｜是否有 PDF」，一次最多 200 条，适合列出清单或核对范围（配 offset 翻页）。',
+    },
     scope: {
       type: 'string',
       enum: ['task', 'filtered'],
@@ -346,7 +374,20 @@ const DOWNLOAD_PARAMETERS = {
       type: 'string',
       enum: [...DOWNLOAD_SCOPES],
       description:
-        '下载范围，按用户话术选择：ids = 用户点名了具体文献且你已从工具结果看到确切 paperId；currentPage = 「当前页/这一页」；currentView = 「当前全部/当前筛选下全部」（含跨页，默认，不等于整个任务）；all = 用户明确说「整个任务/所有文献/不管筛选」；group = 「xx 分组」（必须同时给 groupId）；filters = 用户给了年份、开放获取、关键词、来源、筛读状态等条件。',
+        '下载范围，按用户话术选择：ids = 用户点名了具体文献且你已从工具结果看到确切 paperId；currentPage = 「当前页/这一页」；pages = 用户给了明确页码（「第 2 页」「第 4–5 页」），必须同时给 pages；currentView = 「当前全部/当前筛选下全部」（含跨页，默认，不等于整个任务）；all = 用户明确说「整个任务/所有文献/不管筛选」；group = 「xx 分组」（必须同时给 groupId）；filters = 用户给了年份、开放获取、关键词、来源、筛读状态等条件。',
+    },
+    pages: {
+      type: 'array',
+      maxItems: 20,
+      items: { type: 'integer', minimum: 1, maximum: 500 },
+      description:
+        'scope=pages 时的页码，1-based，指用户在右侧栏看到的那一页（每页 20 条，按当前排序与筛选），不是任务条件的「每源条数」。例：「第二页」→ [2]；「第 4–5 页」→ [4,5]。页码由宿主按面板上报的视图快照换算成 paperId，你不要自己算 offset 或搬 id。',
+    },
+    pageBase: {
+      type: 'string',
+      enum: [...PAGE_BASES],
+      description:
+        '页码的基准，默认 view。view = 先按面板当前筛选/排序切页，再在页内套 hasPdf 等附加条件（「第二页里有 PDF 的文献」用这个）；filtered = 先把附加条件合并进筛选再切页（「有 PDF 的文献的第 2 页」用这个）。',
     },
     reason: {
       type: 'string',
@@ -404,7 +445,20 @@ const ZOTERO_PARAMETERS = {
       type: 'string',
       enum: [...DOWNLOAD_SCOPES],
       description:
-        '同步范围，按用户话术选择：ids = 用户点名了具体文献且你已从工具结果看到确切 paperId；currentPage = 「当前页/这一页」；currentView = 「当前全部/当前筛选下全部」（含跨页，默认，不等于整个任务）；all = 用户明确说「整个任务/所有文献/不管筛选」；group = 「xx 分组」（必须同时给 groupId）；filters = 用户给了年份、开放获取、关键词、来源、筛读状态等条件。',
+        '同步范围，按用户话术选择：ids = 用户点名了具体文献且你已从工具结果看到确切 paperId；currentPage = 「当前页/这一页」；pages = 用户给了明确页码（「第 2 页」「第 4–5 页」），必须同时给 pages；currentView = 「当前全部/当前筛选下全部」（含跨页，默认，不等于整个任务）；all = 用户明确说「整个任务/所有文献/不管筛选」；group = 「xx 分组」（必须同时给 groupId）；filters = 用户给了年份、开放获取、关键词、来源、筛读状态等条件。',
+    },
+    pages: {
+      type: 'array',
+      maxItems: 20,
+      items: { type: 'integer', minimum: 1, maximum: 500 },
+      description:
+        'scope=pages 时的页码，1-based，指用户在右侧栏看到的那一页（每页 20 条，按当前排序与筛选），不是任务条件的「每源条数」。例：「第二页」→ [2]；「第 4–5 页」→ [4,5]。页码由宿主按面板上报的视图快照换算成 paperId，你不要自己算 offset 或搬 id。',
+    },
+    pageBase: {
+      type: 'string',
+      enum: [...PAGE_BASES],
+      description:
+        '页码的基准，默认 view。view = 先按面板当前筛选/排序切页，再在页内套 hasPdf 等附加条件（「第二页里有 PDF 的文献」用这个）；filtered = 先把附加条件合并进筛选再切页（「有 PDF 的文献的第 2 页」用这个）。',
     },
     reason: {
       type: 'string',
@@ -435,16 +489,46 @@ const ZOTERO_PARAMETERS = {
   additionalProperties: false,
 }
 
+/**
+ * `literature_scope` 的参数：与下载 / 同步的范围字段**完全同构**，只把 reason
+ * 设为可选（预览不产生指令，不需要复述）。同构是有意的：模型核对过一次范围后，
+ * 直接把这套参数搬给 literature_download / literature_zotero 即可，不会再出现
+ * 「预览的口径」和「执行的口径」两套。
+ */
+const SCOPE_PARAMETERS = {
+  ...DOWNLOAD_PARAMETERS,
+  properties: {
+    ...DOWNLOAD_PARAMETERS.properties,
+    reason: { type: 'string', description: '可选：一句话复述当前范围，仅用于回显。' },
+  },
+  required: ['scope'],
+  additionalProperties: false,
+}
+
 interface TaskArgs {
   action: (typeof TASK_ACTIONS)[number]
   id?: string
   withTaskId?: string
   limit?: number
   offset?: number
+  /** get 的过滤条件，与下载工具的筛选字段同一套口径。 */
   screening?: Screening
   groupId?: string
   queryId?: string
   q?: string
+  hasPdf?: boolean
+  missingFullText?: boolean
+  pdfStatus?: PdfStatus
+  yearFrom?: number
+  yearTo?: number
+  source?: SourceId
+  type?: string
+  language?: TaskLanguage
+  venue?: string
+  author?: string
+  newOnly?: boolean
+  /** get 的返回格式；`ids` 只回 paperId + 标题 + 是否有 PDF。 */
+  fields?: 'full' | 'ids'
   scope?: 'task' | 'filtered'
   patch?: TaskPatch
   papers?: AnnotationInput[]
@@ -464,6 +548,10 @@ interface DownloadArgs {
   scope: DownloadScope
   reason: string
   paperIds?: string[]
+  /** `scope='pages'` 时 1-based 页码。 */
+  pages?: number[]
+  /** 页码基准，默认 `view`。 */
+  pageBase?: PageBase
   /** 模型显式给出的附加条件（视图筛选由服务层另行合并）。 */
   filter: PaperFilter
 }
@@ -587,7 +675,8 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_task',
       description:
-        '读取与推进已保存的检索任务。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词过滤）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态与分组；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
+        '读取与推进已保存的检索任务。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词/年份/来源/类型/语言/全文状态/是否有 PDF 过滤；fields=ids 时每条只回「paperId｜标题｜有无 PDF」，一次最多 200 条，适合列清单或核对范围）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态与分组；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
+        'current / get 会回显「面板视图：第 x/y 页｜每页 20 条｜筛选…」，这是判断用户所说「第几页」的唯一依据；含页码的下载/同步请直接用 literature_download 的 scope=pages，不要靠 get 的 offset 自己拼页码。' +
         '注意：一个对话只保留一个任务 tab，切换任务由用户在任务列表里完成；run 会在指定任务内开新一轮检索（并把它设为当前任务），与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。用户要求批量下载 PDF 时改用 literature_download，要求批量存入 Zotero 时改用 literature_zotero。',
       parameters: TASK_PARAMETERS,
       output: TEXT_OUTPUT,
@@ -608,11 +697,26 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
       },
     },
     {
+      name: 'literature_scope',
+      description:
+        '只读的「范围预演」：把用户的说法（当前页 / 第 2 页 / 第 4–5 页 / 当前筛选全部 / 全部 / 分组 / 条件）算成一份 paperId 清单并回显，**不下载、不同步、不修改任何数据**。' +
+        '返回：范围说明、命中篇数、按面板每页 20 条算出的总页数与本次页窗口、面板当前视图（第 x/y 页、筛选条件）、清单前 10 篇（paperId + 是否有 PDF）。' +
+        '适合两种情况：(1) 用户提到了页码或范围较模糊，先预演一次确认「第 2 页」到底是哪 20 篇；(2) 执行前核对命中篇数，避免下错范围。参数与 literature_download / literature_zotero 完全一致（scope + pages + pageBase + 筛选字段），核对无误后把它们原样传给下载 / 同步工具即可，不需要搬 paperId。' +
+        '注意：页码只能用 scope=pages + pages 表达（1-based，宿主按视图快照换算）；不要自己用 offset 推算页码，也不要把 ids 当页码范围。',
+      parameters: SCOPE_PARAMETERS,
+      output: TEXT_OUTPUT,
+      async execute(args, exec): Promise<{ text: string }> {
+        return {
+          text: await runScopePreview(service, readScopeArgs(args, false), exec.agent?.id),
+        }
+      },
+    },
+    {
       name: 'literature_download',
       description:
         '在用户要求「帮我下载 XX 文献 / 下载当前页的所有 pdf 文献 / 下载 xx 分组下的文献 / 下载 xx 条件的文献 / 帮我下载当前全部文献」时调用：把范围算成一份已校验的 paperId 清单，下发给右侧栏，右侧栏会自动弹出批量下载框并立即逐篇下载，用户能看到每篇标题、来源与实时状态，也能点「取消下载」中止。' +
-        '【范围怎么选】用户点名具体文献且你已在工具结果的「paperId:」行看到确切 id → scope=ids 并给 paperIds；「当前页/这一页」→ scope=currentPage；「当前全部/当前筛选下全部」→ scope=currentView（含跨页，不等于整个任务）；明确说「整个任务/所有文献/不管筛选」→ scope=all；「xx 分组」→ scope=group + groupId；给了年份、OA、关键词、来源、筛读状态等条件 → scope=filters 并填对应字段。' +
-        '【重要】你看不到右侧栏界面，「当前页」「当前筛选全部」由宿主用面板上报的视图快照 + 服务端筛选精确计算，不要自己猜页码或编造 paperId；scope=ids 时只能使用工具结果里出现过的 paperId，无效 id 会被忽略。hasPdf 表示「有 PDF 直链或已下载」，openAccessOnly 表示上游标记为开放获取，两者不等价，不要同时默认开启。' +
+        '【范围怎么选】用户点名具体文献且你已在工具结果的「paperId:」行看到确切 id → scope=ids 并给 paperIds；「当前页/这一页」→ scope=currentPage；「第 2 页」「第 4–5 页」→ scope=pages 并给 pages（1-based，页码指面板上那一页，宿主换算，不要自己算 offset）；「当前全部/当前筛选下全部」→ scope=currentView（含跨页，不等于整个任务）；明确说「整个任务/所有文献/不管筛选」→ scope=all；「xx 分组」→ scope=group + groupId；给了年份、OA、关键词、来源、筛读状态等条件 → scope=filters 并填对应字段。pages 与 hasPdf 同时给时，默认先按面板切页、再在页内留下有 PDF 的（「第二页里有 PDF 的文献」）；要「有 PDF 的文献的第 2 页」则传 pageBase=filtered。' +
+        '【重要】你看不到右侧栏界面，「当前页」「第 N 页」「当前筛选全部」由宿主用面板上报的视图快照 + 服务端筛选精确计算，不要自己猜页码或编造 paperId；页码不等于任务条件的「每源条数」（面板每页恒为 20 条）。范围不确定时先调 literature_scope 预演，再执行。scope=ids 时只能使用工具结果里出现过的 paperId，无效 id 会被忽略。hasPdf 表示「有 PDF 直链或已下载」，openAccessOnly 表示上游标记为开放获取，两者不等价，不要同时默认开启。' +
         '本工具只下发指令、不等待下载完成，也不要重复调用同一条指令或臆测下载结果；若范围为空会返回原因而不下发。需要检索后再下载时，先按检索工具的轮次约束完成检索，再由用户明确提出下载。用户要求把文献「存入 Zotero / 同步到文献库」时改用 literature_zotero，不要用本工具。',
       parameters: DOWNLOAD_PARAMETERS,
       output: TEXT_OUTPUT,
@@ -625,7 +729,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
       description:
         '在用户要求「把这批文献存入 Zotero / 存到『综述』目录 / 把当前页的文献同步到 Zotero / 把 xx 分组的文献存进 Zotero」时调用：把范围算成一份已校验的 paperId 清单，下发给右侧栏，右侧栏复用「存入 Zotero」弹窗逐篇同步，用户能看到每篇标题、来源与实时状态，也能中途取消。' +
         '【目录怎么选】用户点名了目标目录（如「综述」「C15」）→ 填 collection，宿主会在本机 Zotero 目录列表里精确匹配，唯一命中时弹窗自动选中该目录并立即开始同步；没点名 → 省略 collection，弹窗加载好文献和目录后由用户自己选目录再点「同步」（与手动操作完全一致）；匹配失败或有歧义、Zotero 没开、同步在设置里关闭时，本工具不下发指令并返回原因与可用目录清单，此时请在对话里向用户确认目录或请其检查 Zotero，绝不猜一个目录就写入。也可以先主动问一句「要存到哪个目录」，但不要把它当成必经步骤。' +
-        '【范围怎么选】与 literature_download 完全相同的 6 种 scope 和筛选字段：用户点名具体文献且你已在工具结果的「paperId:」行看到确切 id → scope=ids + paperIds；「当前页」→ currentPage；「当前全部」→ currentView（含跨页，不等于整个任务）；「整个任务」→ all；「xx 分组」→ scope=group + groupId；给了年份、OA、关键词、筛读状态等条件 → scope=filters 并填对应字段。你看不到右侧栏界面，「当前页 / 当前筛选全部」由宿主用面板上报的视图快照 + 服务端筛选精确计算，不要自己猜页码或编造 paperId。' +
+        '【范围怎么选】与 literature_download 完全相同的 7 种 scope 和筛选字段：用户点名具体文献且你已在工具结果的「paperId:」行看到确切 id → scope=ids + paperIds；「当前页」→ currentPage；「第 2 页 / 第 4–5 页」→ scope=pages + pages（1-based，面板上那一页）；「当前全部」→ currentView（含跨页，不等于整个任务）；「整个任务」→ all；「xx 分组」→ scope=group + groupId；给了年份、OA、关键词、筛读状态等条件 → scope=filters 并填对应字段。你看不到右侧栏界面，「当前页 / 第 N 页 / 当前筛选全部」由宿主用面板上报的视图快照 + 服务端筛选精确计算，不要自己猜页码或编造 paperId；面板每页恒为 20 条，与任务条件的「每源条数」不是一回事。范围不确定时先调 literature_scope 预演，再同步。' +
         '同步会在 Zotero 里新建条目、不会覆盖已有条目，也不要跳过「已同步」的文献；目录只读时只存条目、不带 PDF 附件。本工具只下发指令、不等同步完成，也不要重复调用同一条指令或臆测同步结果；范围为空会返回原因而不下发。需要检索后再同步时，先按检索工具的轮次约束完成检索，再由用户明确提出同步。',
       parameters: ZOTERO_PARAMETERS,
       output: TEXT_OUTPUT,
@@ -845,6 +949,26 @@ function readTaskArgs(args: unknown): TaskArgs {
   const q = readText(record['q'], 'q')
   if (q !== undefined) input.q = q
 
+  // get 的筛选字段与下载工具同口径，复用同一个校验函数，避免两套白名单。
+  const filter = readScopeFilter(record)
+  if (filter.hasPdf === true) input.hasPdf = true
+  if (filter.missingFullText === true) input.missingFullText = true
+  if (filter.pdfStatus !== undefined) input.pdfStatus = filter.pdfStatus
+  if (filter.yearFrom !== undefined) input.yearFrom = filter.yearFrom
+  if (filter.yearTo !== undefined) input.yearTo = filter.yearTo
+  if (filter.source !== undefined) input.source = filter.source as SourceId
+  if (filter.type !== undefined) input.type = filter.type
+  if (filter.language !== undefined) input.language = filter.language
+  if (filter.venue !== undefined) input.venue = filter.venue
+  if (filter.author !== undefined) input.author = filter.author
+  if (filter.newOnly === true) input.newOnly = true
+
+  const fields = record['fields']
+  if (fields !== undefined) {
+    if (fields !== 'full' && fields !== 'ids') throw new Error('fields 只能是 full / ids')
+    input.fields = fields
+  }
+
   const scope = record['scope']
   if (scope !== undefined) {
     if (scope !== 'task' && scope !== 'filtered') {
@@ -1002,19 +1126,21 @@ function readExportArgs(args: unknown): ExportArgs {
 
 /**
  * 模型范围参数边界校验：枚举白名单、严格布尔、paperIds 去空去重且保序。
- * 下载与 Zotero 同步共用，避免两套校验口径。
+ * 下载 / Zotero 同步 / 范围预演共用；`reason` 只有真正下发指令时才必填。
  */
-function readScopeArgs(args: unknown): DownloadArgs {
+function readScopeArgs(args: unknown, requireReason = true): DownloadArgs {
   const record = asRecord(args)
   const scope = record['scope']
   if (typeof scope !== 'string' || !(DOWNLOAD_SCOPES as readonly string[]).includes(scope)) {
     throw new Error(`scope 只能是 ${DOWNLOAD_SCOPES.join(' / ')}`)
   }
   const reason = readText(record['reason'], 'reason')
-  if (reason === undefined) throw new Error('缺少 reason：请用一句话复述用户要处理的范围')
+  if (requireReason && reason === undefined) {
+    throw new Error('缺少 reason：请用一句话复述用户要处理的范围')
+  }
   const input: DownloadArgs = {
     scope: scope as DownloadScope,
-    reason: reason.slice(0, 200),
+    reason: (reason ?? '').slice(0, 200),
     filter: {},
   }
   const taskId = readText(record['taskId'], 'taskId')
@@ -1034,6 +1160,51 @@ function readScopeArgs(args: unknown): DownloadArgs {
     throw new Error('scope=ids 必须给出 paperIds，且只能使用工具结果里出现过的 paperId')
   }
 
+  if (record['pages'] !== undefined) {
+    const pages = record['pages']
+    if (!Array.isArray(pages) || pages.length === 0) {
+      throw new Error('pages 必须是非空的页码数组，例如 [2] 或 [4,5]')
+    }
+    if (pages.length > 20) throw new Error('pages 最多 20 个页码')
+    const parsed: number[] = []
+    for (const value of pages) {
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 500) {
+        throw new Error('pages 里只能是 1–500 的整数页码')
+      }
+      parsed.push(value)
+    }
+    input.pages = [...new Set(parsed)].sort((a, b) => a - b)
+  }
+  if (input.scope === 'pages' && (input.pages ?? []).length === 0) {
+    throw new Error('scope=pages 必须给出 pages（1-based 页码，如 [2] 或 [4,5]）')
+  }
+  if (input.scope !== 'pages' && input.pages !== undefined) {
+    throw new Error('pages 只能与 scope=pages 一起使用；「当前页」请用 scope=currentPage')
+  }
+
+  const pageBase = record['pageBase']
+  if (pageBase !== undefined) {
+    if (typeof pageBase !== 'string' || !(PAGE_BASES as readonly string[]).includes(pageBase)) {
+      throw new Error(`pageBase 只能是 ${PAGE_BASES.join(' / ')}`)
+    }
+    input.pageBase = pageBase as PageBase
+  }
+
+  const filter = readScopeFilter(record)
+  if (input.scope === 'group' && filter.groupId === undefined) {
+    throw new Error('scope=group 必须给出 groupId')
+  }
+  input.filter = filter
+  return input
+}
+
+/**
+ * 把 `ResultsQuery` / `PaperFilter` 同名键收窄成 `PaperFilter`。
+ *
+ * `literature_task get` 与下载工具共用这一份白名单：任何键只在这里识别一次，
+ * 模型在「读」和「下」两侧看到的筛选口径就不会分叉。
+ */
+function readScopeFilter(record: Record<string, unknown>): PaperFilter {
   const filter: PaperFilter = {}
   const q = readText(record['q'], 'q')
   if (q !== undefined) filter.q = q.slice(0, 200)
@@ -1056,7 +1227,7 @@ function readScopeArgs(args: unknown): DownloadArgs {
     throw new Error('yearFrom 不能大于 yearTo')
   }
 
-  for (const key of ['openAccessOnly', 'hasPdf', 'missingFullText'] as const) {
+  for (const key of ['openAccessOnly', 'hasPdf', 'missingFullText', 'newOnly'] as const) {
     const value = record[key]
     if (value === undefined) continue
     if (typeof value !== 'boolean') throw new Error(`${key} 必须是布尔值`)
@@ -1091,12 +1262,7 @@ function readScopeArgs(args: unknown): DownloadArgs {
     }
     filter.pdfStatus = pdfStatus as PdfStatus
   }
-
-  if (input.scope === 'group' && filter.groupId === undefined) {
-    throw new Error('scope=group 必须给出 groupId')
-  }
-  input.filter = filter
-  return input
+  return filter
 }
 
 /** Zotero 额外接受一个自由文本的目录名 / id；空串当作没指定。 */
@@ -1116,7 +1282,12 @@ async function runTaskAction(
   switch (args.action) {
     case 'current': {
       const task = await service.currentTask()
-      return formatCurrentTask(task)
+      if (task === undefined) return formatCurrentTask(undefined)
+      const snapshot = await service.getViewSnapshot(sessionId, task.id)
+      return formatCurrentTask(
+        task,
+        describeView(snapshot, snapshot?.total ?? task.result.papers.length),
+      )
     }
     case 'list': {
       const tasks = await service.list()
@@ -1128,10 +1299,13 @@ async function runTaskAction(
       const detail = await service.getDetail(id)
       const page = await service.results(id, {
         ...readFilterArgs(args),
-        limit: args.limit ?? 30,
+        limit: args.fields === 'ids' ? Math.min(args.limit ?? IDS_LIMIT, IDS_LIMIT) : (args.limit ?? 30),
         offset: args.offset ?? 0,
       })
-      return formatTaskDetail(detail, page, task.states, task.groups)
+      const snapshot = await service.getViewSnapshot(sessionId, id)
+      const view = describeView(snapshot, page.total)
+      if (args.fields === 'ids') return formatPaperIds(task, page, view)
+      return formatTaskDetail(detail, page, task.states, task.groups, undefined, view)
     }
     case 'update': {
       const task = await service.update(requireId(args), args.patch ?? {})
@@ -1212,8 +1386,21 @@ async function runExport(service: TaskService, args: ExportArgs): Promise<string
  * 说明。两个工具共用这一段，杜绝「模型理解的筛选」和「界面筛选」分叉。
  */
 type ModelScopeResolution =
-  | { ok: true; task: SearchTask; resolved: DownloadScopeResult }
+  | {
+      ok: true
+      task: SearchTask
+      resolved: DownloadScopeResult
+      /** 命中筛选的篇数（用于预演时给出总页数）。 */
+      matchedTotal: number
+      snapshot?: ViewSnapshot
+    }
   | { ok: false; text: string }
+
+/** 按界面排序原地排好并返回同一数组，便于内联到 `filterPapers` 的结果上。 */
+function sortPapersInPlace(papers: Paper[], sort: SortMode): Paper[] {
+  sortPapers(papers, sort)
+  return papers
+}
 
 async function resolveModelScope(
   service: TaskService,
@@ -1230,27 +1417,42 @@ async function resolveModelScope(
     }
   }
   const snapshot = await service.getViewSnapshot(sessionId, task.id)
-  if ((args.scope === 'currentPage' || args.scope === 'currentView') && snapshot === undefined) {
+  const needsView =
+    args.scope === 'currentPage' || args.scope === 'currentView' || args.scope === 'pages'
+  if (needsView && snapshot === undefined) {
     return {
       ok: false,
       text: [
-        `任务「${task.title}」（id: ${task.id}）暂时读不到右侧栏的当前视图，无法准确判断「当前页 / 当前全部」。`,
+        `任务「${task.title}」（id: ${task.id}）暂时读不到右侧栏的当前视图，无法准确判断「当前页 / 第 N 页 / 当前全部」。`,
+        args.scope === 'pages'
+          ? '页码是按面板的筛选、排序与每页 20 条切出来的，缺视图快照就无法换算成同一批文献。'
+          : '',
         '请让用户先在右侧栏打开该任务的结果页、翻到要看的那一页，再重复这条指令；也可以改用 scope=all 处理整个任务、用 filters 给明确条件、用 ids 指定文献。',
         `本次没有下发任何${verb}指令。`,
-      ].join('\n'),
+      ]
+        .filter((line) => line !== '')
+        .join('\n'),
     }
   }
 
-  // 「当前页 / 当前全部」以界面筛选打底；其余范围忽略界面筛选，避免用户说
-  // 「把全部文献存进去」时却只处理了筛出来的那批。
-  const viewFilter =
-    args.scope === 'currentPage' || args.scope === 'currentView'
-      ? toPaperFilter(snapshot?.filters ?? {})
-      : {}
+  // 「当前页 / 第 N 页 / 当前全部」以界面筛选打底；其余范围忽略界面筛选，避免
+  // 用户说「把全部文献存进去」时却只处理了筛出来的那批。
+  const viewFilter = needsView ? toPaperFilter(snapshot?.filters ?? {}) : {}
   const filter = await service.resolveDownloadFilter(
     task.id,
     mergeDownloadFilter(viewFilter, args.filter),
   )
+
+  // 页码切片的基准必须与界面完全一致：排序取快照（缺省回落任务排序），
+  // 且由这一层先排好再交给纯函数切页 —— 下载解析层不引运行时依赖。
+  const sort = snapshot?.sort ?? task.conditions.sort
+  const viewMatched =
+    args.scope === 'pages' && (args.pageBase ?? 'view') === 'view'
+      ? sortPapersInPlace(
+          filterPapers(task, await service.resolveDownloadFilter(task.id, viewFilter)),
+          sort,
+        )
+      : undefined
 
   // 当前页优先用面板直接上报的顺序；缺 paperIds 时按视图筛选与排序重算这一页。
   let pagePaperIds: readonly string[] | undefined
@@ -1272,15 +1474,35 @@ async function resolveModelScope(
     args.scope === 'group' && args.filter.groupId !== undefined
       ? task.groups.find((group) => group.id === args.filter.groupId)?.name
       : undefined
+  const matched =
+    args.scope === 'pages'
+      ? sortPapersInPlace(filterPapers(task, filter), sort)
+      : filterPapers(task, filter)
   const resolved = resolveDownloadScope(task, {
     scope: args.scope,
     filter,
-    matched: filterPapers(task, filter),
+    matched,
     ...(args.paperIds === undefined ? {} : { explicitIds: args.paperIds }),
+    ...(args.pages === undefined ? {} : { pages: args.pages }),
+    ...(args.pageBase === undefined ? {} : { pageBase: args.pageBase }),
     ...(snapshot === undefined ? {} : { snapshot }),
+    ...(snapshot === undefined ? {} : { pageSize: snapshot.pageSize }),
+    ...(viewMatched === undefined ? {} : { viewMatched }),
     ...(pagePaperIds === undefined ? {} : { pagePaperIds }),
     ...(groupName === undefined ? {} : { groupName }),
   })
+
+  if (resolved.outOfRange !== undefined && resolved.outOfRange.length > 0) {
+    const size = snapshot?.pageSize ?? RESULT_PAGE_SIZE
+    return {
+      ok: false,
+      text: [
+        `第 ${describePages(resolved.outOfRange)} 页超出范围：该任务在当前筛选与排序下共 ${resolved.pageCount} 页（每页 ${size} 条）。`,
+        '请让用户确认页码，或先用 literature_scope 预演一次看清单前几篇；不要自行改动页码后重复下发。',
+        `本次没有下发任何${verb}指令。`,
+      ].join('\n'),
+    }
+  }
 
   if (resolved.paperIds.length === 0) {
     return {
@@ -1288,11 +1510,123 @@ async function resolveModelScope(
       text: [
         `没有匹配到可${verb}的文献（${resolved.scopeLabel}）。`,
         `任务「${task.title}」共 ${task.result.papers.length} 篇；本次没有下发任何${verb}指令。`,
-        '请放宽条件、确认分组/年份是否正确，或改用 scope=all；不要重复下发同一条指令。',
+        '请放宽条件、确认页码/分组/年份是否正确，或改用 scope=all；不要重复下发同一条指令。',
       ].join('\n'),
     }
   }
-  return { ok: true, task, resolved }
+  return {
+    ok: true,
+    task,
+    resolved,
+    matchedTotal: matched.length,
+    ...(snapshot === undefined ? {} : { snapshot }),
+  }
+}
+
+/** 面板筛选的键名 → 中文短标签；键名沿用 `ResultsQuery`。 */
+const SNAPSHOT_FILTER_LABELS: Record<string, string> = {
+  q: '关键词',
+  source: '来源',
+  queryId: '检索式',
+  type: '类型',
+  venue: '出处',
+  author: '作者',
+  openAccessOnly: '仅开放获取',
+  hasPdf: '仅含 PDF',
+  missingFullText: '缺全文',
+  newOnly: '仅新增',
+  screening: '筛读',
+  language: '语言',
+  pdfStatus: '全文状态',
+  groupId: '分组',
+  sort: '排序',
+}
+
+function describeSnapshotFilters(filters: Record<string, string | number | boolean>): string {
+  const parts: string[] = []
+  if (filters['yearFrom'] !== undefined || filters['yearTo'] !== undefined) {
+    parts.push(`${filters['yearFrom'] ?? '不限'}–${filters['yearTo'] ?? '不限'} 年`)
+  }
+  for (const [key, value] of Object.entries(filters)) {
+    if (key === 'yearFrom' || key === 'yearTo') continue
+    const label = SNAPSHOT_FILTER_LABELS[key]
+    if (label === undefined) continue
+    parts.push(`${label} ${String(value)}`)
+  }
+  return parts.join('、')
+}
+
+/**
+ * 「你现在看到的是哪一页」——模型判断页码的唯一依据。
+ *
+ * 面板每页条数、排序、筛选都由视图快照决定；没有快照就不猜，直接不输出，
+ * 让 `scope=pages` 走失败分支而不是悄悄按错误的基准切页。
+ */
+function describeView(snapshot: ViewSnapshot | undefined, total?: number): string[] {
+  if (snapshot === undefined) return []
+  const size = Math.max(1, snapshot.pageSize)
+  const count = total ?? snapshot.total
+  const pageCount = count === undefined ? undefined : Math.max(1, Math.ceil(count / size))
+  const parts = [
+    `第 ${snapshot.pageIndex + 1}${pageCount === undefined ? '' : `/${pageCount}`} 页`,
+    `每页 ${size} 条`,
+  ]
+  if (count !== undefined) parts.push(`共 ${count} 篇`)
+  const filters = describeSnapshotFilters(snapshot.filters)
+  if (filters !== '') parts.push(`筛选：${filters}`)
+  return [`面板视图：${parts.join('｜')}`]
+}
+
+/**
+ * 只读预演：把范围算一遍给模型看，**不下发任何指令**。
+ *
+ * 存在的意义是替掉「模型自己翻页 / 自己搬 paperId」：页码换算、页内再筛、
+ * 越界判断都在这里一次算清，模型只需要核对命中数与标题，再把同一套参数
+ * 原样交给下载 / 同步工具。
+ */
+async function runScopePreview(
+  service: TaskService,
+  args: DownloadArgs,
+  sessionId: string | undefined,
+): Promise<string> {
+  const scope = await resolveModelScope(service, args, sessionId, '处理')
+  if (!scope.ok) return scope.text
+  const { task, resolved, matchedTotal, snapshot } = scope
+
+  const size = Math.max(1, snapshot?.pageSize ?? RESULT_PAGE_SIZE)
+  const pageCount = resolved.pageCount ?? Math.max(1, Math.ceil(matchedTotal / size))
+  const byId = new Map(task.result.papers.map((paper) => [paper.paperId, paper]))
+  const preview = resolved.paperIds.slice(0, 10)
+  // 页窗口按视图切页时，总篇数用面板上报的视图总数；否则用本次筛选命中的篇数。
+  const pageMode = args.scope === 'pages'
+  const totalHint = pageMode && (args.pageBase ?? 'view') === 'view' ? undefined : matchedTotal
+
+  const lines = [
+    '范围预演（只读，未下发任何指令）：',
+    `任务：${task.title}（id: ${task.id}）`,
+    `范围：${resolved.scopeLabel}`,
+    ...describeView(snapshot, totalHint),
+    pageMode
+      ? `页窗口：第 ${describePages(args.pages ?? [])} 页（每页 ${size} 条，共 ${pageCount} 页）→ 与附加条件取交集后 ${resolved.paperIds.length} 篇；附加条件在全任务命中 ${matchedTotal} 篇。`
+      : `命中：该条件下共 ${matchedTotal} 篇（每页 ${size} 条 ≈ ${pageCount} 页）→ 本次范围 ${resolved.paperIds.length} 篇。`,
+    '',
+    `清单前 ${preview.length} 篇：`,
+  ]
+  preview.forEach((paperId, index) => {
+    const paper = byId.get(paperId)
+    const pdf = paper !== undefined && (paper.pdfUrl !== '' || pdfStatusOf(task, paper) === 'downloaded')
+    lines.push(
+      `${index + 1}. ${paper?.title ?? paperId}｜paperId: ${paperId}｜${pdf ? '有 PDF' : '无 PDF 直链'}`,
+    )
+  })
+  if (resolved.paperIds.length > preview.length) {
+    lines.push(`… 还有 ${resolved.paperIds.length - preview.length} 篇，执行时会按同一范围一起处理。`)
+  }
+  lines.push(
+    '',
+    '确认无误后，把同一套参数（scope / pages / pageBase / 筛选字段）原样传给 literature_download 或 literature_zotero 即可；不要改用 ids 把 paperId 抄一遍，也不要自己按 offset 推算页码。',
+  )
+  return lines.join('\n')
 }
 
 /** 清单前几篇的预览，供模型核对范围有没有选错。 */
@@ -1303,10 +1637,18 @@ function previewItems(resolved: DownloadScopeResult): string {
     .join('\n')
 }
 
-function ignoredNote(resolved: DownloadScopeResult): string {
-  return resolved.ignored > 0
-    ? `，另有 ${resolved.ignored} 个 id 被忽略（不属于该任务或不满足条件）`
-    : ''
+/**
+ * 「少掉的那些」怎么解释。
+ *
+ * `scope=pages` 的差额是页内不满足附加条件的文献（例如第 2 页 20 条里只有
+ * 10 条有 PDF），属于预期行为，不能写成「id 被忽略」——否则模型会以为页码
+ * 或 id 填错了。
+ */
+function ignoredNote(resolved: DownloadScopeResult, scope: DownloadScope): string {
+  if (resolved.ignored <= 0) return ''
+  return scope === 'pages'
+    ? `，页内另有 ${resolved.ignored} 篇不满足附加条件已跳过`
+    : `，另有 ${resolved.ignored} 个 id 被忽略（不属于该任务或不满足条件）`
 }
 
 /**
@@ -1343,7 +1685,7 @@ async function runDownload(
   const lines = [
     `已向右侧栏下发批量下载指令：${resolved.scopeLabel}。`,
     `任务「${task.title}」（id: ${task.id}）；范围：${args.reason}`,
-    `清单已逐个校验：${resolved.paperIds.length} 篇属于该任务且满足条件${ignoredNote(resolved)}。`,
+    `清单已逐个校验：${resolved.paperIds.length} 篇属于该任务且满足条件${ignoredNote(resolved, args.scope)}。`,
     '',
     '清单前几篇：',
     previewItems(resolved),
@@ -1434,7 +1776,7 @@ async function runZotero(
   const lines = [
     `已向右侧栏下发批量存入 Zotero 指令：${resolved.scopeLabel}。`,
     `任务「${task.title}」（id: ${task.id}）；范围：${args.reason}`,
-    `清单已逐个校验：${resolved.paperIds.length} 篇属于该任务且满足条件${ignoredNote(resolved)}。`,
+    `清单已逐个校验：${resolved.paperIds.length} 篇属于该任务且满足条件${ignoredNote(resolved, args.scope)}。`,
     '',
     '清单前几篇：',
     previewItems(resolved),
@@ -1457,6 +1799,17 @@ function readFilterArgs(args: TaskArgs): PaperFilter {
   if (args.groupId !== undefined) filter.groupId = args.groupId
   if (args.queryId !== undefined) filter.queryId = args.queryId
   if (args.q !== undefined && args.q.trim() !== '') filter.q = args.q.trim()
+  if (args.hasPdf === true) filter.hasPdf = true
+  if (args.missingFullText === true) filter.missingFullText = true
+  if (args.pdfStatus !== undefined) filter.pdfStatus = args.pdfStatus
+  if (args.yearFrom !== undefined) filter.yearFrom = args.yearFrom
+  if (args.yearTo !== undefined) filter.yearTo = args.yearTo
+  if (args.source !== undefined) filter.source = args.source
+  if (args.type !== undefined) filter.type = args.type
+  if (args.language !== undefined) filter.language = args.language
+  if (args.venue !== undefined) filter.venue = args.venue
+  if (args.author !== undefined) filter.author = args.author
+  if (args.newOnly === true) filter.newOnly = true
   return filter
 }
 
@@ -1473,7 +1826,7 @@ function readText(value: unknown, name: string, allowEmpty = false): string | un
 }
 
 /** 「当前任务」的轻量快照：模型在执行检索/任务操作前先确认这个对话正在用哪个任务。 */
-function formatCurrentTask(task: SearchTask | undefined): string {
+function formatCurrentTask(task: SearchTask | undefined, view: readonly string[] = []): string {
   if (task === undefined) {
     return [
       '当前没有任务：这个对话还没有任何检索任务。',
@@ -1487,6 +1840,7 @@ function formatCurrentTask(task: SearchTask | undefined): string {
   const lines = [
     `当前任务：${task.title}（id: ${task.id}）`,
     `状态：${statusLabel(task.status)}${task.error === undefined ? '' : `（${task.error}）`}`,
+    ...view,
     `检索轮次：共 ${task.rounds.length} 轮${
       last === undefined
         ? ''
@@ -1526,6 +1880,7 @@ function formatTaskDetail(
   states: Record<string, PaperState>,
   groups: readonly TaskGroup[],
   outcome?: 'done' | 'timeout',
+  view: readonly string[] = [],
 ): string {
   const lines = [`任务：${detail.title}（id: ${detail.id}，rev=${detail.rev}）`]
   lines.push(
@@ -1553,6 +1908,7 @@ function formatTaskDetail(
   lines.push(
     `漏斗：原始 ${detail.stats.rawHits}｜去重 ${detail.stats.deduped}｜已加载 ${detail.result.totalLoaded}｜纳入 ${screening.included}、排除 ${screening.excluded}、待读 ${screening.unread}、已读 ${screening.read}`,
   )
+  if (view.length > 0) lines.push(...view)
 
   if (groups.length > 0) {
     const usage = new Map<string, number>()
@@ -1595,6 +1951,39 @@ function formatTaskDetail(
   })
   if (page.total > page.offset + page.papers.length) {
     lines.push('', `还有 ${page.total - page.offset - page.papers.length} 篇；可用 offset 继续读。`)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * `fields=ids`：一行一篇的紧凑清单。
+ *
+ * 只给「序号｜paperId｜标题｜有无 PDF」，方便模型核对范围或向用户复述篇数；
+ * 需要摘要时用默认的 full 模式。一次最多 `IDS_LIMIT` 条，超出用 offset 续读。
+ */
+function formatPaperIds(
+  task: SearchTask,
+  page: ResultsPage,
+  view: readonly string[],
+): string {
+  const lines = [
+    `结果清单（ids 模式）：筛选后共 ${page.total} 篇，以下第 ${page.offset + 1}–${page.offset + page.papers.length} 篇`,
+    ...view,
+    '',
+  ]
+  page.papers.forEach((paper, index) => {
+    const pdf = paper.pdfUrl !== '' || pdfStatusOf(task, paper) === 'downloaded'
+    lines.push(
+      `${page.offset + index + 1}. ${paper.paperId}｜${truncate(paper.title, 120)}｜${
+        pdf ? '有PDF' : '无PDF'
+      }`,
+    )
+  })
+  if (page.total > page.offset + page.papers.length) {
+    lines.push(
+      '',
+      `还有 ${page.total - page.offset - page.papers.length} 篇；用 offset 继续读，或直接用 scope=pages 让宿主按页取（不必搬 id）。`,
+    )
   }
   return lines.join('\n')
 }

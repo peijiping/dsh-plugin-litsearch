@@ -10,6 +10,7 @@
 import type {
   DownloadCommandItem,
   DownloadScope,
+  PageBase,
   Paper,
   PdfStatus,
   Screening,
@@ -18,6 +19,15 @@ import type {
   ViewSnapshot,
 } from '../../search/types.js'
 import type { PaperFilter } from './filter.js'
+
+/**
+ * 每页篇数的兜底值，与 `types.ts` 的 `RESULT_PAGE_SIZE`（面板分页粒度）一致。
+ *
+ * 本文件要能被 `node --test` 直接加载，因此不做任何运行时模块导入（`.js`
+ * 后缀在同环境里无法回落到 `.ts`）；真正的每页条数总由调用方通过视图快照
+ * 传入，这里只兜底。`test/download-scope.test.ts` 会断言它仍是 20。
+ */
+const FALLBACK_PAGE_SIZE = 20
 
 /**
  * 与 `types.ts` 的 `TASK_LANGUAGES` 一致。这里刻意只做类型导入、不产生运行时
@@ -113,10 +123,23 @@ export interface ResolveDownloadOptions {
   matched: readonly Paper[]
   /** `scope='ids'` 时模型给出的显式清单。 */
   explicitIds?: readonly string[]
-  /** 视图快照；`currentPage` / `currentView` 需要它。 */
+  /** 视图快照；`currentPage` / `currentView` / `pages` 需要它。 */
   snapshot?: ViewSnapshot
   /** 快照过期时由服务层重算的当前页 paperId（保持用户所见顺序）。 */
   pagePaperIds?: readonly string[]
+  /** `scope='pages'` 时模型给的 1-based 页码。 */
+  pages?: readonly number[]
+  /** 页码基准，默认 `view`（先切页再套附加条件）。 */
+  pageBase?: PageBase
+  /**
+   * `pageBase='view'` 时切页用的集合：只含视图筛选、**不含**工具附加条件。
+   *
+   * 缺省回落到 `matched`（即先筛后切页），与 `pageBase='filtered'` 等价。
+   * 与 `matched` 一样，需由调用方按界面排序排好后再传入。
+   */
+  viewMatched?: readonly Paper[]
+  /** 每页篇数；缺省取客户端上报值。 */
+  pageSize?: number
   /** 分组名，仅用于范围说明。 */
   groupName?: string
 }
@@ -127,6 +150,65 @@ export interface DownloadScopeResult {
   /** 清单里不属于该任务或不满足条件的 id 数。 */
   ignored: number
   scopeLabel: string
+  /** `scope='pages'` 时按当前每页篇数算出的总页数。 */
+  pageCount?: number
+  /** 请求但超出总页数的页码（1-based）；非空时调用方应拒绝下发。 */
+  outOfRange?: number[]
+}
+
+export interface PageWindowOptions {
+  pages: readonly number[]
+  pageBase: PageBase
+  /** `pageBase='filtered'` 的基础集合（筛选已全部合并）。 */
+  matched: readonly Paper[]
+  /** `pageBase='view'` 的基础集合（只含视图筛选）。 */
+  viewMatched: readonly Paper[]
+  /** 每页篇数；缺省用 `FALLBACK_PAGE_SIZE`。 */
+  pageSize?: number
+}
+
+export interface PageWindowResult {
+  /** 页窗口内按页序（跨页不重复）展开的 paperId。 */
+  paperIds: string[]
+  pageSize: number
+  pageCount: number
+  outOfRange: number[]
+}
+
+/**
+ * 把「第 4–5 页」解析成 paperId 清单。
+ *
+ * 页码语义固定在「用户屏幕上那一页」：每页 `pageSize` 条（面板恒为 20）。
+ * **前置条件**：`matched` / `viewMatched` 必须已按界面排序排好（调用方用
+ * `filter.sortPapers`），否则切出来的页与面板不一致。
+ *
+ * `pageBase='view'` 时先切页、再与附加条件取交集，这样「第二页里有 PDF 的
+ * 文献」不会因为加了 `hasPdf` 而把页面整体前移。
+ */
+export function resolvePageWindow(options: PageWindowOptions): PageWindowResult {
+  const pageSize = Math.max(1, Math.floor(options.pageSize ?? FALLBACK_PAGE_SIZE))
+  const base = options.pageBase === 'view' ? options.viewMatched : options.matched
+
+  const pageCount = Math.max(1, Math.ceil(base.length / pageSize))
+  const outOfRange: number[] = []
+  const seen = new Set<string>()
+  const paperIds: string[] = []
+
+  for (const page of [...options.pages].sort((a, b) => a - b)) {
+    const index = Math.floor(page) - 1
+    if (index < 0 || page > pageCount) {
+      outOfRange.push(page)
+      continue
+    }
+    const start = index * pageSize
+    for (const paper of base.slice(start, start + pageSize)) {
+      if (seen.has(paper.paperId)) continue
+      seen.add(paper.paperId)
+      paperIds.push(paper.paperId)
+    }
+  }
+
+  return { paperIds, pageSize, pageCount, outOfRange }
 }
 
 /**
@@ -145,6 +227,8 @@ export function resolveDownloadScope(
   const eligible = new Set(options.matched.map((paper) => paper.paperId))
 
   let ordered: string[]
+  let pageCount: number | undefined
+  let outOfRange: number[] | undefined
   switch (options.scope) {
     case 'ids': {
       const seen = new Set<string>()
@@ -159,6 +243,19 @@ export function resolveDownloadScope(
     }
     case 'currentPage': {
       ordered = [...(options.pagePaperIds ?? options.snapshot?.pagePaperIds ?? [])]
+      break
+    }
+    case 'pages': {
+      const window = resolvePageWindow({
+        pages: options.pages ?? [],
+        pageBase: options.pageBase ?? 'view',
+        matched: options.matched,
+        viewMatched: options.viewMatched ?? options.matched,
+        ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
+      })
+      ordered = window.paperIds
+      pageCount = window.pageCount
+      outOfRange = window.outOfRange
       break
     }
     default: {
@@ -190,6 +287,8 @@ export function resolveDownloadScope(
     items,
     ignored: ordered.length - paperIds.length,
     scopeLabel: buildScopeLabel(options.scope, paperIds.length, options),
+    ...(pageCount === undefined ? {} : { pageCount }),
+    ...(outOfRange === undefined ? {} : { outOfRange }),
   }
 }
 
@@ -197,7 +296,7 @@ export function resolveDownloadScope(
 export function buildScopeLabel(
   scope: DownloadScope,
   count: number,
-  options: Pick<ResolveDownloadOptions, 'filter' | 'snapshot' | 'groupName'>,
+  options: Pick<ResolveDownloadOptions, 'filter' | 'snapshot' | 'groupName' | 'pages'>,
 ): string {
   const parts: string[] = []
   switch (scope) {
@@ -206,6 +305,9 @@ export function buildScopeLabel(
       break
     case 'currentPage':
       parts.push(`当前页（第 ${(options.snapshot?.pageIndex ?? 0) + 1} 页）`)
+      break
+    case 'pages':
+      parts.push(`第 ${describePages(options.pages ?? [])} 页`)
       break
     case 'currentView':
       parts.push('当前筛选全部')
@@ -234,4 +336,25 @@ export function buildScopeLabel(
   if (filter.venue !== undefined && filter.venue !== '') parts.push(`出处 ${filter.venue}`)
   if (filter.author !== undefined && filter.author !== '') parts.push(`作者 ${filter.author}`)
   return `${parts.join(' · ')} · 共 ${count} 篇`
+}
+
+/** 页码列表 → 可读文案：`[2]` → `2`，`[4,5,6]` → `4–6`，`[2,5]` → `2、5`。 */
+export function describePages(pages: readonly number[]): string {
+  const sorted = [...new Set(pages)].sort((a, b) => a - b)
+  if (sorted.length === 0) return ''
+  const chunks: string[] = []
+  let start = sorted[0]
+  let prev = sorted[0]
+  for (let index = 1; index < sorted.length; index += 1) {
+    const page = sorted[index]
+    if (page === prev + 1) {
+      prev = page
+      continue
+    }
+    chunks.push(start === prev ? String(start) : `${start}–${prev}`)
+    start = page
+    prev = page
+  }
+  chunks.push(start === prev ? String(start) : `${start}–${prev}`)
+  return chunks.join('、')
 }

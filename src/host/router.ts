@@ -331,12 +331,14 @@ function readViewSnapshot(body: Record<string, unknown>, sessionId: string): Vie
     }
   }
   const sort = readEnum(body['sort'], 'sort', SORT_MODES)
+  const total = readInt(body['total'], 'total', 0, 1_000_000)
   return {
     sessionId,
     taskId,
     at: Date.now(),
     pageIndex: readInt(body['pageIndex'], 'pageIndex', 0, 1_000_000) ?? 0,
     pageSize: readInt(body['pageSize'], 'pageSize', 1, 200) ?? 20,
+    ...(total === undefined ? {} : { total }),
     ...(sort === undefined ? {} : { sort }),
     filters,
     pagePaperIds: readStringArray(body['pagePaperIds'], 'pagePaperIds', 200, 200) ?? [],

@@ -565,6 +565,8 @@ export function TaskPane({
       taskId,
       pageIndex: view.pageIndex,
       pageSize: view.pageSize,
+      // 让 Host 能直接答出「共 N 页」，不必自己重算一遍筛选。
+      total: view.page.total,
       ...(filters.sort === undefined ? {} : { sort: filters.sort }),
       filters: snapshotFilters(filters),
       pagePaperIds: view.page.papers.map((paper) => paper.paperId),

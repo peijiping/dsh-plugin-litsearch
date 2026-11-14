@@ -673,8 +673,33 @@ export interface TaskFocus {
   sessionId?: string
 }
 
-/** 模型侧下载范围；工具把自然语言收敛成这 6 种之一。 */
-export type DownloadScope = 'ids' | 'currentPage' | 'currentView' | 'all' | 'group' | 'filters'
+/**
+ * 结果列表每页篇数。
+ *
+ * 面板分页与模型侧「第 N 页」共用这一个常量：它是**界面翻页**的粒度，
+ * 与任务条件的 `pageSize`（每源条数，可调 1–50）不是一回事，两者不可混用。
+ */
+export const RESULT_PAGE_SIZE = 20
+
+/** 模型侧下载范围；工具把自然语言收敛成这 7 种之一。 */
+export type DownloadScope =
+  | 'ids'
+  | 'currentPage'
+  | 'currentView'
+  | 'pages'
+  | 'all'
+  | 'group'
+  | 'filters'
+
+/**
+ * 按页取数时页码的基准列表。
+ *
+ * - `view`（默认）：先按面板视图（筛选 + 排序）切页，再在页内套模型附加条件。
+ *   「第二页里有 PDF 的文献」就是这个口径：用户看到的是第 2 页那 20 条。
+ * - `filtered`：先把附加条件合并进筛选再切页。
+ *   「有 PDF 的文献的第 2 页」用这个。
+ */
+export type PageBase = 'view' | 'filtered'
 
 /**
  * 客户端当前视图快照。
@@ -690,6 +715,8 @@ export interface ViewSnapshot {
   at: number
   pageIndex: number
   pageSize: number
+  /** 客户端看到的结果总数；给出「共 N 页」时用它，缺省则由 Host 按任务重算。 */
+  total?: number
   /** 当前结果排序；快照缺 paperIds 时用它重算当前页。 */
   sort?: SortMode
   /** 当前生效的筛选；键名沿用 ResultsQuery，值已去除 undefined / 空串。 */
