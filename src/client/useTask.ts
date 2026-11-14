@@ -156,7 +156,7 @@ export function useTask(
   }, [id, nonce, size, load, signal, filterKey, pageIndex])
 
   // 任务空闲时不再轮询；宿主侧一旦改了 rev（模型在同一任务里开新一轮、
-  // 批量标注等），靠 /events 的摘要触发一次整页重取。运行中的 rev 变化
+  // 批量改筛读/分组等），靠 /events 的摘要触发一次整页重取。运行中的 rev 变化
   // 仍由上面的轮询处理，避免两路重复拉取。
   useEffect(() => {
     if (id === null) return undefined

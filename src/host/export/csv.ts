@@ -6,7 +6,7 @@
  */
 
 import type { ExportContext } from './common.js'
-import { groupName, paperNote, queryName } from './common.js'
+import { groupName, queryName } from './common.js'
 import { pdfStatusOf } from '../tasks/filter.js'
 import { stateOf } from '../tasks/states.js'
 
@@ -27,10 +27,8 @@ const COLUMNS = [
   'language',
   'screening',
   'group',
-  'shortlistOrder',
   'pdfStatus',
   'pdfError',
-  'note',
 ]
 
 export function renderCsv(context: ExportContext): string {
@@ -56,10 +54,8 @@ export function renderCsv(context: ExportContext): string {
         paper.language ?? '',
         state.screening,
         groupName(task, state.groupId),
-        state.shortlistOrder === undefined ? '' : String(state.shortlistOrder),
         pdfStatusOf(task, paper),
         state.pdfError ?? '',
-        paperNote(task, paper),
       ]
         .map(csvCell)
         .join(','),

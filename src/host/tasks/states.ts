@@ -1,5 +1,5 @@
 /**
- * 筛读台账：论文级状态（四态筛读 / 分组 / 必读顺序 / 备注 / 标签）与任务分组。
+ * 筛读台账：论文级状态（四态筛读 / 分组）与任务分组。
  *
  * 所有写入口（面板注解、模型 `literature_task annotate`、分组编辑）都先经过
  * 这里的校验，确保状态结构稳定；`states` 以稳定的 `paperId` 为键，因此跨任务
@@ -21,10 +21,8 @@ const MAX_ANNOTATIONS = 50
 const MAX_GROUPS = 50
 const MAX_GROUP_NAME = 60
 const MAX_GROUP_DESCRIPTION = 500
-const MAX_NOTE = 4000
 const MAX_PDF_ERROR = 300
 const MAX_PDF_FILE = 1024
-const MAX_SHORTLIST_ORDER = 100_000
 
 export const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
 
@@ -113,33 +111,6 @@ export function applyAnnotations(
       touched = true
     }
 
-    if (input.shortlistOrder !== undefined) {
-      if (input.shortlistOrder === null) {
-        delete next.shortlistOrder
-      } else {
-        if (
-          !Number.isInteger(input.shortlistOrder) ||
-          input.shortlistOrder < 0 ||
-          input.shortlistOrder > MAX_SHORTLIST_ORDER
-        ) {
-          throw new SearchError(
-            'bad_request',
-            `shortlistOrder 必须是 0..${MAX_SHORTLIST_ORDER} 的整数`,
-          )
-        }
-        next.shortlistOrder = input.shortlistOrder
-      }
-      touched = true
-    }
-
-    if (input.note !== undefined) {
-      if (typeof input.note !== 'string') throw new SearchError('bad_request', 'note 必须是字符串')
-      const note = input.note.trim()
-      if (note === '') delete next.note
-      else next.note = note.slice(0, MAX_NOTE)
-      touched = true
-    }
-
     if (input.pdfStatus !== undefined) {
       if (!isPdfStatus(input.pdfStatus)) {
         throw new SearchError('bad_request', `pdfStatus 只能是 ${PDF_STATUSES.join(' / ')}`)
@@ -212,16 +183,3 @@ export function groupUsage(task: SearchTask, groupId: string): number {
   return Object.values(task.states).filter((state) => state.groupId === groupId).length
 }
 
-/** 按必读顺序、年份、标题排序某组的论文。 */
-export function sortGroupPapers(task: SearchTask, papers: readonly Paper[]): Paper[] {
-  return [...papers].sort((a, b) => {
-    const left = stateOf(task, a.paperId).shortlistOrder
-    const right = stateOf(task, b.paperId).shortlistOrder
-    if (left !== undefined || right !== undefined) {
-      if (left === undefined) return 1
-      if (right === undefined) return -1
-      if (left !== right) return left - right
-    }
-    return (b.year ?? 0) - (a.year ?? 0) || a.title.localeCompare(b.title)
-  })
-}

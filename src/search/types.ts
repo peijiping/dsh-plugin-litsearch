@@ -222,8 +222,6 @@ export type PdfStatus =
 export interface PaperState {
   screening: Screening
   groupId?: string
-  shortlistOrder?: number
-  note?: string
   pdfStatus?: PdfStatus
   /** 失败原因（面向用户的一句话）。 */
   pdfError?: string
@@ -262,7 +260,7 @@ export interface TaskResult {
  * 任务内一次检索（一轮）的元数据快照。
  *
  * 只留「这一轮用什么条件、什么时候跑、跑出多少、结果如何」，**不保存文献列表**：
- * 当前结果永远是最新一轮的 `result.papers`，人工标注按 paperId 跨轮保留。
+ * 当前结果永远是最新一轮的 `result.papers`，筛读状态按 paperId 跨轮保留。
  * 历史轮次用于时间轴回看与「回填条件重跑」。
  */
 export interface SearchRound {
@@ -464,9 +462,6 @@ export interface AnnotationInput {
   screening?: Screening
   /** `null` 表示移出分组。 */
   groupId?: string | null
-  /** `null` 表示清除必读顺序。 */
-  shortlistOrder?: number | null
-  note?: string
   /** 全文状态由 Host 下载/同步流程写入，面板也可显示与筛选。 */
   pdfStatus?: PdfStatus
   pdfError?: string

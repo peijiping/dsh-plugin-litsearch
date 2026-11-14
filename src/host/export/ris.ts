@@ -1,7 +1,7 @@
 /** RIS 导出（供 Zotero / EndNote 导入）。 */
 
 import type { ExportContext } from './common.js'
-import { groupName, paperNote } from './common.js'
+import { groupName } from './common.js'
 import { stateOf } from '../tasks/states.js'
 
 export function renderRis(context: ExportContext): string {
@@ -18,7 +18,6 @@ export function renderRis(context: ExportContext): string {
     push(lines, 'AN', paper.paperId)
     const group = groupName(context.task, state.groupId)
     if (group !== '') push(lines, 'KW', group)
-    push(lines, 'N1', paperNote(context.task, paper))
     if (state.screening !== 'unread') push(lines, 'N1', `screening: ${state.screening}`)
     lines.push('ER  - ')
     return lines.join('\r\n')

@@ -12,6 +12,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   AnnotationInput,
   Paper,
+  PaperState,
   Screening,
   SortMode,
   TaskDetail,
@@ -20,6 +21,7 @@ import type {
 import {
   downloadPaperPdf,
   exportUrl,
+  fetchPaper,
   fetchStats,
   syncZotero,
   type ResultsQuery,
@@ -28,6 +30,7 @@ import { rememberTaskTitle } from './autoOpen'
 import { CompareTab } from './CompareTab'
 import { ConditionEditor } from './ConditionEditor'
 import { paperSummary, paperText, papersSummary, papersText, taskSummary, taskText } from './compose'
+import { DownloadDialog, type BatchDownloadItem } from './DownloadDialog'
 import { FullTextTab, type FullTextView } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
 import {
@@ -142,6 +145,11 @@ export function TaskPane({
   }
   /** paperId → 下载状态；刷新任务后仍保留「下载中 / 已下载」的即时反馈。 */
   const [downloads, setDownloads] = useState<Readonly<Record<string, PdfDownloadUi>>>({})
+  /** 批量下载弹窗：只集中展示，真实状态仍写在 downloads / 任务详情的 states 里。 */
+  const [batchItems, setBatchItems] = useState<readonly BatchDownloadItem[]>([])
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchRunning, setBatchRunning] = useState(false)
+  const batchRunningRef = useRef(false)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [editingConditions, setEditingConditions] = useState(false)
   const [risFallback, setRisFallback] = useState<{
@@ -156,6 +164,11 @@ export function TaskPane({
   const detail = view.detail
   const filterActive = useMemo(() => activeFilterCount(filters) > 0, [filters])
   const filterKey = JSON.stringify(filters)
+  // 批量下载循环里要判断「当前是否已下载」，用 ref 读取最新状态避免闭包取到旧值。
+  const downloadsRef = useRef<Readonly<Record<string, PdfDownloadUi>>>(downloads)
+  downloadsRef.current = downloads
+  const statesRef = useRef<Record<string, PaperState>>({})
+  statesRef.current = detail?.states ?? {}
 
   useEffect(() => {
     setSelected(new Set())
@@ -163,6 +176,8 @@ export function TaskPane({
 
   useEffect(() => {
     setDownloads({})
+    setBatchItems([])
+    setBatchOpen(false)
   }, [taskId])
 
   useEffect(() => {
@@ -174,7 +189,7 @@ export function TaskPane({
     if (detail !== null) rememberTaskTitle(detail.id, detail.title)
   }, [detail])
 
-  // rev 变化（下载、标注、重跑）后重取覆盖率，保证横幅与全文页一致。
+  // rev 变化（下载、筛读、重跑）后重取覆盖率，保证横幅与全文页一致。
   useEffect(() => {
     if (taskId === null) return undefined
     const controller = new AbortController()
@@ -317,24 +332,104 @@ export function TaskPane({
     })()
   }
 
-  /** 结果页与全文页共用同一套批量下载 / Zotero 逻辑。 */
-  const downloadIds = (paperIds: readonly string[]): void => {
-    if (taskId === null || paperIds.length === 0) return
+  /**
+   * 批量下载：打开进度弹窗后逐篇串行下载。
+   *
+   * 已下载（含文件已删除以外的正常已下载）的文献直接略过，不再重复请求；
+   * 每篇的结果实时写入 downloads，弹窗只做集中展示。批量未结束时再次触发
+   * 只重新打开弹窗，避免两轮循环重复下载同一批文献。
+   */
+  const startBatchDownload = (entries: readonly BatchDownloadItem[]): void => {
+    if (taskId === null || entries.length === 0) return
+    if (batchRunningRef.current) {
+      // 上一轮还没跑完：只把弹窗叫回来，不替换清单、也不重复下载。
+      setBatchOpen(true)
+      return
+    }
+    setBatchItems(entries.map((entry) => ({ ...entry })))
+    setBatchOpen(true)
+    batchRunningRef.current = true
+    setBatchRunning(true)
     void (async () => {
       let ok = 0
-      let failed = 0
-      for (const paperId of paperIds) {
-        try {
-          const result = await downloadPaperPdf(taskId, paperId)
-          if (result.status === 'downloaded') ok += 1
-          else failed += 1
-        } catch {
-          failed += 1
+      let failedCount = 0
+      let changed = false
+      try {
+        for (const entry of entries) {
+          const paperId = entry.paperId
+          const runtime = downloadsRef.current[paperId]
+          if (runtime?.state === 'downloading') continue
+          if (
+            runtime?.state === 'downloaded' ||
+            statesRef.current[paperId]?.pdfStatus === 'downloaded'
+          ) {
+            // 已经是已下载状态：直接略过，不重新下载。
+            continue
+          }
+          changed = true
+          setDownloads((previous) => ({ ...previous, [paperId]: { state: 'downloading' } }))
+          try {
+            const result = await downloadPaperPdf(taskId, paperId)
+            if (result.status === 'downloaded') {
+              ok += 1
+              setDownloads((previous) => ({
+                ...previous,
+                [paperId]: {
+                  state: 'downloaded',
+                  ...(result.path === undefined ? {} : { path: result.path }),
+                },
+              }))
+            } else {
+              failedCount += 1
+              setDownloads((previous) => ({
+                ...previous,
+                [paperId]: { state: 'failed', error: result.error ?? result.status },
+              }))
+            }
+          } catch (error: unknown) {
+            failedCount += 1
+            setDownloads((previous) => ({
+              ...previous,
+              [paperId]: { state: 'failed', error: messageOf(error) },
+            }))
+          }
         }
+      } finally {
+        batchRunningRef.current = false
+        setBatchRunning(false)
+        if (changed) view.reload()
       }
-      notify(tpl(t('bulk.downloadDone'), { ok, failed }), failed > 0 ? 'error' : 'info', 8000)
-      view.reload()
+      if (changed) {
+        notify(
+          tpl(t('bulk.downloadDone'), { ok, failed: failedCount }),
+          failedCount > 0 ? 'error' : 'info',
+          8000,
+        )
+      }
     })()
+  }
+
+  /** 结果页选中项：标题优先取当前页，跨页选中的文献再异步补详情。 */
+  const downloadMany = (): void => {
+    if (taskId === null || ids.length === 0) return
+    const known = new Map<string, string>()
+    for (const paper of view.page?.papers ?? []) known.set(paper.paperId, paper.title)
+    startBatchDownload(ids.map((paperId) => ({ paperId, title: known.get(paperId) ?? '' })))
+    const missing = ids.filter((paperId) => !known.has(paperId))
+    if (missing.length === 0) return
+    void Promise.all(
+      missing.map((paperId) =>
+        fetchPaper(taskId, paperId)
+          .then((loaded) => {
+            setBatchItems((previous) =>
+              previous.map((item) =>
+                item.paperId === paperId ? { ...item, title: loaded.paper.title } : item,
+              ),
+            )
+          })
+          .catch(() => undefined),
+      ),
+    )
   }
 
   const zoteroIds = (paperIds: readonly string[]): void => {
@@ -356,7 +451,6 @@ export function TaskPane({
       })
   }
 
-  const downloadMany = (): void => downloadIds(ids)
   const zoteroMany = (): void => zoteroIds(ids)
 
   if (taskId === null) return <div style={panelStyle}>{t('task.notFound')}</div>
@@ -822,6 +916,10 @@ export function TaskPane({
               onInsert={insertMany}
               onDownload={downloadMany}
               onZotero={zoteroMany}
+              batchRunning={batchRunning}
+              {...(detail.downloadDir === undefined || onRevealLocal === undefined
+                ? {}
+                : { downloadDir: detail.downloadDir, onRevealDir: onRevealLocal })}
             />
           )}
           {page !== null && page.papers.length > 0 ? (
@@ -913,7 +1011,11 @@ export function TaskPane({
           {...(onOpenLocal === undefined ? {} : { onOpenLocal })}
           {...(onRevealLocal === undefined ? {} : { onRevealLocal })}
           onZotero={zoteroPaper}
-          onBatchDownload={(papers) => downloadIds(papers.map((paper) => paper.paperId))}
+          onBatchDownload={(papers) =>
+            startBatchDownload(
+              papers.map((paper) => ({ paperId: paper.paperId, title: paper.title })),
+            )
+          }
           onBatchZotero={(papers) => zoteroIds(papers.map((paper) => paper.paperId))}
           onShowInResults={(viewKey: FullTextView) => {
             // 清空其他筛选，保证按钮上写的篇数就是跳过去能看到的篇数。
@@ -953,6 +1055,14 @@ export function TaskPane({
         )}
       </div>
 
+      <DownloadDialog
+        t={t}
+        open={batchOpen}
+        items={batchItems}
+        states={detail.states}
+        downloads={downloads}
+        onClose={() => setBatchOpen(false)}
+      />
       <RoundsDialog
         t={t}
         open={showRounds}
@@ -1182,6 +1292,9 @@ function BulkBar({
   pageIds,
   groups,
   busy,
+  batchRunning,
+  downloadDir,
+  onRevealDir,
   filters,
   onClear,
   onSelectPage,
@@ -1197,6 +1310,11 @@ function BulkBar({
   pageIds: readonly string[]
   groups: readonly { id: string; name: string }[]
   busy: boolean
+  /** 批量下载进行中：按钮禁用，避免再起一轮重复下载。 */
+  batchRunning: boolean
+  /** 下载目录；给了才在批量下载按钮右侧画下三角。 */
+  downloadDir?: string
+  onRevealDir?: (path: string) => void
   filters: ResultsQuery
   onClear(): void
   onSelectPage(pageIds: readonly string[]): void
@@ -1254,11 +1372,14 @@ function BulkBar({
           ))}
         </select>
         <BulkActionButton icon={<ChatIcon />} label={t('bulk.insert')} onClick={onInsert} />
-        <BulkActionButton
-          icon={<DownloadIcon />}
+        <BulkDownloadButton
+          t={t}
           label={t('bulk.download')}
           onClick={onDownload}
-          disabled={busy}
+          disabled={busy || batchRunning}
+          {...(downloadDir === undefined || onRevealDir === undefined
+            ? {}
+            : { downloadDir, onReveal: onRevealDir })}
         />
         <BulkActionButton
           icon={<ZoteroIcon />}
@@ -1316,6 +1437,93 @@ function BulkActionButton({
       {icon}
       <span>{label}</span>
     </button>
+  )
+}
+
+/**
+ * 批量下载按钮 + 下三角：点主体打开下载进度弹窗；点箭头展开菜单，
+ * 在系统文件管理器中打开下载目录（与条目上「查看已下载 ▾」的菜单一致）。
+ */
+function BulkDownloadButton({
+  t,
+  label,
+  onClick,
+  disabled,
+  downloadDir,
+  onReveal,
+}: {
+  t: Translate
+  label: string
+  onClick(): void
+  disabled: boolean
+  /** 下载目录；没有目录或没有打开能力时不画下三角。 */
+  downloadDir?: string
+  onReveal?: (path: string) => void
+}): ReactElement {
+  const [open, setOpen] = useState(false)
+  const groupRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const closeOnOutside = (event: MouseEvent): void => {
+      if (groupRef.current !== null && !groupRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  const revealable = downloadDir !== undefined && onReveal !== undefined
+
+  return (
+    <span ref={groupRef} style={BULK_DOWNLOAD_GROUP_STYLE}>
+      <BulkActionButton
+        icon={<DownloadIcon />}
+        label={label}
+        onClick={onClick}
+        disabled={disabled}
+      />
+      {revealable && (
+        <button
+          type="button"
+          style={{
+            ...BULK_ARROW_STYLE,
+            ...(disabled ? { opacity: 0.45, cursor: 'default' } : null),
+          }}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={t('bulk.revealDir')}
+          title={t('bulk.revealDir')}
+          disabled={disabled}
+          onClick={() => setOpen((value) => !value)}
+        >
+          ▾
+        </button>
+      )}
+      {open && revealable && (
+        <span role="menu" style={BULK_MENU_STYLE}>
+          <button
+            type="button"
+            role="menuitem"
+            style={BULK_MENU_ITEM_STYLE}
+            onClick={() => {
+              setOpen(false)
+              if (downloadDir !== undefined) onReveal?.(downloadDir)
+            }}
+          >
+            {t('bulk.revealDir')}
+          </button>
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -1543,6 +1751,51 @@ const BULK_BUTTON_STYLE: CSSProperties = {
   color: ACCENT,
   fontSize: 11.5,
   lineHeight: 1.4,
+  cursor: 'pointer',
+}
+
+/** 批量下载 + 下三角的组合：箭头紧贴按钮右侧，菜单相对整体定位。 */
+const BULK_DOWNLOAD_GROUP_STYLE: CSSProperties = {
+  position: 'relative',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 2,
+}
+const BULK_ARROW_STYLE: CSSProperties = {
+  padding: '2px 3px',
+  borderRadius: 5,
+  border: '1px solid rgba(80,140,255,0.4)',
+  background: 'transparent',
+  color: ACCENT,
+  fontSize: 12,
+  lineHeight: 1.4,
+  cursor: 'pointer',
+}
+const BULK_MENU_STYLE: CSSProperties = {
+  position: 'absolute',
+  top: '100%',
+  left: 0,
+  marginTop: 3,
+  zIndex: 40,
+  display: 'flex',
+  flexDirection: 'column',
+  minWidth: 132,
+  padding: 2,
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.3)',
+  background: '#fff',
+  boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+}
+const BULK_MENU_ITEM_STYLE: CSSProperties = {
+  padding: '5px 8px',
+  border: 'none',
+  borderRadius: 4,
+  background: 'transparent',
+  color: '#1f2328',
+  fontSize: 12,
+  lineHeight: 1.4,
+  textAlign: 'left',
+  whiteSpace: 'nowrap',
   cursor: 'pointer',
 }
 

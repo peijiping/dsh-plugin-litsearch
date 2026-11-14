@@ -1,11 +1,10 @@
 /**
  * 任务结果里的单篇文献卡片。
  *
- * 标题可点外链；徽章展示命中来源、被引、开放获取。筛读状态与分组就地修改，
- * 备注 / 标签 / 必读顺序收在「标注」里，避免窄栏里堆满输入框。
+ * 标题可点外链；徽章展示命中来源、被引、开放获取。筛读状态与分组就地修改。
  */
 
-import { useEffect, useState, type CSSProperties, type ReactElement } from 'react'
+import { useState, type CSSProperties, type ReactElement } from 'react'
 
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -108,20 +107,8 @@ export function PaperCard({
   onManageGroups,
 }: Props): ReactElement {
   const [expanded, setExpanded] = useState(false)
-  const [editing, setEditing] = useState(false)
   const [entities, setEntities] = useState(false)
   const [showHtml, setShowHtml] = useState(false)
-  const [note, setNote] = useState(state?.note ?? '')
-  const [order, setOrder] = useState(
-    state?.shortlistOrder === undefined ? '' : String(state.shortlistOrder),
-  )
-
-  const noteKey = state?.note ?? ''
-  const orderKey = state?.shortlistOrder ?? ''
-  useEffect(() => {
-    setNote(noteKey)
-    setOrder(orderKey === '' ? '' : String(orderKey))
-  }, [noteKey, orderKey])
 
   const authors =
     paper.authors.length === 0
@@ -138,7 +125,6 @@ export function PaperCard({
 
   const screening = state?.screening ?? 'unread'
   const groupName = groups.find((group) => group.id === state?.groupId)?.name
-  const hasNote = (state?.note ?? '') !== ''
   const pdfStatus: PdfStatus = state?.pdfStatus ?? (paper.pdfUrl === '' ? 'unknown' : 'available')
   const canPdf =
     !NO_PDF_STATUSES.has(pdfStatus) &&
@@ -180,21 +166,10 @@ export function PaperCard({
         : failedMessage !== undefined
         ? tpl(t('pdf.retryHint'), { message: failedMessage })
         : tpl(t('pdf.downloadHint'), { path: downloadDir ?? t('pdf.downloadDirUnknown') })
-  const saveDetail = (): void => {
-    const trimmedOrder = order.trim()
-    const parsedOrder = Number(trimmedOrder)
-    onAnnotate({
-      paperId: paper.paperId,
-      note,
-      shortlistOrder:
-        trimmedOrder === '' || !Number.isFinite(parsedOrder) ? null : Math.floor(parsedOrder),
-    })
-    setEditing(false)
-  }
 
   return (
     <article style={cardStyle}>
-      {/* 顶部工具行：勾选、筛读、分组、标注集中在一处，正文从标题开始。 */}
+      {/* 顶部工具行：勾选、筛读、分组集中在一处，正文从标题开始。 */}
       <div style={STATE_ROW_STYLE}>
         {onToggleSelect !== undefined && (
           <input
@@ -246,41 +221,7 @@ export function PaperCard({
             <option value={CREATE_GROUP_VALUE}>{t('annotate.createGroup')}</option>
           )}
         </select>
-        <button type="button" style={linkButtonStyle} onClick={() => setEditing((value) => !value)}>
-          {editing ? t('annotate.collapse') : t('annotate.expand')}
-          {hasNote ? ' •' : ''}
-        </button>
       </div>
-
-      {editing && (
-        <div style={EDIT_STYLE}>
-          <label style={EDIT_FIELD_STYLE}>
-            <span>{t('annotate.note')}</span>
-            <textarea
-              style={NOTE_STYLE}
-              value={note}
-              rows={2}
-              placeholder={t('annotate.notePlaceholder')}
-              onChange={(event) => setNote(event.target.value)}
-            />
-          </label>
-          <label style={{ ...EDIT_FIELD_STYLE, maxWidth: 120 }}>
-            <span>{t('annotate.shortlistOrder')}</span>
-            <input
-              style={INPUT_STYLE}
-              inputMode="numeric"
-              value={order}
-              placeholder="—"
-              onChange={(event) => setOrder(event.target.value)}
-            />
-          </label>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button variant="outline" size="sm" type="button" disabled={busy} onClick={saveDetail}>
-              {t('annotate.save')}
-            </Button>
-          </div>
-        </div>
-      )}
 
       <div style={FIELD_ROW_STYLE}>
         <span style={FIELD_ICON_STYLE}>
@@ -339,11 +280,6 @@ export function PaperCard({
             {t(`screening.${screening}`)}
           </span>
           {groupName !== undefined && <span style={INFO_BADGE_STYLE}>{groupName}</span>}
-          {state?.shortlistOrder !== undefined && (
-            <span style={INFO_BADGE_STYLE}>
-              {tpl(t('annotate.shortlistBadge'), { n: state.shortlistOrder })}
-            </span>
-          )}
           {sources.map((source) => (
             <span key={source} style={INFO_BADGE_STYLE}>
               {t(`source.${source}`)}
@@ -475,7 +411,7 @@ const PDF_COLOR: Record<PdfStatus, string> = {
   failed: '#d64545',
 }
 
-/** 卡片顶部工具行：勾选 / 筛读 / 分组 / 标注。 */
+/** 卡片顶部工具行：勾选 / 筛读 / 分组。 */
 const STATE_ROW_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -538,35 +474,4 @@ const SELECT_STYLE: CSSProperties = {
   background: 'transparent',
   color: 'inherit',
   maxWidth: 130,
-}
-const EDIT_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  marginBottom: 8,
-  padding: '6px 8px',
-  borderRadius: 6,
-  background: 'rgba(127,127,127,0.07)',
-}
-const EDIT_FIELD_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 2,
-  fontSize: 11,
-  opacity: 0.9,
-}
-const INPUT_STYLE: CSSProperties = {
-  fontSize: 12,
-  padding: '3px 5px',
-  borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
-  background: 'transparent',
-  color: 'inherit',
-  minWidth: 0,
-}
-const NOTE_STYLE: CSSProperties = {
-  ...INPUT_STYLE,
-  resize: 'vertical',
-  fontFamily: 'inherit',
-  lineHeight: 1.5,
 }

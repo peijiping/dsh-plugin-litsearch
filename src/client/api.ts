@@ -272,7 +272,7 @@ export function probeSource(source: SourceId, signal?: AbortSignal): Promise<Pro
   })
 }
 
-/** 批量写入筛读 / 分组 / 必读顺序 / 备注 / 标签。 */
+/** 批量写入筛读 / 分组。 */
 export function annotateTask(
   id: string,
   papers: readonly AnnotationInput[],

@@ -1,16 +1,15 @@
 /**
- * Markdown 检索报告：检索式组（可复现）、规模漏斗、分组阅读清单、必读路线、
+ * Markdown 检索报告：检索式组（可复现）、规模漏斗、分组阅读清单、
  * 对比差异与研究笔记。结构对齐两份真实产出。
  */
 
 import type { Paper } from '../../search/types.js'
 import { compareTasks } from '../tasks/compare.js'
-import { sortGroupPapers, stateOf } from '../tasks/states.js'
+import { stateOf } from '../tasks/states.js'
 import type { ExportContext } from './common.js'
-import { groupName, isoDate } from './common.js'
+import { isoDate } from './common.js'
 
 const TOP_COMPARE = 30
-const TOP_ROUTE = 30
 
 export function renderMarkdown(context: ExportContext): string {
   const { task, papers, base, generatedAt } = context
@@ -58,13 +57,13 @@ export function renderMarkdown(context: ExportContext): string {
     if (items.length === 0) {
       lines.push('_（暂无文献）_', '')
     } else {
-      lines.push('| # | 文献 | 年份 / 出处 | 为什么读 | 状态 |')
-      lines.push('|---:|---|---|---|---|')
-      sortGroupPapers(task, items).forEach((paper, index) => {
+      lines.push('| # | 文献 | 年份 / 出处 | 状态 |')
+      lines.push('|---:|---|---|---|')
+      items.forEach((paper, index) => {
         lines.push(
-          `| ${index + 1} | ${paperLabel(paper)} | ${metaLabel(paper)} | ${cell(
-            stateOf(task, paper.paperId).note ?? '',
-          )} | ${stateOf(task, paper.paperId).screening} |`,
+          `| ${index + 1} | ${paperLabel(paper)} | ${metaLabel(paper)} | ${
+            stateOf(task, paper.paperId).screening
+          } |`,
         )
       })
       lines.push('')
@@ -74,35 +73,16 @@ export function renderMarkdown(context: ExportContext): string {
   const ungrouped = papers.filter((paper) => stateOf(task, paper.paperId).groupId === undefined)
   if (ungrouped.length > 0) {
     lines.push(`### 未分组（${ungrouped.length} 篇）`, '')
-    lines.push('| # | 文献 | 年份 / 出处 | 为什么读 | 状态 |')
-    lines.push('|---:|---|---|---|---|')
+    lines.push('| # | 文献 | 年份 / 出处 | 状态 |')
+    lines.push('|---:|---|---|---|')
     ungrouped.slice(0, 120).forEach((paper, index) => {
       lines.push(
-        `| ${index + 1} | ${paperLabel(paper)} | ${metaLabel(paper)} | ${cell(
-          stateOf(task, paper.paperId).note ?? '',
-        )} | ${stateOf(task, paper.paperId).screening} |`,
+        `| ${index + 1} | ${paperLabel(paper)} | ${metaLabel(paper)} | ${
+          stateOf(task, paper.paperId).screening
+        } |`,
       )
     })
     if (ungrouped.length > 120) lines.push('', `_（仅列出前 120 篇，完整清单见 CSV）_`)
-    lines.push('')
-  }
-
-  const route = papers
-    .filter((paper) => stateOf(task, paper.paperId).shortlistOrder !== undefined)
-    .sort(
-      (a, b) =>
-        (stateOf(task, a.paperId).shortlistOrder ?? 0) -
-        (stateOf(task, b.paperId).shortlistOrder ?? 0),
-    )
-    .slice(0, TOP_ROUTE)
-  lines.push('## 必读阅读路线', '')
-  if (route.length === 0) {
-    lines.push('_（尚未标记必读顺序）_', '')
-  } else {
-    route.forEach((paper, index) => {
-      const note = stateOf(task, paper.paperId).note
-      lines.push(`${index + 1}. ${paperLabel(paper)}${note === undefined ? '' : ` — ${note}`}`)
-    })
     lines.push('')
   }
 

@@ -1,7 +1,7 @@
 /**
  * 独立论文 tab：`dsh-resource://litsearch-paper/<taskId>/<paperId>`。
  *
- * 展示完整摘要、标识符、筛读与标注、全文预览和 PubTator 实体；数据来自
+ * 展示完整摘要、标识符、筛读与分组、全文预览和 PubTator 实体；数据来自
  * 单篇详情端点，避免为了打开一篇论文拉取整页结果。
  */
 
@@ -122,10 +122,7 @@ export function PaperPane({
     setToastState(text)
     setToastTone(tone)
   }
-  const [editing, setEditing] = useState(false)
   const [showHtml, setShowHtml] = useState(false)
-  const [note, setNote] = useState('')
-  const [order, setOrder] = useState('')
   const [risFallback, setRisFallback] = useState<{ ids: readonly string[]; message: string } | null>(
     null,
   )
@@ -166,16 +163,8 @@ export function PaperPane({
   }, [ref?.taskId])
 
   const state = detail?.state
-  const noteKey = state?.note ?? ''
-  const orderKey = state?.shortlistOrder ?? ''
 
   useEffect(() => {
-    setNote(noteKey)
-    setOrder(orderKey === '' ? '' : String(orderKey))
-  }, [noteKey, orderKey])
-
-  useEffect(() => {
-    setEditing(false)
     setShowHtml(false)
     setRisFallback(null)
   }, [ref?.taskId, ref?.paperId])
@@ -211,18 +200,6 @@ export function PaperPane({
       .then(() => setNonce((value) => value + 1))
       .catch((err: unknown) => notify(messageOf(err)))
       .finally(() => setBusy(false))
-  }
-
-  const saveDetail = (): void => {
-    const trimmedOrder = order.trim()
-    const parsedOrder = Number(trimmedOrder)
-    annotate({
-      paperId: paper.paperId,
-      note,
-      shortlistOrder:
-        trimmedOrder === '' || !Number.isFinite(parsedOrder) ? null : Math.floor(parsedOrder),
-    })
-    setEditing(false)
   }
 
   const insert = (): void => {
@@ -345,9 +322,6 @@ export function PaperPane({
           {t(`screening.${state?.screening ?? 'unread'}`)}
         </span>
         {groupName !== undefined && <span style={badgeStyle}>{groupName}</span>}
-        {state?.shortlistOrder !== undefined && (
-          <span style={badgeStyle}>{tpl(t('annotate.shortlistBadge'), { n: state.shortlistOrder })}</span>
-        )}
         {sources.map((source) => (
           <span key={source} style={badgeStyle}>
             {t(`source.${source}`)}
@@ -398,40 +372,7 @@ export function PaperPane({
             </option>
           ))}
         </select>
-        <button type="button" style={linkButtonStyle} onClick={() => setEditing((value) => !value)}>
-          {editing ? t('annotate.collapse') : t('annotate.expand')}
-        </button>
       </div>
-
-      {editing && (
-        <div style={EDIT_STYLE}>
-          <label style={FIELD_STYLE}>
-            <span>{t('annotate.note')}</span>
-            <textarea
-              style={NOTE_STYLE}
-              value={note}
-              rows={3}
-              placeholder={t('annotate.notePlaceholder')}
-              onChange={(event) => setNote(event.target.value)}
-            />
-          </label>
-          <label style={{ ...FIELD_STYLE, maxWidth: 120 }}>
-            <span>{t('annotate.shortlistOrder')}</span>
-            <input
-              style={INPUT_STYLE}
-              inputMode="numeric"
-              value={order}
-              placeholder="—"
-              onChange={(event) => setOrder(event.target.value)}
-            />
-          </label>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button variant="outline" size="sm" type="button" disabled={busy} onClick={saveDetail}>
-              {t('annotate.save')}
-            </Button>
-          </div>
-        </div>
-      )}
 
       {paper.abstract !== '' && (
         <section>
@@ -620,36 +561,6 @@ const SELECT_STYLE: CSSProperties = {
   background: 'transparent',
   color: 'inherit',
   maxWidth: 150,
-}
-const EDIT_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  padding: '6px 8px',
-  borderRadius: 6,
-  background: 'rgba(127,127,127,0.07)',
-}
-const FIELD_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 2,
-  fontSize: 11,
-  opacity: 0.9,
-}
-const INPUT_STYLE: CSSProperties = {
-  fontSize: 12,
-  padding: '3px 5px',
-  borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
-  background: 'transparent',
-  color: 'inherit',
-  minWidth: 0,
-}
-const NOTE_STYLE: CSSProperties = {
-  ...INPUT_STYLE,
-  resize: 'vertical',
-  fontFamily: 'inherit',
-  lineHeight: 1.5,
 }
 const IDS_STYLE: CSSProperties = {
   display: 'flex',

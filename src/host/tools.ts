@@ -6,7 +6,7 @@
  *   都有效）；只有用户明确要求新任务时才新建。等待最多 25 秒后把任务头部与前
  *   若干条结果交给模型，并明确要求本轮到此为止、只给完善建议、不发起下一轮。
  * - `literature_sources`：列出已接入的数据源与能力，便于模型决定后续策略。
- * - `literature_task`：读取/修改已保存任务（含轮次历史），写入筛读、分组与备注，
+ * - `literature_task`：读取/修改已保存任务（含轮次历史），写入筛读与分组，
  *   做新老对比与统计。
  * - `literature_export`：把任务（按筛选）导出为 CSV / RIS / BibTeX / Markdown 并落盘。
  *
@@ -196,7 +196,7 @@ const TASK_PARAMETERS = {
       type: 'string',
       enum: [...TASK_ACTIONS],
       description:
-        'current 读「当前任务」（推荐在执行检索/任务操作前先调用，确认这个对话正在用哪个任务，无需 id）；list 列任务；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/备注；compare 与旧任务对比；stats 读语料统计。',
+        'current 读「当前任务」（推荐在执行检索/任务操作前先调用，确认这个对话正在用哪个任务，无需 id）；list 列任务；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/分组；compare 与旧任务对比；stats 读语料统计。',
     },
     id: { type: 'string', description: '任务 id；除 current / list 外必填。' },
     withTaskId: { type: 'string', description: 'compare 时的基准任务 id。' },
@@ -258,15 +258,13 @@ const TASK_PARAMETERS = {
     papers: {
       type: 'array',
       maxItems: 50,
-      description: 'annotate 时的逐篇写入（筛读 / 分组 / 必读顺序 / 备注）。',
+      description: 'annotate 时的逐篇写入（筛读 / 分组）。',
       items: {
         type: 'object',
         properties: {
           paperId: { type: 'string' },
           screening: { type: 'string', enum: [...SCREENINGS] },
           groupId: { type: ['string', 'null'] },
-          shortlistOrder: { type: ['integer', 'null'] },
-          note: { type: 'string' },
         },
         required: ['paperId'],
         additionalProperties: false,
@@ -438,7 +436,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_task',
       description:
-        '读取与推进已保存的检索任务。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词过滤）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态、分组、必读顺序、备注与标签；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
+        '读取与推进已保存的检索任务。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词过滤）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态与分组；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
         '注意：一个对话只保留一个任务 tab，切换任务由用户在任务列表里完成；run 会在指定任务内开新一轮检索（并把它设为当前任务），与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。',
       parameters: TASK_PARAMETERS,
       output: TEXT_OUTPUT,
@@ -451,7 +449,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_export',
       description:
-        '把检索任务导出为文件并返回落盘路径。csv 是全量筛读台账（含命中检索式、筛读状态、分组、备注）；ris / bibtex 供 Zotero、EndNote 等文献管理器；md 是分层检索报告（漏斗、按分组的「为什么读」、必读清单、开放获取与 PDF 覆盖率、对比新增）。可按筛读状态、分组、检索式或指定 paperIds 限定范围。',
+        '把检索任务导出为文件并返回落盘路径。csv 是全量筛读台账（含命中检索式、筛读状态、分组）；ris / bibtex 供 Zotero、EndNote 等文献管理器；md 是分层检索报告（漏斗、按分组的阅读清单、开放获取与 PDF 覆盖率、对比新增）。可按筛读状态、分组、检索式或指定 paperIds 限定范围。',
       parameters: EXPORT_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args): Promise<{ text: string }> {
@@ -790,15 +788,6 @@ function readAnnotations(value: unknown): AnnotationInput[] {
       }
       input.groupId = groupId
     }
-    if (record['shortlistOrder'] !== undefined) {
-      const order = record['shortlistOrder']
-      if (order !== null && (typeof order !== 'number' || !Number.isFinite(order))) {
-        throw new Error(`papers[${index}].shortlistOrder 必须是数字或 null`)
-      }
-      input.shortlistOrder = order
-    }
-    const note = readText(record['note'], `papers[${index}].note`, true)
-    if (note !== undefined) input.note = note
     return input
   })
 }
@@ -896,7 +885,7 @@ async function runTaskAction(
     }
     case 'annotate': {
       const result = await service.annotate(requireId(args), args.papers ?? [])
-      return `已写入 ${result.updated} 篇的筛读/备注（任务 id: ${result.taskId}，rev=${result.rev}）。`
+      return `已写入 ${result.updated} 篇的筛读/分组（任务 id: ${result.taskId}，rev=${result.rev}）。`
     }
     case 'compare': {
       const report = await service.compare(requireId(args), args.withTaskId ?? '')
@@ -1059,7 +1048,6 @@ function formatTaskDetail(
     const marks = [
       state?.screening ?? 'unread',
       state?.groupId === undefined ? '' : groupNames.get(state.groupId) ?? state.groupId,
-      state?.shortlistOrder === undefined ? '' : `必读#${state.shortlistOrder}`,
     ].filter((part) => part !== '')
     const meta = [
       paper.authors.slice(0, 4).join(', '),
@@ -1070,7 +1058,6 @@ function formatTaskDetail(
     ].filter((part) => part !== '')
     lines.push(`${page.offset + index + 1}. [${marks.join('|')}] ${paper.title}`)
     if (meta.length > 0) lines.push(`   ${meta.join(' | ')}`)
-    if (state?.note !== undefined && state.note !== '') lines.push(`   备注：${state.note}`)
     if (paper.abstract !== '') lines.push(`   摘要：${truncate(paper.abstract, 300)}`)
   })
   if (page.total > page.offset + page.papers.length) {

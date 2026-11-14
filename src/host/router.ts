@@ -8,7 +8,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { stat } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { dirname, extname, isAbsolute, resolve } from 'node:path'
 
@@ -41,6 +41,7 @@ import type {
   TaskPatch,
   TaskService,
 } from './tasks/service.js'
+import { resolvePdfRoot } from './pdf/store.js'
 import { resolveSessionWorkspace } from './workspace.js'
 
 /** dsh `webServer` 的最小结构接口（类型不在已安装的 dsh 包里）。 */
@@ -140,16 +141,33 @@ function sendHtml(res: ServerResponse, status: number, html: string): void {
 
 /**
  * 在系统文件管理器中定位文件：macOS Finder、Windows 资源管理器、Linux 桌面。
- * 只接受已存在的 PDF 绝对路径，避免这个端点被当成任意路径探测。
+ * 只接受已存在的 PDF 文件或目录（批量下载的「打开下载目录」用后者），
+ * 避免这个端点被当成任意路径探测。
  */
-async function revealInFileManager(rawPath: string): Promise<{ path: string }> {
+async function revealInFileManager(
+  rawPath: string,
+  downloadRoot?: string,
+): Promise<{ path: string }> {
   const target = resolve(rawPath)
-  if (extname(target).toLowerCase() !== '.pdf') {
-    throw new SearchError('bad_request', '只能定位 PDF 文件')
+  let info = await stat(target).catch(() => null)
+  // 下载目录可能一篇都还没下过：打开前补建，避免点「打开下载目录」毫无反应。
+  if (info === null && downloadRoot !== undefined && resolve(downloadRoot) === target) {
+    await mkdir(target, { recursive: true })
+    info = await stat(target).catch(() => null)
   }
-  const info = await stat(target).catch(() => null)
-  if (info === null || !info.isFile()) {
-    throw new SearchError('not_found', '文件不存在或已被移动')
+  if (info === null) throw new SearchError('not_found', '文件不存在或已被移动')
+  if (info.isDirectory()) {
+    const [command, args] =
+      process.platform === 'darwin'
+        ? ['open', [target]]
+        : process.platform === 'win32'
+          ? ['explorer.exe', [target]]
+          : ['xdg-open', [target]]
+    await spawnDetached(command, args)
+    return { path: target }
+  }
+  if (!info.isFile() || extname(target).toLowerCase() !== '.pdf') {
+    throw new SearchError('bad_request', '只能定位 PDF 文件或下载目录')
   }
   const [command, args] =
     process.platform === 'darwin'
@@ -157,6 +175,12 @@ async function revealInFileManager(rawPath: string): Promise<{ path: string }> {
       : process.platform === 'win32'
         ? ['explorer.exe', [`/select,${target}`]]
         : ['xdg-open', [dirname(target)]]
+  await spawnDetached(command, args)
+  return { path: target }
+}
+
+/** 启动系统命令后立即脱离，不等待它的生命周期。 */
+async function spawnDetached(command: string, args: string[]): Promise<void> {
   await new Promise<void>((settle, rejectSpawn) => {
     const child = spawn(command, args, { detached: true, stdio: 'ignore' })
     child.once('error', rejectSpawn)
@@ -165,7 +189,6 @@ async function revealInFileManager(rawPath: string): Promise<{ path: string }> {
       settle()
     })
   })
-  return { path: target }
 }
 
 function sendHtmlError(res: ServerResponse, error: unknown): void {
@@ -342,19 +365,6 @@ function readAnnotations(value: unknown): AnnotationInput[] {
     else {
       const groupId = readString(record['groupId'], 'groupId', 40)
       if (groupId !== undefined) input.groupId = groupId
-    }
-
-    if (record['shortlistOrder'] === null) input.shortlistOrder = null
-    else if (record['shortlistOrder'] !== undefined) {
-      const order = readInt(record['shortlistOrder'], 'shortlistOrder', 0, 100_000)
-      if (order !== undefined) input.shortlistOrder = order
-    }
-
-    if (record['note'] !== undefined) {
-      if (typeof record['note'] !== 'string') {
-        throw new SearchError('bad_request', 'note 必须是字符串')
-      }
-      input.note = record['note'].slice(0, 4_000)
     }
 
     return input
@@ -847,7 +857,8 @@ export function createHandler(
           throw new SearchError('bad_request', '缺少 path 参数')
         }
         if (!isAbsolute(path)) throw new SearchError('bad_request', 'path 必须是绝对路径')
-        ok(res, await revealInFileManager(path))
+        const workspace = await resolveSessionWorkspace(readSessionId(req, url.searchParams))
+        ok(res, await revealInFileManager(path, resolvePdfRoot(workspace)))
         return
       }
 

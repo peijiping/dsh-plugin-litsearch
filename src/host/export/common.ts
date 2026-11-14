@@ -3,7 +3,6 @@
  */
 
 import type { Paper, SearchTask } from '../../search/types.js'
-import { stateOf } from '../tasks/states.js'
 
 export interface ExportContext {
   task: SearchTask
@@ -20,10 +19,6 @@ export function queryName(task: SearchTask, queryId: string): string {
 export function groupName(task: SearchTask, groupId: string | undefined): string {
   if (groupId === undefined) return ''
   return task.groups.find((group) => group.id === groupId)?.name ?? ''
-}
-
-export function paperNote(task: SearchTask, paper: Paper): string {
-  return stateOf(task, paper.paperId).note ?? ''
 }
 
 export function isoDate(date: Date): string {

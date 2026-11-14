@@ -1,7 +1,7 @@
 /** BibTeX 导出。 */
 
 import type { ExportContext } from './common.js'
-import { groupName, paperNote } from './common.js'
+import { groupName } from './common.js'
 import { stateOf } from '../tasks/states.js'
 
 export function renderBibtex(context: ExportContext): string {
@@ -18,8 +18,6 @@ export function renderBibtex(context: ExportContext): string {
       if (paper.abstract !== '') fields.push(['abstract', paper.abstract])
       const group = groupName(context.task, state.groupId)
       if (group !== '') fields.push(['keywords', group])
-      const note = paperNote(context.task, paper)
-      if (note !== '') fields.push(['note', note])
 
       const body = fields
         .map(([name, value]) => `  ${name} = {${escapeBibtex(value)}}`)

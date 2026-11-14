@@ -623,7 +623,7 @@ export class TaskService {
     return computeStats(task, resolved, scope, base)
   }
 
-  /** 写入筛读 / 分组 / 必读 / 备注；返回新的 rev 与命中条数。 */
+  /** 写入筛读 / 分组；返回新的 rev 与命中条数。 */
   async annotate(
     id: string,
     inputs: readonly AnnotationInput[],
@@ -1210,10 +1210,8 @@ function readTitle(title: string | undefined, conditions: TaskConditions): strin
 function inheritStates(base: SearchTask): Record<string, PaperState> {
   const states: Record<string, PaperState> = {}
   for (const [paperId, state] of Object.entries(base.states)) {
-    // 分组是任务内概念，继承时只带筛读、必读顺序与备注。
+    // 分组是任务内概念，继承时只带筛读状态。
     const next: PaperState = { screening: state.screening }
-    if (state.shortlistOrder !== undefined) next.shortlistOrder = state.shortlistOrder
-    if (state.note !== undefined) next.note = state.note
     states[paperId] = next
   }
   return states
