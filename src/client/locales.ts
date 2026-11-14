@@ -189,7 +189,11 @@ const zh: Record<string, string> = {
 
   'bulk.count': '已选 {n} 篇',
   'bulk.select': '选择这篇文献',
-  'bulk.selectPage': '全选本页',
+  'bulk.selectPage': '本页全选',
+  'bulk.selectPageHint': '把当前页的文献加入已选，其他页的选中不受影响',
+  'bulk.unselectAll': '取消全选',
+  'bulk.unselectAllHint': '清空所有已选文献（含其他页）',
+  'bulk.keepHint': '已选文献跨页保留，翻页不会丢失',
   'bulk.clear': '清空',
   'bulk.setScreening': '设置筛读状态',
   'bulk.setGroup': '归入分组',
@@ -199,7 +203,7 @@ const zh: Record<string, string> = {
   'bulk.insert': '加入对话',
   'bulk.inserted': '已作为引用插入 {n} 篇（编号列表）',
   'bulk.export': '按选中导出',
-  'bulk.downloadDone': '批量下载：成功 {ok} 篇，失败 {failed} 篇',
+  'bulk.downloadDone': '批量下载：成功 {ok} 篇，需手动获取 {manual} 篇，失败 {failed} 篇',
   'bulk.revealDir': '打开下载目录',
 
   'batch.title': '批量下载',
@@ -208,6 +212,7 @@ const zh: Record<string, string> = {
   'batch.downloaded': '已下载 {n}',
   'batch.downloading': '下载中 {n}',
   'batch.pending': '待下载 {n}',
+  'batch.manual': '需手动获取 {n}',
   'batch.failed': '失败 {n}',
   'batch.progress': '进度 {done}/{total}',
   'batch.complete': '下载任务完成',
@@ -216,6 +221,7 @@ const zh: Record<string, string> = {
   'batch.status.pending': '未下载',
   'batch.status.downloading': '下载中…',
   'batch.status.downloaded': '已下载',
+  'batch.status.manual': '需手动获取',
   'batch.status.failed': '失败',
 
   'fulltext.loading': '统计全文覆盖…',
@@ -440,7 +446,7 @@ const zh: Record<string, string> = {
   'group.zoteroHint': '通过 Zotero 桌面端 connector 保存条目与 PDF；只连接本机 127.0.0.1。',
   'field.contactEmail': '联系邮箱',
   'field.contactEmailHint':
-    '作为 OpenAlex / Crossref / NCBI 的 polite pool 标识，可留空；填写后限流更宽松',
+    '作为 OpenAlex / Crossref / NCBI 的 polite pool 标识；填写后还会启用 Unpaywall，按 DOI 补全开放获取 PDF 地址，提升批量下载成功率',
   'field.ncbiApiKey': 'NCBI API Key',
   'field.ncbiApiKeyHint': '可选；配置后 PubMed E-utilities 额度从 3 次/秒提升到 10 次/秒',
   'field.s2ApiKey': 'Semantic Scholar Key',
@@ -774,7 +780,11 @@ const en: Record<string, string> = {
 
   'bulk.count': '{n} selected',
   'bulk.select': 'Select this paper',
-  'bulk.selectPage': 'Select page',
+  'bulk.selectPage': 'Select this page',
+  'bulk.selectPageHint': 'Add this page to the selection; other pages stay selected',
+  'bulk.unselectAll': 'Clear all',
+  'bulk.unselectAllHint': 'Clear the whole selection, including other pages',
+  'bulk.keepHint': 'Selection is kept when you change pages',
   'bulk.clear': 'Clear',
   'bulk.setScreening': 'Set screening',
   'bulk.setGroup': 'Assign group',
@@ -784,7 +794,7 @@ const en: Record<string, string> = {
   'bulk.insert': 'Add to chat',
   'bulk.inserted': 'Inserted {n} papers as a quoted numbered list',
   'bulk.export': 'Export selected',
-  'bulk.downloadDone': 'Download: {ok} succeeded, {failed} failed',
+  'bulk.downloadDone': 'Download: {ok} succeeded, {manual} need manual save, {failed} failed',
   'bulk.revealDir': 'Open download folder',
 
   'batch.title': 'Batch download',
@@ -793,6 +803,7 @@ const en: Record<string, string> = {
   'batch.downloaded': '{n} downloaded',
   'batch.downloading': '{n} downloading',
   'batch.pending': '{n} pending',
+  'batch.manual': '{n} need manual save',
   'batch.failed': '{n} failed',
   'batch.progress': 'Progress {done}/{total}',
   'batch.complete': 'Download task complete',
@@ -801,6 +812,7 @@ const en: Record<string, string> = {
   'batch.status.pending': 'Not downloaded',
   'batch.status.downloading': 'Downloading…',
   'batch.status.downloaded': 'Downloaded',
+  'batch.status.manual': 'Manual save',
   'batch.status.failed': 'Failed',
 
   'fulltext.loading': 'Computing full-text coverage…',
@@ -1031,7 +1043,7 @@ const en: Record<string, string> = {
     'Saves items and PDFs through the Zotero desktop connector; only 127.0.0.1 is allowed.',
   'field.contactEmail': 'Contact email',
   'field.contactEmailHint':
-    'Used as the polite-pool identifier for OpenAlex / Crossref / NCBI; optional, but it raises rate limits',
+    'Polite-pool identifier for OpenAlex / Crossref / NCBI; also enables Unpaywall, which adds open-access PDF links by DOI and improves batch downloads',
   'field.ncbiApiKey': 'NCBI API key',
   'field.ncbiApiKeyHint':
     'Optional; raises PubMed E-utilities quota from 3 req/s to 10 req/s',

@@ -48,11 +48,12 @@
 - 每篇可以标「没读 / 读过 / 纳入 / 排除」；同一任务里还能建「研究分组」，按「为什么读」归类并导出分层报告。
 - 换一轮检索也不会丢：标过的筛读状态会跟着论文一直保留。
 - 可以拿当前结果和某个旧任务对比，看新增了哪些、共有哪些、少了哪些，并把「新增」一键整批标成纳入。
-- 批量操作都在勾选后完成：批量改筛读状态、归入或移出分组、下载 PDF、存 Zotero、按选中导出。
+- 批量操作都在勾选后完成：批量改筛读状态、归入或移出分组、下载 PDF、存 Zotero、按选中导出。排序右侧有「本页全选 / 取消全选」，本页全选是累加，翻页或改排序都不会丢失已选文献，累计数量一直显示在工具栏上。
 
 ### 全文和参考文献库都接得上
 
 - 能免费下载的 PDF 可以直接在结果里预览，或下载到电脑（默认放在当前工作目录的 `dsh-litsearch/` 文件夹，文件名带作者、年份、标题，好认好找）。没有 PDF 但有 PMC 编号时，会给出排版好的网页版全文。
+- 批量下载会把「需手动获取」和「失败」分开统计：出版商要求订阅、登录或人机验证时，后台程序拿不到 PDF（浏览器因为带着会话和机构授权反而能打开），这类文献会给出原因，点卡片上的 PDF / DOI 链接在浏览器打开后手动另存即可。
 - 电脑上开着 Zotero 桌面端的话，可以一键把选中的论文连同 PDF 存进去；没连上、存了一半失败、或分类只读，都会明确告诉你，并保留一条只含本次条目的 RIS 导出作为备用。
 - 要交给别的软件用，可以导出 CSV 表格、RIS、BibTeX 或 Markdown 报告；按当前筛选或只按勾选的条目都行。
 
@@ -94,7 +95,7 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 
 | 字段 | 说明 | 默认 |
 |---|---|---|
-| `contactEmail` | 联系邮箱，作为 OpenAlex / Crossref / NCBI 的 polite pool 标识，留空也可用 | 空 |
+| `contactEmail` | 联系邮箱，作为 OpenAlex / Crossref / NCBI 的 polite pool 标识；**填写后还会启用 Unpaywall**，按 DOI 补全开放获取 PDF 地址，明显提升批量下载成功率 | 空 |
 | `ncbiApiKey` | 可选，PubMed E-utilities 额度 3 → 10 次/秒；界面不回显 | 空 |
 | `s2ApiKey` | 可选，Semantic Scholar 配额；界面不回显 | 空 |
 | `serpApiKey` | 可选，启用「谷歌学术」来源（SerpAPI 每月 250 次免费额度，超出需付费）；留空时该来源不可选且默认关闭 | 空 |
@@ -142,6 +143,7 @@ $DSH_HOME/storages/dsh-plugin-litsearch/
 ## 隐私
 
 - 检索词会发送给所选数据源（PubMed、Europe PMC、OpenAlex、Crossref、Semantic Scholar、arXiv、PubTator）的公开 API。
+- 配置了 `contactEmail` 后，下载 PDF 会用 DOI 和该邮箱查询 Unpaywall（`api.unpaywall.org`）以寻找开放获取副本；不配置则不发这项请求。
 - 启用「谷歌学术」时，检索词会经第三方服务 SerpAPI 转发，并受其使用条款与额度约束；该来源默认关闭。
 - PDF 下载与 Zotero 连接都只在本机进行；Zotero connector 仅允许回环地址。
 - 各类 API Key（含 `serpApiKey`）只保存在本机配置文件（明文）中，界面不回显、不写日志。

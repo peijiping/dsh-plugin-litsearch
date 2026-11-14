@@ -18,6 +18,7 @@ import type {
   TaskDetail,
   TaskStatsReport,
 } from '../search/types'
+import { isManualPdfFailure } from '../search/types'
 import {
   downloadPaperPdf,
   exportUrl,
@@ -151,6 +152,9 @@ export function TaskPane({
   const [batchRunning, setBatchRunning] = useState(false)
   const batchRunningRef = useRef(false)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  /** 结果页里见过的文献：跨页选中的条目做「加入对话」时要能拿到论文详情。 */
+  const papersByIdRef = useRef<Map<string, Paper>>(new Map())
+  const ids = [...selected]
   const [editingConditions, setEditingConditions] = useState(false)
   const [risFallback, setRisFallback] = useState<{
     ids: readonly string[]
@@ -163,7 +167,8 @@ export function TaskPane({
 
   const detail = view.detail
   const filterActive = useMemo(() => activeFilterCount(filters) > 0, [filters])
-  const filterKey = JSON.stringify(filters)
+  // 排序只换顺序、不换结果集合，翻页更不该清空已选；只有换任务或改其它筛选条件才重置。
+  const selectionScope = JSON.stringify({ ...filters, sort: undefined })
   // 批量下载循环里要判断「当前是否已下载」，用 ref 读取最新状态避免闭包取到旧值。
   const downloadsRef = useRef<Readonly<Record<string, PdfDownloadUi>>>(downloads)
   downloadsRef.current = downloads
@@ -172,7 +177,16 @@ export function TaskPane({
 
   useEffect(() => {
     setSelected(new Set())
-  }, [taskId, filterKey])
+  }, [taskId, selectionScope])
+
+  useEffect(() => {
+    papersByIdRef.current.clear()
+  }, [taskId])
+
+  // 每翻到一页就把文献并入缓存，跨页选中的条目在别的页上也能取到详情。
+  useEffect(() => {
+    for (const paper of view.page?.papers ?? []) papersByIdRef.current.set(paper.paperId, paper)
+  }, [view.page])
 
   useEffect(() => {
     setDownloads({})
@@ -225,14 +239,33 @@ export function TaskPane({
     else notify(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
+  /** 跨页选中也要整批插入：优先用翻页时缓存的论文，缺的再按 id 补详情。 */
   const insertMany = (): void => {
-    const loaded = view.page
-    if (loaded === null) return
-    const papers = loaded.papers.filter((paper) => selected.has(paper.paperId))
-    if (papers.length === 0) return
-    const outcome = insertQuote(inputActions, papersText(t, papers), papersSummary(t, papers))
-    if (outcome === 'inserted') notify(tpl(t('bulk.inserted'), { n: papers.length }))
-    else notify(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
+    if (taskId === null || ids.length === 0) return
+    const known = papersByIdRef.current
+    const finish = (): void => {
+      const papers = ids
+        .map((paperId) => known.get(paperId))
+        .filter((paper): paper is Paper => paper !== undefined)
+      if (papers.length === 0) return
+      const outcome = insertQuote(inputActions, papersText(t, papers), papersSummary(t, papers))
+      if (outcome === 'inserted') notify(tpl(t('bulk.inserted'), { n: papers.length }))
+      else notify(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
+    }
+    const missing = ids.filter((paperId) => !known.has(paperId))
+    if (missing.length === 0) {
+      finish()
+      return
+    }
+    void Promise.all(
+      missing.map((paperId) =>
+        fetchPaper(taskId, paperId)
+          .then((loaded) => {
+            known.set(paperId, loaded.paper)
+          })
+          .catch(() => undefined),
+      ),
+    ).then(finish)
   }
 
   /** 把任务 id 与当前条件带入会话草稿，新会话也能续接同一任务。 */
@@ -259,7 +292,11 @@ export function TaskPane({
         } else {
           setDownloads((previous) => ({
             ...previous,
-            [paperId]: { state: 'failed', error: result.error ?? result.status },
+            [paperId]: {
+              state: 'failed',
+              error: result.error ?? result.status,
+              ...(result.reason === undefined ? {} : { reason: result.reason }),
+            },
           }))
           notify(
             result.status === 'html-only'
@@ -309,7 +346,18 @@ export function TaskPane({
     })
   }
 
-  const ids = [...selected]
+  /** 本页全选用并集：翻页可累加，不会把其它页已选的文献冲掉。 */
+  const selectPage = (pageIds: readonly string[]): void => {
+    if (pageIds.length === 0) return
+    setSelected((previous) => {
+      const next = new Set(previous)
+      for (const paperId of pageIds) next.add(paperId)
+      return next
+    })
+  }
+
+  /** 取消全选：清空所有已选（含其它页）。 */
+  const clearSelection = (): void => setSelected(new Set())
 
   const annotateMany = (patch: Partial<Pick<AnnotationInput, 'screening' | 'groupId'>>): void => {
     if (ids.length === 0) return
@@ -333,7 +381,7 @@ export function TaskPane({
   }
 
   /**
-   * 批量下载：打开进度弹窗后逐篇串行下载。
+   * 批量下载：打开进度弹窗后按最多 5 篇并发下载。
    *
    * 已下载（含文件已删除以外的正常已下载）的文献直接略过，不再重复请求；
    * 每篇的结果实时写入 downloads，弹窗只做集中展示。批量未结束时再次触发
@@ -352,48 +400,66 @@ export function TaskPane({
     setBatchRunning(true)
     void (async () => {
       let ok = 0
+      let manualCount = 0
       let failedCount = 0
       let changed = false
-      try {
-        for (const entry of entries) {
-          const paperId = entry.paperId
-          const runtime = downloadsRef.current[paperId]
-          if (runtime?.state === 'downloading') continue
-          if (
-            runtime?.state === 'downloaded' ||
-            statesRef.current[paperId]?.pdfStatus === 'downloaded'
-          ) {
-            // 已经是已下载状态：直接略过，不重新下载。
-            continue
-          }
-          changed = true
-          setDownloads((previous) => ({ ...previous, [paperId]: { state: 'downloading' } }))
-          try {
-            const result = await downloadPaperPdf(taskId, paperId)
-            if (result.status === 'downloaded') {
-              ok += 1
-              setDownloads((previous) => ({
-                ...previous,
-                [paperId]: {
-                  state: 'downloaded',
-                  ...(result.path === undefined ? {} : { path: result.path }),
-                },
-              }))
-            } else {
-              failedCount += 1
-              setDownloads((previous) => ({
-                ...previous,
-                [paperId]: { state: 'failed', error: result.error ?? result.status },
-              }))
-            }
-          } catch (error: unknown) {
-            failedCount += 1
+      /** 单篇：跳过已下载的，下载结果实时写回 downloads。 */
+      const runOne = async (paperId: string): Promise<void> => {
+        const runtime = downloadsRef.current[paperId]
+        if (runtime?.state === 'downloading') return
+        if (
+          runtime?.state === 'downloaded' ||
+          statesRef.current[paperId]?.pdfStatus === 'downloaded'
+        ) {
+          // 已经是已下载状态：直接略过，不重新下载。
+          return
+        }
+        changed = true
+        setDownloads((previous) => ({ ...previous, [paperId]: { state: 'downloading' } }))
+        try {
+          const result = await downloadPaperPdf(taskId, paperId)
+          if (result.status === 'downloaded') {
+            ok += 1
             setDownloads((previous) => ({
               ...previous,
-              [paperId]: { state: 'failed', error: messageOf(error) },
+              [paperId]: {
+                state: 'downloaded',
+                ...(result.path === undefined ? {} : { path: result.path }),
+              },
+            }))
+          } else {
+            if (isManualPdfFailure(result.reason)) manualCount += 1
+            else failedCount += 1
+            setDownloads((previous) => ({
+              ...previous,
+              [paperId]: {
+                state: 'failed',
+                error: result.error ?? result.status,
+                ...(result.reason === undefined ? {} : { reason: result.reason }),
+              },
             }))
           }
+        } catch (error: unknown) {
+          failedCount += 1
+          setDownloads((previous) => ({
+            ...previous,
+            [paperId]: { state: 'failed', error: messageOf(error) },
+          }))
         }
+      }
+      // 固定数量的 worker 从同一个游标取任务：并发数不超过 5，也不会重复取到同一篇。
+      let cursor = 0
+      const worker = async (): Promise<void> => {
+        while (cursor < entries.length) {
+          const entry = entries[cursor]
+          cursor += 1
+          if (entry !== undefined) await runOne(entry.paperId)
+        }
+      }
+      try {
+        await Promise.all(
+          Array.from({ length: Math.min(BATCH_CONCURRENCY, entries.length) }, () => worker()),
+        )
       } finally {
         batchRunningRef.current = false
         setBatchRunning(false)
@@ -401,7 +467,7 @@ export function TaskPane({
       }
       if (changed) {
         notify(
-          tpl(t('bulk.downloadDone'), { ok, failed: failedCount }),
+          tpl(t('bulk.downloadDone'), { ok, manual: manualCount, failed: failedCount }),
           failedCount > 0 ? 'error' : 'info',
           8000,
         )
@@ -477,6 +543,7 @@ export function TaskPane({
   const failed = detail.result.sources.filter((source) => !source.ok && !source.skipped)
   const skipped = detail.result.sources.filter((source) => source.skipped)
   const page = view.page
+  const pageIds = page?.papers.map((paper) => paper.paperId) ?? []
   /** 当前生效的排序：面板选择优先，未选择时跟随任务条件。 */
   const sortValue: SortMode = filters.sort ?? detail.conditions.sort
   // 覆盖率恒为任务级口径（scope=task），不随结果页筛选变化。
@@ -869,27 +936,55 @@ export function TaskPane({
 
           {page !== null && page.total > 0 && (
             <div style={PAGE_TOOLBAR_ROW_STYLE}>
-              <label style={PAGE_SORT_LABEL_STYLE}>
-                <span>{t('filter.sort')}</span>
-                <select
-                  style={PAGE_SORT_SELECT_STYLE}
-                  value={sortValue}
-                  onChange={(event) => {
-                    const next = event.target.value as SortMode
-                    // 与任务默认排序一致时不写进筛选对象，避免多出一条生效条件。
-                    setFilters((previous) => ({
-                      ...previous,
-                      sort: next === detail.conditions.sort ? undefined : next,
-                    }))
-                  }}
+              <div style={PAGE_TOOLBAR_LEFT_STYLE}>
+                <label style={PAGE_SORT_LABEL_STYLE}>
+                  <span>{t('filter.sort')}</span>
+                  <select
+                    style={PAGE_SORT_SELECT_STYLE}
+                    value={sortValue}
+                    onChange={(event) => {
+                      const next = event.target.value as SortMode
+                      // 与任务默认排序一致时不写进筛选对象，避免多出一条生效条件。
+                      setFilters((previous) => ({
+                        ...previous,
+                        sort: next === detail.conditions.sort ? undefined : next,
+                      }))
+                    }}
+                  >
+                    {SORT_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {t(`sort.${mode}`)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  style={PAGE_TOOLBAR_ACTION_STYLE}
+                  title={t('bulk.selectPageHint')}
+                  onClick={() => selectPage(pageIds)}
                 >
-                  {SORT_MODES.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {t(`sort.${mode}`)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  {t('bulk.selectPage')}
+                </button>
+                <button
+                  type="button"
+                  style={
+                    selected.size === 0
+                      ? PAGE_TOOLBAR_ACTION_DISABLED_STYLE
+                      : PAGE_TOOLBAR_ACTION_STYLE
+                  }
+                  disabled={selected.size === 0}
+                  title={t('bulk.unselectAllHint')}
+                  onClick={clearSelection}
+                >
+                  {t('bulk.unselectAll')}
+                </button>
+                {selected.size > 0 && (
+                  <span style={PAGE_TOOLBAR_COUNT_STYLE} title={t('bulk.keepHint')}>
+                    {tpl(t('bulk.count'), { n: selected.size })}
+                  </span>
+                )}
+              </div>
               <Pager
                 t={t}
                 index={view.pageIndex}
@@ -906,12 +1001,12 @@ export function TaskPane({
               taskId={taskId}
               count={selected.size}
               ids={ids}
-              pageIds={page?.papers.map((paper) => paper.paperId) ?? []}
+              pageIds={pageIds}
               groups={detail.groups}
               busy={view.busy}
               filters={filters}
-              onClear={() => setSelected(new Set())}
-              onSelectPage={(pageIds) => setSelected(new Set(pageIds))}
+              onClear={clearSelection}
+              onSelectPage={selectPage}
               onAnnotate={annotateMany}
               onInsert={insertMany}
               onDownload={downloadMany}
@@ -1061,7 +1156,11 @@ export function TaskPane({
         items={batchItems}
         states={detail.states}
         downloads={downloads}
-        onClose={() => setBatchOpen(false)}
+        onClose={() => {
+          setBatchOpen(false)
+          // 关闭即刷新列表：下载可能仍在后台继续，让文献状态跟上 Host 的真实结果。
+          view.reload()
+        }}
       />
       <RoundsDialog
         t={t}
@@ -1237,6 +1336,8 @@ const ROUND_ACTION_STYLE: CSSProperties = {
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
 const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
 const EXPORT_FORMATS = ['csv', 'ris', 'bibtex', 'md'] as const
+/** 批量下载的并发上限：同时下载 5 篇。 */
+const BATCH_CONCURRENCY = 5
 
 /** 筛读计数（点击筛选）：与「筛选」按钮同排，接在筛选条最前面。 */
 function ScreeningPills({
@@ -1849,7 +1950,7 @@ const SCROLL_BODY_STYLE: CSSProperties = {
   overflowX: 'hidden',
 }
 
-/** 排序与翻页同一行：排序靠左，翻页（含总篇数）靠右。 */
+/** 排序（含本页全选 / 取消全选）与翻页同一行：操作靠左，翻页（含总篇数）靠右。 */
 const PAGE_TOOLBAR_ROW_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -1857,6 +1958,27 @@ const PAGE_TOOLBAR_ROW_STYLE: CSSProperties = {
   flexWrap: 'wrap',
   gap: 8,
   padding: '2px 0',
+}
+const PAGE_TOOLBAR_LEFT_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 8,
+}
+const PAGE_TOOLBAR_ACTION_STYLE: CSSProperties = {
+  ...linkButtonStyle,
+  fontSize: 11.5,
+  whiteSpace: 'nowrap',
+}
+const PAGE_TOOLBAR_ACTION_DISABLED_STYLE: CSSProperties = {
+  ...PAGE_TOOLBAR_ACTION_STYLE,
+  opacity: 0.4,
+  cursor: 'default',
+}
+const PAGE_TOOLBAR_COUNT_STYLE: CSSProperties = {
+  fontSize: 11.5,
+  opacity: 0.66,
+  whiteSpace: 'nowrap',
 }
 const PAGE_SORT_LABEL_STYLE: CSSProperties = {
   display: 'flex',

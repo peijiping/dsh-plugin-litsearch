@@ -12,6 +12,7 @@ import type {
   AnnotationInput,
   Paper,
   PaperState,
+  PdfFailureReason,
   PdfStatus,
   Screening,
   TaskGroup,
@@ -51,6 +52,8 @@ export interface PdfDownloadUi {
   /** 下载成功后的绝对路径。 */
   path?: string
   error?: string
+  /** Host 返回的失败根因；用于区分「程序故障」与「需手动保存」。 */
+  reason?: PdfFailureReason
 }
 
 const SCREENING_COLOR: Record<Screening, string> = {

@@ -218,6 +218,19 @@ export type PdfStatus =
   | 'blocked'
   | 'failed'
 
+/**
+ * PDF 下载失败的根因分类。
+ *
+ * 除了 `failed`（网络/超时/体积等程序故障）之外，其余都属于「后台拿不到、
+ * 但浏览器可能能打开」，界面按此分流，避免把订阅受限误报成功能失败。
+ */
+export type PdfFailureReason = 'no-candidate' | 'blocked' | 'paywalled' | 'not-pdf' | 'failed'
+
+/** 是否需要引导用户到浏览器手动保存。 */
+export function isManualPdfFailure(reason: PdfFailureReason | undefined): boolean {
+  return reason !== undefined && reason !== 'failed'
+}
+
 /** 论文级人工筛选状态。 */
 export interface PaperState {
   screening: Screening
@@ -478,6 +491,8 @@ export interface PdfDownloadResult {
   path?: string
   url?: string
   error?: string
+  /** 失败根因；成功时缺省。 */
+  reason?: PdfFailureReason
 }
 
 /** Zotero connector 探测结果。 */

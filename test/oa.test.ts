@@ -1,8 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
+import { isManualPdfFailure } from '../src/search/types.ts'
 import type { Paper } from '../src/search/types.ts'
-import { epmcXmlUrl, fullTextHtml, jatsToHtml, pdfCandidates } from '../src/search/oa.ts'
+import {
+  epmcXmlUrl,
+  fullTextHtml,
+  isPdfRenderUrl,
+  jatsToHtml,
+  pdfCandidates,
+} from '../src/search/oa.ts'
 
 function paper(overrides: Partial<Paper> = {}): Paper {
   return {
@@ -47,6 +54,23 @@ test('already prefixed PMCID is not prefixed twice', () => {
     'https://europepmc.org/articles/PMC99?pdf=render',
     'https://www.ncbi.nlm.nih.gov/pmc/articles/PMC99/pdf/',
   ])
+})
+
+test('isPdfRenderUrl only marks repository render pages', () => {
+  assert.equal(isPdfRenderUrl('https://europepmc.org/articles/PMC123?pdf=render'), true)
+  assert.equal(isPdfRenderUrl('https://www.ncbi.nlm.nih.gov/pmc/articles/PMC123/pdf/'), true)
+  assert.equal(isPdfRenderUrl('https://example.org/a.pdf'), false)
+  assert.equal(isPdfRenderUrl('https://journals.plos.org/plosone/article/file?id=x&type=printable'), false)
+  assert.equal(isPdfRenderUrl('https://arxiv.org/pdf/2401.00001'), false)
+})
+
+test('isManualPdfFailure separates browser-only failures from real errors', () => {
+  assert.equal(isManualPdfFailure('no-candidate'), true)
+  assert.equal(isManualPdfFailure('blocked'), true)
+  assert.equal(isManualPdfFailure('paywalled'), true)
+  assert.equal(isManualPdfFailure('not-pdf'), true)
+  assert.equal(isManualPdfFailure('failed'), false)
+  assert.equal(isManualPdfFailure(undefined), false)
 })
 
 test('epmcXmlUrl requires a PMCID', () => {

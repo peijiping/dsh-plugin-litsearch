@@ -758,6 +758,7 @@ export class TaskService {
         status: fallback,
         bytes: 0,
         error: resolution.error ?? '下载失败',
+        ...(resolution.reason === undefined ? {} : { reason: resolution.reason }),
       }
       return result
     }

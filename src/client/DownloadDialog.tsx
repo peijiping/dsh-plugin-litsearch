@@ -10,7 +10,7 @@ import type { CSSProperties, ReactElement } from 'react'
 
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { PaperState } from '../search/types'
+import { isManualPdfFailure, type PaperState } from '../search/types'
 import { SpinnerIcon } from './icons'
 import { tpl, type Translate } from './locales'
 import type { PdfDownloadUi } from './PaperCard'
@@ -22,12 +22,13 @@ export interface BatchDownloadItem {
   title: string
 }
 
-type BatchPhase = 'pending' | 'downloading' | 'downloaded' | 'failed'
+type BatchPhase = 'pending' | 'downloading' | 'downloaded' | 'manual' | 'failed'
 
 const PHASE_COLOR: Record<BatchPhase, string> = {
   pending: 'rgba(127,127,127,0.9)',
   downloading: ACCENT,
   downloaded: '#2e9e5b',
+  manual: '#b26a00',
   failed: ERROR,
 }
 
@@ -49,9 +50,13 @@ function phaseOf(
   downloads: Readonly<Record<string, PdfDownloadUi>>,
 ): BatchPhase {
   const runtime = downloads[paperId]
+  if (runtime?.state === 'failed' && isManualPdfFailure(runtime.reason)) return 'manual'
   if (runtime?.state !== undefined) return runtime.state
   const status = states[paperId]?.pdfStatus ?? 'unknown'
   if (status === 'downloaded') return 'downloaded'
+  // 刷新后运行时状态丢失，按 Host 记录的状态归类：订阅/反爬受限不是程序故障，
+  // 也不能留在 pending（否则弹窗永远不会显示「完成」）。
+  if (status === 'blocked' || status === 'paywalled' || status === 'html-only') return 'manual'
   if (status === 'failed' || status === 'missing') return 'failed'
   return 'pending'
 }
@@ -75,6 +80,7 @@ export function DownloadDialog({
   const phases = items.map((item) => phaseOf(item.paperId, states, downloads))
   const downloaded = phases.filter((phase) => phase === 'downloaded').length
   const downloading = phases.filter((phase) => phase === 'downloading').length
+  const manual = phases.filter((phase) => phase === 'manual').length
   const failed = phases.filter((phase) => phase === 'failed').length
   const pending = phases.filter((phase) => phase === 'pending').length
   const total = items.length
@@ -89,6 +95,7 @@ export function DownloadDialog({
       onClose={onClose}
       title={t('batch.title')}
       description={tpl(t('batch.desc'), { n: total })}
+      className={WIDE_MODAL_CLASS}
       footer={
         <div style={FOOTER_STYLE}>
           <span style={statusStyle}>
@@ -100,6 +107,7 @@ export function DownloadDialog({
         </div>
       }
     >
+      <style>{WIDE_MODAL_CSS}</style>
       <div style={OVERVIEW_STYLE} role="status" aria-live="polite">
         <div style={COUNTS_STYLE}>
           <span>{tpl(t('batch.total'), { n: total })}</span>
@@ -110,6 +118,9 @@ export function DownloadDialog({
             {tpl(t('batch.downloading'), { n: downloading })}
           </span>
           <span>{tpl(t('batch.pending'), { n: pending })}</span>
+          <span style={{ color: PHASE_COLOR.manual }}>
+            {tpl(t('batch.manual'), { n: manual })}
+          </span>
           <span style={{ color: PHASE_COLOR.failed }}>
             {tpl(t('batch.failed'), { n: failed })}
           </span>
@@ -123,7 +134,10 @@ export function DownloadDialog({
       <ul style={LIST_STYLE}>
         {items.map((item, index) => {
           const phase = phases[index] ?? 'pending'
-          const error = phase === 'failed' ? errorOf(item.paperId, states, downloads) : undefined
+          const error =
+            phase === 'failed' || phase === 'manual'
+              ? errorOf(item.paperId, states, downloads)
+              : undefined
           return (
             <li key={item.paperId} style={ROW_STYLE}>
               <span style={INDEX_STYLE}>{index + 1}</span>
@@ -148,6 +162,12 @@ export function DownloadDialog({
     </Modal>
   )
 }
+
+/** 批量下载弹窗的宽度约为默认弹窗的两倍（默认约 540px）。 */
+const WIDE_MODAL_CLASS = 'litsearch-download-modal'
+const WIDE_MODAL_CSS = `
+.${WIDE_MODAL_CLASS}{width:min(1080px,calc(100vw - 48px))}
+`
 
 const FOOTER_STYLE: CSSProperties = {
   display: 'flex',

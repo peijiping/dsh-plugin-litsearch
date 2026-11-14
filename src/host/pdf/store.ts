@@ -12,8 +12,13 @@ import { isIP } from 'node:net'
 import { join } from 'node:path'
 
 import { getSettings } from '../../search/config.js'
-import { epmcXmlUrl, pdfCandidates, unpaywallPdfCandidates } from '../../search/oa.js'
-import type { Paper, PdfStatus } from '../../search/types.js'
+import {
+  epmcXmlUrl,
+  isPdfRenderUrl,
+  pdfCandidates,
+  unpaywallPdfCandidates,
+} from '../../search/oa.js'
+import type { Paper, PdfFailureReason, PdfStatus } from '../../search/types.js'
 import { resolvePdfRootPath } from './root.js'
 
 const MAX_REDIRECTS = 5
@@ -41,6 +46,27 @@ export interface PdfResolution {
   buffer?: Buffer
   url?: string
   error?: string
+  /** 失败根因；成功时缺省。 */
+  reason?: PdfFailureReason
+}
+
+/** 分类对应的下一步指引：后台拿不到时明确告诉用户去浏览器手动保存。 */
+const FAILURE_HINTS: Record<PdfFailureReason, string> = {
+  'no-candidate': '请在浏览器打开原文或 PDF 链接手动保存（订阅文献无法自动下载）',
+  blocked: '请在浏览器打开 PDF 链接手动保存（后台请求可能被要求登录、订阅或人机验证）',
+  paywalled: '该文献需要订阅，请在浏览器登录后手动保存',
+  'not-pdf': '请在浏览器打开 PDF 链接手动保存',
+  failed: '可稍后重试，若持续失败请在浏览器打开原文手动保存',
+}
+
+/** 把技术错误整理成「发生了什么 + 下一步做什么」，供界面直接展示。 */
+export function pdfFailureMessage(
+  reason: PdfFailureReason,
+  detail: string,
+  attempted: number,
+): string {
+  const suffix = attempted > 1 ? `（已尝试 ${attempted} 个候选）` : ''
+  return `${detail}${suffix}；${FAILURE_HINTS[reason]}`
 }
 
 /** 设置里的根目录；未配置时落在会话工作目录下的 dsh-litsearch/。 */
@@ -59,19 +85,27 @@ export async function resolvePdf(
 ): Promise<PdfResolution> {
   const settings = getSettings()
   const maxBytes = settings.pdfMaxMb * 1024 * 1024
-  const candidates = pdfCandidates(paper)
+  const fromMetadata = pdfCandidates(paper)
   const extra = await unpaywallPdfCandidates(
     paper.doi,
     settings.contactEmail,
     Math.min(settings.requestTimeoutMs, 8_000),
     signal,
   )
-  for (const url of extra) if (!candidates.includes(url)) candidates.push(url)
+  // 静态直链优先、Unpaywall 补出的 OA 直链次之，渲染页放最后兜底：
+  // Europe PMC / PMC 的渲染页对后台请求几乎必然返回 403 或 HTML，
+  // 让它们排在优质候选前面只会拖慢下载并掩盖真正的失败原因。
+  const candidates = [
+    ...fromMetadata.filter((url) => !isPdfRenderUrl(url)),
+    ...extra,
+    ...fromMetadata.filter(isPdfRenderUrl),
+  ]
+  const unique = [...new Set(candidates)]
 
   let last: PdfFetchError | null = null
   let sawBlocked = false
   let sawPaywalled = false
-  for (const url of candidates) {
+  for (const url of unique) {
     try {
       const buffer = await fetchPdf(url, { maxBytes, signal })
       return { ok: true, status: 'available', buffer, url }
@@ -88,11 +122,18 @@ export async function resolvePdf(
   }
 
   const status: PdfStatus = sawBlocked ? 'blocked' : sawPaywalled ? 'paywalled' : 'failed'
-  const error =
+  const reason: PdfFailureReason =
     last === null
-      ? '没有可尝试的 PDF 地址'
-      : `${last.message}${candidates.length > 1 ? `（已尝试 ${candidates.length} 个候选）` : ''}`
-  return { ok: false, status, error }
+      ? 'no-candidate'
+      : sawBlocked
+        ? 'blocked'
+        : sawPaywalled
+          ? 'paywalled'
+          : last.kind === 'not_pdf'
+            ? 'not-pdf'
+            : 'failed'
+  const detail = last === null ? '未找到可后台下载的开放获取 PDF' : last.message
+  return { ok: false, status, reason, error: pdfFailureMessage(reason, detail, unique.length) }
 }
 
 export interface FetchPdfOptions {
@@ -133,8 +174,11 @@ export async function fetchPdf(url: string, options: FetchPdfOptions = {}): Prom
       if (response.status === 401 || response.status === 402) {
         throw new PdfFetchError('paywalled', `需要订阅或登录（HTTP ${response.status}）`, response.status)
       }
-      if (response.status === 403 || response.status === 429) {
-        throw new PdfFetchError('blocked', `出版商拒绝访问（HTTP ${response.status}）`, response.status)
+      if (response.status === 429) {
+        throw new PdfFetchError('blocked', '请求过于频繁（HTTP 429），请稍后重试', response.status)
+      }
+      if (response.status === 403) {
+        throw new PdfFetchError('blocked', '出版商拒绝访问（HTTP 403）', response.status)
       }
       if (!response.ok) {
         throw new PdfFetchError('failed', `下载失败（HTTP ${response.status}）`, response.status)

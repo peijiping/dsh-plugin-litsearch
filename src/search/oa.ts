@@ -28,6 +28,17 @@ export function pdfCandidates(paper: Paper): string[] {
 }
 
 /**
+ * 仓储的 PDF 渲染页：浏览器能打开，后台请求却普遍被拦截。
+ *
+ * 实测 `europepmc.org/articles/...?pdf=render` 返回 403 Cloudflare 页、
+ * `ncbi.nlm.nih.gov/pmc/articles/.../pdf/` 返回 200 但内容是 HTML 落地页。
+ * 它们仍保留为最后兜底，但必须排在所有静态直链与 Unpaywall 结果之后。
+ */
+export function isPdfRenderUrl(url: string): boolean {
+  return url.startsWith(`${EPMC_ARTICLE}/`) || url.startsWith(`${PMC_ARTICLE}/`)
+}
+
+/**
  * 部分开放获取出版商的固定 PDF 地址规则。
  *
  * Europe PMC / PMC 的渲染页会对后台请求启用 Cloudflare 人机验证（浏览器能打开、
@@ -80,11 +91,19 @@ export async function unpaywallPdfCandidates(
     const body = (await response.json()) as Record<string, unknown>
     const urls = new Set<string>()
     const best = asRecord(body['best_oa_location'])
-    const bestPdf = asString(best['url_for_pdf'])
-    if (bestPdf !== '') urls.add(bestPdf)
-    for (const raw of asArray(body['oa_locations'])) {
-      const pdf = asString(asRecord(raw)['url_for_pdf'])
-      if (pdf !== '') urls.add(pdf)
+    const locations = [best, ...asArray(body['oa_locations']).map(asRecord)]
+    for (const location of locations) {
+      const pdf = asString(location['url_for_pdf'])
+      if (pdf !== '') {
+        urls.add(pdf)
+        continue
+      }
+      // 少数仓储只给 `url`，且本身就是 PDF 直链；只收明显是 PDF 的地址，
+      // 避免把落地页塞进候选后又被判成「返回内容不是 PDF」。
+      const landing = asString(location['url'])
+      if (/\.pdf(?:[?#]|$)/iu.test(landing) || /\/pdf\/(?:[?#]|$)/iu.test(landing)) {
+        urls.add(landing)
+      }
     }
     return [...urls]
   } catch {
