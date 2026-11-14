@@ -7,7 +7,10 @@
  * 两者一起让浏览器必须预检，堵掉跨站表单与简单请求。
  */
 
+import { spawn } from 'node:child_process'
+import { stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { dirname, extname, isAbsolute, resolve } from 'node:path'
 
 import { MAX_LIMIT, ROUTE_PREFIX, SESSION_HEADER, WRITE_HEADER } from '../search/config.js'
 import { SearchError } from '../search/errors.js'
@@ -59,6 +62,7 @@ const PDF_STATUSES: readonly PdfStatus[] = [
   'unknown',
   'available',
   'downloaded',
+  'missing',
   'html-only',
   'paywalled',
   'blocked',
@@ -126,61 +130,42 @@ function sendFile(res: ServerResponse, file: ExportFile): void {
   res.end(body)
 }
 
-/** 内联 PDF，支持单段 Range（预览器会按需拉取）。 */
-function sendPdf(
-  req: IncomingMessage,
-  res: ServerResponse,
-  buffer: Buffer,
-  filename: string,
-): void {
-  const total = buffer.length
-  const disposition = `inline; filename*=UTF-8''${encodeURIComponent(filename)}`
-  const range = req.headers.range
-  if (range === undefined) {
-    res.writeHead(200, {
-      'content-type': 'application/pdf',
-      'content-length': total,
-      'content-disposition': disposition,
-      'accept-ranges': 'bytes',
-      'cache-control': 'no-store',
-    })
-    res.end(buffer)
-    return
-  }
-
-  const match = /^bytes=(\d*)-(\d*)$/u.exec(range.trim())
-  const start = match?.[1] === '' ? Number.NaN : Number(match?.[1])
-  const end = match?.[2] === '' ? Number.NaN : Number(match?.[2])
-  if (match === null || (!Number.isFinite(start) && !Number.isFinite(end))) {
-    res.writeHead(416, { 'content-range': `bytes */${total}`, 'cache-control': 'no-store' })
-    res.end()
-    return
-  }
-  const from = Number.isFinite(start) ? Math.max(0, start) : Math.max(0, total - (end || 0))
-  const to = Number.isFinite(end) ? Math.min(end, total - 1) : total - 1
-  if (from > to || from >= total) {
-    res.writeHead(416, { 'content-range': `bytes */${total}`, 'cache-control': 'no-store' })
-    res.end()
-    return
-  }
-  const chunk = buffer.subarray(from, to + 1)
-  res.writeHead(206, {
-    'content-type': 'application/pdf',
-    'content-length': chunk.length,
-    'content-range': `bytes ${from}-${to}/${total}`,
-    'content-disposition': disposition,
-    'accept-ranges': 'bytes',
-    'cache-control': 'no-store',
-  })
-  res.end(chunk)
-}
-
 function sendHtml(res: ServerResponse, status: number, html: string): void {
   res.writeHead(status, {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'no-store',
   })
   res.end(html)
+}
+
+/**
+ * 在系统文件管理器中定位文件：macOS Finder、Windows 资源管理器、Linux 桌面。
+ * 只接受已存在的 PDF 绝对路径，避免这个端点被当成任意路径探测。
+ */
+async function revealInFileManager(rawPath: string): Promise<{ path: string }> {
+  const target = resolve(rawPath)
+  if (extname(target).toLowerCase() !== '.pdf') {
+    throw new SearchError('bad_request', '只能定位 PDF 文件')
+  }
+  const info = await stat(target).catch(() => null)
+  if (info === null || !info.isFile()) {
+    throw new SearchError('not_found', '文件不存在或已被移动')
+  }
+  const [command, args] =
+    process.platform === 'darwin'
+      ? ['open', ['-R', target]]
+      : process.platform === 'win32'
+        ? ['explorer.exe', [`/select,${target}`]]
+        : ['xdg-open', [dirname(target)]]
+  await new Promise<void>((settle, rejectSpawn) => {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+    child.once('error', rejectSpawn)
+    child.once('spawn', () => {
+      child.unref()
+      settle()
+    })
+  })
+  return { path: target }
 }
 
 function sendHtmlError(res: ServerResponse, error: unknown): void {
@@ -370,12 +355,6 @@ function readAnnotations(value: unknown): AnnotationInput[] {
         throw new SearchError('bad_request', 'note 必须是字符串')
       }
       input.note = record['note'].slice(0, 4_000)
-    }
-
-    if (record['tags'] !== undefined) {
-      const tags = readStringArray(record['tags'], 'tags', 20, 40)
-      if (tags !== undefined && tags !== null) input.tags = tags
-      else if (tags === null) input.tags = []
     }
 
     return input
@@ -625,7 +604,7 @@ async function handleTasks(
   const action = seg[2]
   if (action === undefined) {
     if (req.method === 'GET') {
-      ok(res, await service.getDetail(id))
+      ok(res, await service.getDetail(id, await resolveSessionWorkspace(sessionId)))
       return
     }
     if (req.method === 'PATCH') {
@@ -704,7 +683,7 @@ async function handleTasks(
         fail(res, 405, 'bad_request', '论文详情仅支持 GET')
         return
       }
-      ok(res, await service.paperDetail(id, paperId))
+      ok(res, await service.paperDetail(id, paperId, await resolveSessionWorkspace(sessionId)))
       return
     }
     if (op === 'entities') {
@@ -715,30 +694,20 @@ async function handleTasks(
       ok(res, await service.entities(id, paperId))
       return
     }
+    if (op === 'recheck') {
+      if (req.method !== 'POST') {
+        fail(res, 405, 'bad_request', 'recheck 仅支持 POST')
+        return
+      }
+      ok(res, await service.recheckPdf(id, paperId))
+      return
+    }
     if (op === 'download') {
       if (req.method !== 'POST') {
         fail(res, 405, 'bad_request', 'download 仅支持 POST')
         return
       }
       ok(res, await service.downloadPdf(id, paperId, await resolveSessionWorkspace(sessionId)))
-      return
-    }
-    if (op === 'pdf') {
-      if (req.method !== 'GET') {
-        fail(res, 405, 'bad_request', 'pdf 仅支持 GET')
-        return
-      }
-      try {
-        const file = await service.previewPdf(
-          id,
-          paperId,
-          await resolveSessionWorkspace(sessionId),
-        )
-        sendPdf(req, res, file.buffer, file.filename)
-      } catch (error) {
-        const { status, error: apiError } = toApiError(error)
-        fail(res, status === 500 ? 502 : status, apiError.code, apiError.message)
-      }
       return
     }
     if (op === 'fulltext') {
@@ -860,6 +829,25 @@ export function createHandler(
         const raw = url.searchParams.get('sinceRev') ?? '0'
         const sinceRev = Number(raw)
         ok(res, await service.eventsSince(Number.isFinite(sinceRev) ? sinceRev : 0))
+        return
+      }
+
+      if (head === 'files') {
+        if (seg[1] !== 'reveal') {
+          fail(res, 404, 'not_found', `未知文件操作 ${seg[1] ?? ''}`)
+          return
+        }
+        if (req.method !== 'POST') {
+          fail(res, 405, 'bad_request', 'reveal 仅支持 POST')
+          return
+        }
+        const body = await readJsonBody(req)
+        const path = readString(body['path'], 'path', 4096)
+        if (path === undefined || path === '') {
+          throw new SearchError('bad_request', '缺少 path 参数')
+        }
+        if (!isAbsolute(path)) throw new SearchError('bad_request', 'path 必须是绝对路径')
+        ok(res, await revealInFileManager(path))
         return
       }
 

@@ -26,10 +26,6 @@ export function paperNote(task: SearchTask, paper: Paper): string {
   return stateOf(task, paper.paperId).note ?? ''
 }
 
-export function paperTags(task: SearchTask, paper: Paper): string[] {
-  return stateOf(task, paper.paperId).tags ?? []
-}
-
 export function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10)
 }

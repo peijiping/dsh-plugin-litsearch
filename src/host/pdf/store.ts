@@ -117,7 +117,12 @@ export async function fetchPdf(url: string, options: FetchPdfOptions = {}): Prom
       const response = await fetch(current, {
         redirect: 'manual',
         signal: controller.signal,
-        headers: { accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.5' },
+        headers: {
+          accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.5',
+          'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+          'user-agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+        },
       })
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location')
@@ -140,6 +145,10 @@ export async function fetchPdf(url: string, options: FetchPdfOptions = {}): Prom
       }
       const buffer = await readCapped(response, maxBytes)
       if (buffer.length < 5 || buffer.subarray(0, 5).toString('latin1') !== '%PDF-') {
+        const head = buffer.subarray(0, 2048).toString('latin1')
+        if (/Just a moment|cf-mitigated|Enable JavaScript and cookies/i.test(head)) {
+          throw new PdfFetchError('blocked', '出版商启用了人机验证，后台无法直接下载')
+        }
         throw new PdfFetchError('not_pdf', '返回内容不是 PDF（可能是 HTML 登录/摘要页）')
       }
       return buffer
@@ -204,11 +213,6 @@ export function readableFilename(paper: Paper): string {
   const safeId = id.replace(/[^A-Za-z0-9._-]+/gu, '_').slice(0, 64)
   const base = `${author}${year}_${title === '' ? 'untitled' : title}_${safeId}`
   return `${base.slice(0, 120)}.pdf`
-}
-
-/** 预览时读取已保存的可读文件；没有则返回 null（由调用方决定是否联网）。 */
-export async function readLocalPdf(paper: Paper, workspace?: string): Promise<Buffer | null> {
-  return readSavedPdf(join(resolvePdfRoot(workspace), readableFilename(paper)))
 }
 
 /** 清理 PDF 缓存目录。 */

@@ -13,7 +13,7 @@
 
 import { createElement, useEffect, type ComponentType, type ReactElement } from 'react'
 
-import { activateTask, setSessionIdProvider } from './api'
+import { activateTask, recheckPaperPdf, revealLocalFile, setSessionIdProvider } from './api'
 import {
   ensureTaskTitle,
   rememberTaskTitle,
@@ -74,7 +74,7 @@ interface SidebarRightOpenTab {
 interface SidebarRightService {
   openResource(
     address: string,
-    options?: { params?: unknown; replaceTab?: string },
+    options?: { params?: unknown; replaceTab?: string; revealIfOpened?: boolean },
   ): void
   close(tabId: string): void
   active(): SidebarRightOpenTab | undefined
@@ -122,6 +122,13 @@ const PAPER_TAB_ID = 'litsearch-paper'
 const SETTINGS_SECTION_ID = 'litsearch'
 
 const HEALTH_REFRESH_MS = 30_000
+
+/** 文件资源地址：与 DSH 文档预览 tab 使用的 `dsh-resource://file/session/...` 保持一致。 */
+function localFileAddress(sessionId: string, path: string): string {
+  const encode = (segment: string): string => encodeURIComponent(segment).replace(/%3A/gi, ':')
+  const normalized = path.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '')
+  return `dsh-resource://file/session/${encode(sessionId)}/${normalized.split('/').map(encode).join('/')}`
+}
 
 export const name = 'dsh-plugin-litsearch'
 export const inject = [
@@ -244,6 +251,29 @@ export function apply(ctx: ClientContext): void {
     ctx.sidebarRight.openResource(address, title === '' ? undefined : { params: { title } })
   }
 
+  /**
+   * 在右侧栏用 DSH 文档预览打开已下载的本地 PDF。
+   * 页面加载后文件可能被删除，先让 Host 复核一次；缺失时状态会广播为
+   * `missing`，按钮随即变成「下载文件已删除点击重新下载」。
+   */
+  const openPdfPreview = (taskId: string, paperId: string, path: string): void => {
+    void recheckPaperPdf(taskId, paperId)
+      .then((result) => result.exists)
+      .catch(() => true)
+      .then((exists) => {
+        if (!exists || path === '') return
+        const sessionId = ctx.sidebarRight.mounted.getSnapshot()
+        if (sessionId === undefined) return
+        ctx.sidebarRight.openResource(localFileAddress(sessionId, path), { revealIfOpened: true })
+      })
+  }
+
+  /** 在系统文件管理器中打开下载目录并选中该 PDF（失败时静默，避免打断阅读）。 */
+  const revealPdf = (path: string): void => {
+    if (path === '') return
+    void revealLocalFile(path).catch(() => undefined)
+  }
+
   const TaskBody = (props: {
     inputActions?: InputActions
     useTabInfo: TaskPaneProps['useTabInfo']
@@ -255,6 +285,8 @@ export function apply(ctx: ClientContext): void {
       onOpenPaper: openPaper,
       onOpenTask: (id: string, title: string) => openTask(id, title),
       onCloseTask: (id: string) => closeTask(id),
+      onOpenLocal: openPdfPreview,
+      onRevealLocal: revealPdf,
     })
 
   /** tab 标题：按地址里的任务 id 读缓存，缺了补取一次详情。 */
@@ -311,6 +343,8 @@ export function apply(ctx: ClientContext): void {
       t,
       useTabInfo: props.useTabInfo,
       inputActions: props.inputActions,
+      onOpenLocal: openPdfPreview,
+      onRevealLocal: revealPdf,
     })
 
   const PaperTitle = (props: {

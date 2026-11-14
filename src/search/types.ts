@@ -212,6 +212,7 @@ export type PdfStatus =
   | 'unknown'
   | 'available'
   | 'downloaded'
+  | 'missing'
   | 'html-only'
   | 'paywalled'
   | 'blocked'
@@ -223,7 +224,6 @@ export interface PaperState {
   groupId?: string
   shortlistOrder?: number
   note?: string
-  tags?: string[]
   pdfStatus?: PdfStatus
   /** 失败原因（面向用户的一句话）。 */
   pdfError?: string
@@ -352,6 +352,8 @@ export interface TaskDetail extends TaskSummary {
   states: Record<string, PaperState>
   /** 建立任务时继承筛读状态的来源任务。 */
   fromTaskId?: string
+  /** PDF 实际保存目录（供面板悬停提示）。 */
+  downloadDir?: string
   result: {
     totalLoaded: number
     sources: SourceStatus[]
@@ -447,6 +449,7 @@ export interface FullTextCoverage {
   unknown: number
   available: number
   downloaded: number
+  missing: number
   htmlOnly: number
   paywalled: number
   blocked: number
@@ -464,7 +467,6 @@ export interface AnnotationInput {
   /** `null` 表示清除必读顺序。 */
   shortlistOrder?: number | null
   note?: string
-  tags?: string[]
   /** 全文状态由 Host 下载/同步流程写入，面板也可显示与筛选。 */
   pdfStatus?: PdfStatus
   pdfError?: string
@@ -527,6 +529,8 @@ export interface PaperDetail {
   paper: Paper
   state?: PaperState
   groups: TaskGroup[]
+  /** PDF 实际保存目录（供面板悬停提示）。 */
+  downloadDir?: string
 }
 
 /** PubTator 标注的单个实体（按标识符与原文去重）。 */

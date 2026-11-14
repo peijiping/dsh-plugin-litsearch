@@ -47,7 +47,7 @@ import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
 import { NotesTab } from './NotesTab'
 import { OverviewTab } from './OverviewTab'
-import { PaperCard } from './PaperCard'
+import { PaperCard, type PdfDownloadUi } from './PaperCard'
 import { RoundsDialog } from './RoundsDialog'
 import { TaskFilters, activeFilterCount } from './TaskFilters'
 import { TaskListDialog } from './TaskListDialog'
@@ -60,6 +60,8 @@ import {
   panelStyle,
   statusStyle,
   titleStyle,
+  toastErrorStyle,
+  toastStackStyle,
   toastStyle,
 } from './styles'
 import { RESULT_PAGE_SIZE, useTask } from './useTask'
@@ -87,6 +89,10 @@ interface Props {
   onOpenTask?: (id: string, title: string) => void
   /** 当前任务被删除且没有别的任务可切换时，由宿主关闭这个任务 tab。 */
   onCloseTask?: (taskId: string) => void
+  /** 已下载文献：先复核文件仍在，再在右侧面板预览本地 PDF。 */
+  onOpenLocal?: (taskId: string, paperId: string, path: string) => void
+  /** 已下载文献：在系统文件管理器中定位 PDF。 */
+  onRevealLocal?: (path: string) => void
 }
 
 export function taskIdFromAddress(address: string): string | null {
@@ -116,6 +122,8 @@ export function TaskPane({
   onOpenPaper,
   onOpenTask,
   onCloseTask,
+  onOpenLocal,
+  onRevealLocal,
 }: Props): ReactElement {
   const info = useTabInfo()
   const taskId = parseTaskId(info)
@@ -123,7 +131,17 @@ export function TaskPane({
   const [tab, setTab] = useState<TabKey>('results')
   const view = useTask(taskId, info.tab.signal, RESULT_PAGE_SIZE, filters)
   const bodyRef = useRef<HTMLDivElement>(null)
-  const [toast, setToast] = useState('')
+  const [toast, setToastState] = useState('')
+  const [toastTone, setToastTone] = useState<'info' | 'error'>('info')
+  const [toastMs, setToastMs] = useState(4000)
+  /** 统一的底部浮层提示：tone 区分普通结果与下载失败。 */
+  const notify = (text: string, tone: 'info' | 'error' = 'info', ms = 4000): void => {
+    setToastState(text)
+    setToastTone(tone)
+    setToastMs(ms)
+  }
+  /** paperId → 下载状态；刷新任务后仍保留「下载中 / 已下载」的即时反馈。 */
+  const [downloads, setDownloads] = useState<Readonly<Record<string, PdfDownloadUi>>>({})
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [editingConditions, setEditingConditions] = useState(false)
   const [risFallback, setRisFallback] = useState<{
@@ -142,6 +160,10 @@ export function TaskPane({
   useEffect(() => {
     setSelected(new Set())
   }, [taskId, filterKey])
+
+  useEffect(() => {
+    setDownloads({})
+  }, [taskId])
 
   useEffect(() => {
     setEditingConditions(false)
@@ -173,9 +195,9 @@ export function TaskPane({
 
   useEffect(() => {
     if (toast === '') return undefined
-    const timer = setTimeout(() => setToast(''), 2400)
+    const timer = setTimeout(() => notify(''), toastMs)
     return () => clearTimeout(timer)
-  }, [toast])
+  }, [toast, toastMs])
 
   // 翻页或切换 tab 后回到内容顶部，避免停在上一页的滚动位置。
   useEffect(() => {
@@ -184,8 +206,8 @@ export function TaskPane({
 
   const insert = (paper: Paper): void => {
     const outcome = insertQuote(inputActions, paperText(t, paper), paperSummary(t, paper))
-    if (outcome === 'inserted') setToast(t('result.inserted'))
-    else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
+    if (outcome === 'inserted') notify(t('result.inserted'))
+    else notify(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
   const insertMany = (): void => {
@@ -194,32 +216,50 @@ export function TaskPane({
     const papers = loaded.papers.filter((paper) => selected.has(paper.paperId))
     if (papers.length === 0) return
     const outcome = insertQuote(inputActions, papersText(t, papers), papersSummary(t, papers))
-    if (outcome === 'inserted') setToast(tpl(t('bulk.inserted'), { n: papers.length }))
-    else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
+    if (outcome === 'inserted') notify(tpl(t('bulk.inserted'), { n: papers.length }))
+    else notify(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
   /** 把任务 id 与当前条件带入会话草稿，新会话也能续接同一任务。 */
   const insertTask = (): void => {
     if (detail === null) return
     const outcome = insertQuote(inputActions, taskText(t, detail), taskSummary(t, detail))
-    if (outcome === 'inserted') setToast(t('task.inserted'))
-    else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
+    if (outcome === 'inserted') notify(t('task.inserted'))
+    else notify(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
   const downloadPaper = (paper: Paper): void => {
     if (taskId === null) return
+    const paperId = paper.paperId
+    setDownloads((previous) => ({ ...previous, [paperId]: { state: 'downloading' } }))
     void (async () => {
       try {
-        const result = await downloadPaperPdf(taskId, paper.paperId)
+        const result = await downloadPaperPdf(taskId, paperId)
         if (result.status === 'downloaded') {
-          setToast(tpl(t('pdf.downloaded'), { name: result.filename ?? '' }))
-        } else if (result.status === 'html-only') {
-          setToast(tpl(t('pdf.htmlFallback'), { message: result.error ?? '' }))
+          setDownloads((previous) => ({
+            ...previous,
+            [paperId]: { state: 'downloaded', ...(result.path === undefined ? {} : { path: result.path }) },
+          }))
+          notify(tpl(t('pdf.downloaded'), { name: result.filename ?? '' }), 'info', 6000)
         } else {
-          setToast(tpl(t('pdf.error'), { message: result.error ?? result.status }))
+          setDownloads((previous) => ({
+            ...previous,
+            [paperId]: { state: 'failed', error: result.error ?? result.status },
+          }))
+          notify(
+            result.status === 'html-only'
+              ? tpl(t('pdf.htmlFallback'), { message: result.error ?? '' })
+              : tpl(t('pdf.error'), { message: result.error ?? result.status }),
+            'error',
+            8000,
+          )
         }
       } catch (error) {
-        setToast(tpl(t('pdf.error'), { message: messageOf(error) }))
+        setDownloads((previous) => ({
+          ...previous,
+          [paperId]: { state: 'failed', error: messageOf(error) },
+        }))
+        notify(tpl(t('pdf.error'), { message: messageOf(error) }), 'error', 8000)
       } finally {
         view.reload()
       }
@@ -230,7 +270,7 @@ export function TaskPane({
     if (taskId === null) return
     void syncZotero(taskId, [paper.paperId])
       .then((result) => {
-        setToast(zoteroToast(t, result.saved, result.failed, result.messages))
+        notify(zoteroToast(t, result.saved, result.failed, result.messages))
         if (result.failed > 0) {
           setRisFallback({
             ids: [paper.paperId],
@@ -240,7 +280,7 @@ export function TaskPane({
       })
       .catch((error: unknown) => {
         const message = messageOf(error)
-        setToast(tpl(t('pdf.zoteroFailed'), { message }))
+        notify(tpl(t('pdf.zoteroFailed'), { message }))
         setRisFallback({ ids: [paper.paperId], message })
       })
   }
@@ -286,13 +326,13 @@ export function TaskPane({
       for (const paperId of paperIds) {
         try {
           const result = await downloadPaperPdf(taskId, paperId)
-          if (result.status === 'downloaded' || result.status === 'html-only') ok += 1
+          if (result.status === 'downloaded') ok += 1
           else failed += 1
         } catch {
           failed += 1
         }
       }
-      setToast(tpl(t('bulk.downloadDone'), { ok, failed }))
+      notify(tpl(t('bulk.downloadDone'), { ok, failed }), failed > 0 ? 'error' : 'info', 8000)
       view.reload()
     })()
   }
@@ -301,7 +341,7 @@ export function TaskPane({
     if (taskId === null || paperIds.length === 0) return
     void syncZotero(taskId, paperIds)
       .then((result) => {
-        setToast(zoteroToast(t, result.saved, result.failed, result.messages))
+        notify(zoteroToast(t, result.saved, result.failed, result.messages))
         if (result.failed > 0) {
           setRisFallback({
             ids: [...paperIds],
@@ -311,7 +351,7 @@ export function TaskPane({
       })
       .catch((error: unknown) => {
         const message = messageOf(error)
-        setToast(tpl(t('pdf.zoteroFailed'), { message }))
+        notify(tpl(t('pdf.zoteroFailed'), { message }))
         setRisFallback({ ids: [...paperIds], message })
       })
   }
@@ -352,7 +392,11 @@ export function TaskPane({
   const overviewMissing =
     coverage === undefined
       ? 0
-      : coverage.unknown + coverage.paywalled + coverage.blocked + coverage.failed
+      : coverage.unknown +
+        coverage.missing +
+        coverage.paywalled +
+        coverage.blocked +
+        coverage.failed
   const overviewRate =
     overview === null || overview.loaded === 0
       ? 0
@@ -599,33 +643,44 @@ export function TaskPane({
           onCancel={() => setEditingConditions(false)}
           onSaved={() => {
             setEditingConditions(false)
-            setToast(t('condition.saved'))
+            notify(t('condition.saved'))
             view.reload()
           }}
         />
       )}
 
-      {toast !== '' && <div style={toastStyle}>{toast}</div>}
+      {(toast !== '' || risFallback !== null) && (
+        <div style={toastStackStyle}>
+          {toast !== '' && (
+            <div
+              role="status"
+              style={{ ...toastStyle, ...(toastTone === 'error' ? toastErrorStyle : null) }}
+            >
+              {toast}
+            </div>
+          )}
 
-      {risFallback !== null && (
-        <div style={RIS_FALLBACK_STYLE}>
-          <span style={{ minWidth: 0 }}>
-            {tpl(t('pdf.zoteroFallback'), { message: risFallback.message })}
-          </span>
-          <a
-            href={exportUrl(taskId, 'ris', {}, risFallback.ids)}
-            download
-            style={linkStyle}
-          >
-            {t('pdf.zoteroFallbackLink')}
-          </a>
-          <button
-            type="button"
-            style={linkButtonStyle}
-            onClick={() => setRisFallback(null)}
-          >
-            {t('pdf.zoteroFallbackDismiss')}
-          </button>
+          {risFallback !== null && (
+            <div style={RIS_FALLBACK_STYLE}>
+              <span style={{ minWidth: 0 }}>
+                {tpl(t('pdf.zoteroFallback'), { message: risFallback.message })}
+              </span>
+              <a
+                href={exportUrl(taskId, 'ris', {}, risFallback.ids)}
+                download
+                style={RIS_FALLBACK_LINK_STYLE}
+              >
+                {t('pdf.zoteroFallbackLink')}
+              </a>
+              <button
+                type="button"
+                style={RIS_FALLBACK_BUTTON_STYLE}
+                onClick={() => setRisFallback(null)}
+              >
+                {t('pdf.zoteroFallbackDismiss')}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -781,6 +836,14 @@ export function TaskPane({
                       state={detail.states[paper.paperId]}
                       groups={detail.groups}
                       busy={view.busy}
+                      {...(detail.downloadDir === undefined
+                        ? {}
+                        : { downloadDir: detail.downloadDir })}
+                      {...(downloads[paper.paperId] === undefined
+                        ? {}
+                        : { download: downloads[paper.paperId] })}
+                      {...(onOpenLocal === undefined ? {} : { onOpenLocal })}
+                      {...(onRevealLocal === undefined ? {} : { onRevealLocal })}
                       selected={selected.has(paper.paperId)}
                       onToggleSelect={toggleSelect}
                       onInsert={insert}
@@ -847,6 +910,8 @@ export function TaskPane({
           states={detail.states}
           stats={overview}
           onDownload={downloadPaper}
+          {...(onOpenLocal === undefined ? {} : { onOpenLocal })}
+          {...(onRevealLocal === undefined ? {} : { onRevealLocal })}
           onZotero={zoteroPaper}
           onBatchDownload={(papers) => downloadIds(papers.map((paper) => paper.paperId))}
           onBatchZotero={(papers) => zoteroIds(papers.map((paper) => paper.paperId))}
@@ -864,13 +929,14 @@ export function TaskPane({
           taskId={taskId}
           detail={detail}
           onSaved={view.reload}
+          onNotify={notify}
           onPickGroup={(groupId) => {
             setFilters((previous) => ({ ...previous, groupId }))
             setTab('results')
           }}
         />
       ) : tab === 'notes' ? (
-        <NotesTab t={t} taskId={taskId} detail={detail} onSaved={view.reload} />
+        <NotesTab t={t} taskId={taskId} detail={detail} onSaved={view.reload} onNotify={notify} />
       ) : (
         <CompareTab
           t={t}
@@ -896,7 +962,7 @@ export function TaskPane({
         busy={active}
         onRerun={() => {
           view.reload()
-          setToast(t('rounds.rerunStarted'))
+          notify(t('rounds.rerunStarted'))
         }}
       />
       <TaskListDialog
@@ -1351,16 +1417,23 @@ const ROUND_RESULTS_ICON_STYLE: CSSProperties = {
 }
 
 const RIS_FALLBACK_STYLE: CSSProperties = {
+  ...toastStyle,
+  pointerEvents: 'auto',
   display: 'flex',
   alignItems: 'center',
   flexWrap: 'wrap',
   gap: 8,
-  padding: '5px 8px',
-  borderRadius: 6,
-  border: '1px solid rgba(178,106,0,0.4)',
-  background: 'rgba(178,106,0,0.08)',
-  fontSize: 11,
-  lineHeight: 1.5,
+  borderLeft: '3px solid #b26a00',
+}
+const RIS_FALLBACK_LINK_STYLE: CSSProperties = {
+  color: '#fff',
+  fontSize: 12,
+  textDecoration: 'underline',
+}
+const RIS_FALLBACK_BUTTON_STYLE: CSSProperties = {
+  ...linkButtonStyle,
+  color: '#fff',
+  textDecoration: 'underline',
 }
 
 // 只有选中项画底部横线；tab 用普通 div 渲染，绕开宿主对 button / tab 元素的
@@ -1508,6 +1581,7 @@ const QUICK_FILTER_ACTIVE_STYLE: CSSProperties = {
 // 任务面板占满 tab 高度，正文区自己滚动：宿主只给固定高度，不负责滚动长列表。
 const TASK_PANEL_STYLE: CSSProperties = {
   ...panelStyle,
+  position: 'relative',
   height: '100%',
   minHeight: 0,
   boxSizing: 'border-box',

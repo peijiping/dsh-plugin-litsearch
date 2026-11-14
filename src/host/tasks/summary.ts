@@ -33,7 +33,7 @@ export function toSummary(task: SearchTask): TaskSummary {
 export function toDetail(task: SearchTask): TaskDetail {
   const states: TaskDetail['states'] = {}
   for (const [paperId, state] of Object.entries(task.states)) {
-    states[paperId] = { ...state, ...(state.tags === undefined ? {} : { tags: [...state.tags] }) }
+    states[paperId] = { ...state }
   }
   return {
     ...toSummary(task),

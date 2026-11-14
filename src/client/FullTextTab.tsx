@@ -15,6 +15,7 @@ import type {
   TaskStatsReport,
 } from '../search/types'
 import { fetchResults, type ResultsQuery } from './api'
+import { DownloadButton } from './DownloadButton'
 import { tpl, type Translate } from './locales'
 
 const STATUSES: readonly PdfStatus[] = [
@@ -39,6 +40,10 @@ interface Props {
   /** 任务级统计（scope=task），与结果页覆盖率横幅共用。 */
   stats: TaskStatsReport | null
   onDownload: (paper: Paper) => void
+  /** 已下载文献：先复核文件仍在，再在右侧面板预览本地 PDF。 */
+  onOpenLocal?: (taskId: string, paperId: string, path: string) => void
+  /** 已下载文献：在系统文件管理器中定位 PDF。 */
+  onRevealLocal?: (path: string) => void
   onZotero: (paper: Paper) => void
   onBatchDownload: (papers: readonly Paper[]) => void
   onBatchZotero: (papers: readonly Paper[]) => void
@@ -73,6 +78,8 @@ export function FullTextTab({
   states,
   stats,
   onDownload,
+  onOpenLocal,
+  onRevealLocal,
   onZotero,
   onBatchDownload,
   onBatchZotero,
@@ -152,7 +159,13 @@ export function FullTextTab({
   const availableCount =
     coverage === undefined ? 0 : coverage.available + coverage.downloaded + coverage.htmlOnly
   const missingCount =
-    coverage === undefined ? 0 : coverage.unknown + coverage.paywalled + coverage.blocked + coverage.failed
+    coverage === undefined
+      ? 0
+      : coverage.unknown +
+        coverage.missing +
+        coverage.paywalled +
+        coverage.blocked +
+        coverage.failed
   const selectedPapers = list.papers.filter((paper) => selected.has(paper.paperId))
   const viewLabel = view === 'missing' ? t('fulltext.missing') : t(`pdf.status.${view}`)
 
@@ -228,8 +241,16 @@ export function FullTextTab({
               selected={selected.has(paper.paperId)}
               status={paperStatus(states, paper)}
               error={states[paper.paperId]?.pdfError}
+              downloadedPath={states[paper.paperId]?.pdfFile}
               onToggleSelect={toggleSelect}
               onDownload={onDownload}
+              {...(onOpenLocal === undefined
+                ? {}
+                : {
+                    onOpenLocal: (path: string) =>
+                      onOpenLocal(taskId, paper.paperId, path),
+                  })}
+              {...(onRevealLocal === undefined ? {} : { onRevealLocal })}
               onZotero={onZotero}
             />
           ))}
@@ -284,8 +305,11 @@ function FullTextRow({
   selected,
   status,
   error,
+  downloadedPath,
   onToggleSelect,
   onDownload,
+  onOpenLocal,
+  onRevealLocal,
   onZotero,
 }: {
   t: Translate
@@ -293,10 +317,15 @@ function FullTextRow({
   selected: boolean
   status: PdfStatus
   error: string | undefined
+  downloadedPath: string | undefined
   onToggleSelect(paperId: string): void
   onDownload(paper: Paper): void
+  onOpenLocal?: (path: string) => void
+  onRevealLocal?: (path: string) => void
   onZotero(paper: Paper): void
 }): ReactElement {
+  const downloaded = status === 'downloaded' && downloadedPath !== undefined
+  const pdfMissing = status === 'missing'
   return (
     <li style={ROW_STYLE}>
       <input
@@ -323,9 +352,29 @@ function FullTextRow({
         {error !== undefined && <span style={ROW_ERROR_STYLE}>{error}</span>}
       </div>
       <div style={ROW_ACTIONS_STYLE}>
-        <button type="button" style={LINK_STYLE} onClick={() => onDownload(paper)}>
-          {t('pdf.download')}
-        </button>
+        <DownloadButton
+          t={t}
+          label={
+            downloaded
+              ? t('pdf.downloadedAction')
+              : pdfMissing
+                ? t('pdf.missingAction')
+                : t('pdf.download')
+          }
+          {...(downloaded
+            ? {
+                downloadedPath,
+                hint: tpl(t('pdf.downloadedHint'), { path: downloadedPath ?? '' }),
+              }
+            : pdfMissing
+              ? { hint: t('pdf.missingHint') }
+              : {})}
+          missing={pdfMissing}
+          style={LINK_STYLE}
+          onDownload={() => onDownload(paper)}
+          {...(onOpenLocal === undefined ? {} : { onOpen: onOpenLocal })}
+          {...(onRevealLocal === undefined ? {} : { onReveal: onRevealLocal })}
+        />
         <button type="button" style={LINK_STYLE} onClick={() => onZotero(paper)}>
           {t('pdf.zotero')}
         </button>

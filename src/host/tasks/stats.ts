@@ -110,6 +110,7 @@ function countFullText(task: SearchTask, papers: readonly Paper[]): FullTextCove
     unknown: 0,
     available: 0,
     downloaded: 0,
+    missing: 0,
     htmlOnly: 0,
     paywalled: 0,
     blocked: 0,
@@ -120,6 +121,7 @@ function countFullText(task: SearchTask, papers: readonly Paper[]): FullTextCove
     if (status === 'html-only') coverage.htmlOnly += 1
     else if (status === 'available') coverage.available += 1
     else if (status === 'downloaded') coverage.downloaded += 1
+    else if (status === 'missing') coverage.missing += 1
     else if (status === 'paywalled') coverage.paywalled += 1
     else if (status === 'blocked') coverage.blocked += 1
     else if (status === 'failed') coverage.failed += 1

@@ -39,6 +39,7 @@ const PALETTE = [C.blue, C.teal, C.violet, C.amber, C.green, C.rose, C.slate] as
 const FULLTEXT_STATUSES = [
   { status: 'available', key: 'available', color: C.blue },
   { status: 'downloaded', key: 'downloaded', color: C.green },
+  { status: 'missing', key: 'missing', color: '#d97706' },
   { status: 'html-only', key: 'htmlOnly', color: C.teal },
   { status: 'paywalled', key: 'paywalled', color: C.amber },
   { status: 'blocked', key: 'blocked', color: C.rose },

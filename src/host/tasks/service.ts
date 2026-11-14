@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { MAX_LIMIT, PLUGIN_VERSION, getSettings } from '../../search/config.js'
@@ -59,7 +59,6 @@ import {
   persistPdf,
   probePdfRoot,
   prunePdfCache,
-  readLocalPdf,
   readSavedPdf,
   readableFilename,
   resolvePdf,
@@ -80,6 +79,52 @@ const MAX_TITLE = 120
 const MAX_PAGE_LIMIT = 200
 const MAX_TYPES = 20
 const PROBE_QUERY = 'machine learning'
+
+/** 已下载文件存在性检查的短缓存：详情轮询时不必反复 stat 同一批文件。 */
+const PDF_EXISTS_TTL_MS = 10_000
+const pdfExistsCache = new Map<string, { exists: boolean; at: number }>()
+
+async function pdfFileExists(filePath: string): Promise<boolean> {
+  const cached = pdfExistsCache.get(filePath)
+  if (cached !== undefined && Date.now() - cached.at < PDF_EXISTS_TTL_MS) return cached.exists
+  const exists = await stat(filePath)
+    .then((info) => info.isFile())
+    .catch(() => false)
+  pdfExistsCache.set(filePath, { exists, at: Date.now() })
+  return exists
+}
+
+/**
+ * 已下载的 PDF 可能被用户在文件管理器里删掉（也可能从废纸篓恢复）：
+ * 每次读取任务时校准状态，删除后回到 `missing`，点击即可重新下载。
+ */
+async function reconcilePdfFiles(task: SearchTask): Promise<boolean> {
+  const downloads = Object.entries(task.states).filter(
+    ([, state]) =>
+      state.pdfFile !== undefined &&
+      (state.pdfStatus === 'downloaded' || state.pdfStatus === 'missing'),
+  )
+  if (downloads.length === 0) return false
+  const checks = await Promise.all(
+    downloads.map(async ([paperId, state]) => ({
+      paperId,
+      exists: await pdfFileExists(state.pdfFile ?? ''),
+    })),
+  )
+  let changed = false
+  for (const { paperId, exists } of checks) {
+    const current = task.states[paperId]
+    if (current === undefined) continue
+    if (current.pdfStatus === 'downloaded' && !exists) {
+      task.states[paperId] = { ...current, pdfStatus: 'missing' }
+      changed = true
+    } else if (current.pdfStatus === 'missing' && exists) {
+      task.states[paperId] = { ...current, pdfStatus: 'downloaded' }
+      changed = true
+    }
+  }
+  return changed
+}
 
 export interface QueryInput {
   name?: string
@@ -299,8 +344,11 @@ export class TaskService {
     return task
   }
 
-  async getDetail(id: string): Promise<TaskDetail> {
-    return toDetail(await this.get(id))
+  async getDetail(id: string, workspace?: string): Promise<TaskDetail> {
+    const task = await this.get(id)
+    if (await reconcilePdfFiles(task)) await this.store.save(task)
+    const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
+    return { ...toDetail(task), downloadDir: resolvePdfRoot(target) }
   }
 
   /** 任务内轮次历史（时间升序、深拷贝）。 */
@@ -666,6 +714,26 @@ export class TaskService {
     }
   }
 
+  /**
+   * 「查看已下载」前的存在性检查：页面加载后文件可能被删除或移走。
+   * 缺失时把状态改为 `missing` 并广播，所有面板随即显示「下载文件已删除」。
+   */
+  async recheckPdf(id: string, paperId: string): Promise<{ exists: boolean }> {
+    const task = await this.get(id)
+    findPaper(task, paperId)
+    const state = task.states[paperId]
+    const filePath = state?.pdfFile
+    if (state === undefined || filePath === undefined) return { exists: false }
+    pdfExistsCache.delete(filePath)
+    const exists = await pdfFileExists(filePath)
+    if (exists && state.pdfStatus !== 'downloaded') {
+      await this.setPdfState(task, paperId, { pdfStatus: 'downloaded', pdfFile: filePath })
+    } else if (!exists && state.pdfStatus !== 'missing') {
+      await this.setPdfState(task, paperId, { pdfStatus: 'missing', pdfFile: filePath })
+    }
+    return { exists }
+  }
+
   /** 下载单篇 PDF；失败时写入失败状态，若有 EPMC 全文则降级为 html-only。 */
   async downloadPdf(
     id: string,
@@ -710,27 +778,6 @@ export class TaskService {
     return result
   }
 
-  /** PDF 预览：优先用已落地文件；没有则临时抓取一次但不落盘。 */
-  async previewPdf(
-    id: string,
-    paperId: string,
-    workspace?: string,
-  ): Promise<{ buffer: Buffer; filename: string }> {
-    const task = await this.get(id)
-    const paper = findPaper(task, paperId)
-    const filename = readableFilename(paper)
-    const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
-    const recorded = task.states[paperId]?.pdfFile
-    const saved = recorded === undefined ? null : await readSavedPdf(recorded)
-    const local = saved ?? (await readLocalPdf(paper, target))
-    if (local !== null) return { buffer: local, filename }
-    const resolution = await resolvePdf(paper)
-    if (!resolution.ok || resolution.buffer === undefined) {
-      throw new SearchError('not_found', resolution.error ?? '没有可预览的 PDF')
-    }
-    return { buffer: resolution.buffer, filename }
-  }
-
   /** Europe PMC 全文（JATS → 只含安全标签的 HTML）。 */
   async fullText(id: string, paperId: string): Promise<string> {
     const task = await this.get(id)
@@ -752,15 +799,18 @@ export class TaskService {
   }
 
   /** 单篇论文详情：独立论文页使用，含任务标题与分组。 */
-  async paperDetail(id: string, paperId: string): Promise<PaperDetail> {
+  async paperDetail(id: string, paperId: string, workspace?: string): Promise<PaperDetail> {
     const task = await this.get(id)
+    if (await reconcilePdfFiles(task)) await this.store.save(task)
     const paper = findPaper(task, paperId)
+    const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
     const detail: PaperDetail = {
       taskId: task.id,
       taskTitle: task.title,
       rev: task.rev,
       paper,
       groups: task.groups,
+      downloadDir: resolvePdfRoot(target),
     }
     const state = task.states[paperId]
     if (state !== undefined) detail.state = state
@@ -826,7 +876,9 @@ export class TaskService {
     const inputs: { paper: Paper; tags: string[]; pdfPath?: string }[] = []
     for (const paper of wanted) {
       const state = task.states[paper.paperId]
-      const tags = state?.tags ?? []
+      // 标签已移除，用任务内的分组名承载 Zotero 侧的分类信息。
+      const group = task.groups.find((entry) => entry.id === state?.groupId)
+      const tags = group === undefined ? [] : [group.name]
       const pdfPath = attachPdf
         ? await this.ensureLocalPdf(paper, target, state?.pdfFile)
         : undefined
@@ -895,6 +947,10 @@ export class TaskService {
     else next.pdfError = patch.pdfError.slice(0, 300)
     if (patch.pdfFile === undefined) delete next.pdfFile
     else next.pdfFile = patch.pdfFile.slice(0, 1024)
+    // 刚写入的文件立即视为存在，避免存在性缓存把状态又翻回 `missing`。
+    if (patch.pdfStatus === 'downloaded' && next.pdfFile !== undefined) {
+      pdfExistsCache.set(next.pdfFile, { exists: true, at: Date.now() })
+    }
     task.states[paperId] = next
     task.rev += 1
     task.updatedAt = new Date().toISOString()
@@ -1154,11 +1210,10 @@ function readTitle(title: string | undefined, conditions: TaskConditions): strin
 function inheritStates(base: SearchTask): Record<string, PaperState> {
   const states: Record<string, PaperState> = {}
   for (const [paperId, state] of Object.entries(base.states)) {
-    // 分组是任务内概念，继承时只带筛读、必读顺序、备注与标签。
+    // 分组是任务内概念，继承时只带筛读、必读顺序与备注。
     const next: PaperState = { screening: state.screening }
     if (state.shortlistOrder !== undefined) next.shortlistOrder = state.shortlistOrder
     if (state.note !== undefined) next.note = state.note
-    if (state.tags !== undefined) next.tags = [...state.tags]
     states[paperId] = next
   }
   return states

@@ -16,6 +16,8 @@ const UNPAYWALL_API = 'https://api.unpaywall.org/v2'
 export function pdfCandidates(paper: Paper): string[] {
   const candidates = new Set<string>()
   if (paper.pdfUrl !== '') candidates.add(paper.pdfUrl)
+  const publisher = publisherPdfUrl(paper.doi)
+  if (publisher !== null) candidates.add(publisher)
   const pmcid = normalizePmcid(paper.ids.pmcid)
   if (pmcid !== '') {
     candidates.add(`${EPMC_ARTICLE}/${pmcid}?pdf=render`)
@@ -23,6 +25,34 @@ export function pdfCandidates(paper: Paper): string[] {
   }
   if (paper.ids.arxivId !== '') candidates.add(`${ARXIV_PDF}/${paper.ids.arxivId}`)
   return [...candidates]
+}
+
+/**
+ * 部分开放获取出版商的固定 PDF 地址规则。
+ *
+ * Europe PMC / PMC 的渲染页会对后台请求启用 Cloudflare 人机验证（浏览器能打开、
+ * Host 下载却拿到 HTML），因此优先补一条出版商原生 PDF 地址。
+ */
+function publisherPdfUrl(doi: string): string | null {
+  const value = doi.trim()
+  if (value === '') return null
+  // BMC / SpringerOpen：https://link.springer.com/content/pdf/<doi>.pdf
+  if (value.startsWith('10.1186/') || value.startsWith('10.1007/')) {
+    return `https://link.springer.com/content/pdf/${encodeURI(value)}.pdf`
+  }
+  // Frontiers：https://www.frontiersin.org/articles/<doi>/pdf
+  if (value.startsWith('10.3389/')) {
+    return `https://www.frontiersin.org/articles/${encodeURI(value)}/pdf`
+  }
+  // PLOS ONE
+  if (value.startsWith('10.1371/journal.pone.')) {
+    return `https://journals.plos.org/plosone/article/file?id=${encodeURI(value)}&type=printable`
+  }
+  // Nature 系列（开放获取文章可下载，订阅文章会落到 HTML 页并继续尝试其它候选）
+  if (value.startsWith('10.1038/')) {
+    return `https://www.nature.com/articles/${encodeURI(value.slice('10.1038/'.length))}.pdf`
+  }
+  return null
 }
 
 /** Europe PMC 的全文 XML 地址；没有 PMCID 时返回 null。 */

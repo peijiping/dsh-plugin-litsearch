@@ -20,19 +20,27 @@ interface Props {
   detail: TaskDetail
   onSaved(): void
   onPickGroup(groupId: string): void
+  /** 保存结果走面板底部浮层提醒。 */
+  onNotify(text: string): void
 }
 
 function draftOf(groups: readonly TaskGroup[]): TaskGroup[] {
   return groups.map((group) => ({ ...group }))
 }
 
-export function GroupsTab({ t, taskId, detail, onSaved, onPickGroup }: Props): ReactElement {
+export function GroupsTab({
+  t,
+  taskId,
+  detail,
+  onSaved,
+  onPickGroup,
+  onNotify,
+}: Props): ReactElement {
   const [draft, setDraft] = useState<TaskGroup[]>(() => draftOf(detail.groups))
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [toast, setToast] = useState('')
 
   // 多次改动合并成一串顺序写入，避免旧快照的请求后到、把新分组覆盖掉。
   const latest = useRef<TaskGroup[]>(draft)
@@ -56,14 +64,13 @@ export function GroupsTab({ t, taskId, detail, onSaved, onPickGroup }: Props): R
       saving.current = true
       setBusy(true)
       setError(null)
-      setToast('')
       void (async () => {
         try {
           while (queued.current) {
             queued.current = false
             await updateTask(taskId, { groups: latest.current.map((group) => ({ ...group })) })
           }
-          setToast(t('groups.saved'))
+          onNotify(t('groups.saved'))
           onSaved()
         } catch (reason: unknown) {
           setError(reason instanceof Error ? reason.message : String(reason))
@@ -73,7 +80,7 @@ export function GroupsTab({ t, taskId, detail, onSaved, onPickGroup }: Props): R
         }
       })()
     },
-    [taskId, t, onSaved],
+    [taskId, t, onSaved, onNotify],
   )
 
   const add = (): void => {
@@ -224,7 +231,6 @@ export function GroupsTab({ t, taskId, detail, onSaved, onPickGroup }: Props): R
       )}
 
       <div style={ACTION_ROW_STYLE}>
-        {toast !== '' && <span style={TOAST_STYLE}>{toast}</span>}
         {busy && <span style={statusStyle}>{t('groups.saving')}</span>}
       </div>
       {error !== null && (
@@ -276,4 +282,3 @@ const ACTION_ROW_STYLE: CSSProperties = {
   gap: 10,
   flexWrap: 'wrap',
 }
-const TOAST_STYLE: CSSProperties = { fontSize: 12, color: '#2e9e5b' }

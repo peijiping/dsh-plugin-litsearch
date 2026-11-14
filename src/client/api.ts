@@ -353,15 +353,17 @@ export function syncZotero(
   return request<ZoteroSyncResult>(taskPath(taskId, '/zotero'), writeInit('POST', { paperIds }))
 }
 
-/** 内联 PDF 预览地址（支持 Range）；查询参数让 Host 找到会话工作目录。 */
-export function paperPdfUrl(taskId: string, paperId: string): string {
-  const params = new URLSearchParams()
-  const sessionId = currentSessionId()
-  if (sessionId !== '') params.set('session', sessionId)
-  const suffix = params.toString()
-  return `${BASE}/tasks/${encodeURIComponent(taskId)}/papers/${encodeURIComponent(paperId)}/pdf${
-    suffix === '' ? '' : `?${suffix}`
-  }`
+/** 点击「查看已下载」前确认本地文件仍在（页面加载后可能被删除）。 */
+export function recheckPaperPdf(taskId: string, paperId: string): Promise<{ exists: boolean }> {
+  return request<{ exists: boolean }>(
+    taskPath(taskId, `/papers/${encodeURIComponent(paperId)}/recheck`),
+    writeInit('POST', {}),
+  )
+}
+
+/** 在系统文件管理器中定位已下载的 PDF（打开所在文件夹并选中文件）。 */
+export function revealLocalFile(path: string): Promise<{ path: string }> {
+  return request<{ path: string }>('/files/reveal', writeInit('POST', { path }))
 }
 
 /** Europe PMC 全文 HTML 地址（用于 iframe）。 */

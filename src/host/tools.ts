@@ -258,7 +258,7 @@ const TASK_PARAMETERS = {
     papers: {
       type: 'array',
       maxItems: 50,
-      description: 'annotate 时的逐篇写入（筛读 / 分组 / 必读顺序 / 备注 / 标签）。',
+      description: 'annotate 时的逐篇写入（筛读 / 分组 / 必读顺序 / 备注）。',
       items: {
         type: 'object',
         properties: {
@@ -267,7 +267,6 @@ const TASK_PARAMETERS = {
           groupId: { type: ['string', 'null'] },
           shortlistOrder: { type: ['integer', 'null'] },
           note: { type: 'string' },
-          tags: { type: 'array', items: { type: 'string' } },
         },
         required: ['paperId'],
         additionalProperties: false,
@@ -800,13 +799,6 @@ function readAnnotations(value: unknown): AnnotationInput[] {
     }
     const note = readText(record['note'], `papers[${index}].note`, true)
     if (note !== undefined) input.note = note
-    if (record['tags'] !== undefined) {
-      const tags = record['tags']
-      if (!Array.isArray(tags) || !tags.every((tag) => typeof tag === 'string')) {
-        throw new Error(`papers[${index}].tags 必须是字符串数组`)
-      }
-      input.tags = tags
-    }
     return input
   })
 }

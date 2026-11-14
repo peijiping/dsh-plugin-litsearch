@@ -17,10 +17,12 @@ import type {
   Screening,
   TaskGroup,
 } from '../search/types'
-import { paperFullTextUrl, paperPdfUrl } from './api'
+import { paperFullTextUrl } from './api'
+import { DownloadButton } from './DownloadButton'
 import { EntityPanel } from './Entities'
 import { AbstractIcon, AuthorsIcon, TitleIcon } from './icons'
 import { tpl, type Translate } from './locales'
+import { PreviewFrame } from './PreviewFrame'
 import {
   ACCENT,
   abstractStyle,
@@ -41,6 +43,17 @@ const CREATE_GROUP_VALUE = '__create_group__'
 
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
 
+/** 出版商明确要求订阅 / 拒绝访问时，不再提供「下载 PDF」，避免必然失败的操作。 */
+const NO_PDF_STATUSES: ReadonlySet<PdfStatus> = new Set(['paywalled', 'blocked'])
+
+/** 单篇下载的进行中 / 已完成状态（由任务面板维护，跨 reload 保留）。 */
+export interface PdfDownloadUi {
+  state: 'downloading' | 'downloaded' | 'failed'
+  /** 下载成功后的绝对路径。 */
+  path?: string
+  error?: string
+}
+
 const SCREENING_COLOR: Record<Screening, string> = {
   unread: 'rgba(127,127,127,0.9)',
   read: '#508cff',
@@ -55,6 +68,14 @@ interface Props {
   state?: PaperState
   groups: readonly TaskGroup[]
   busy: boolean
+  /** PDF 保存目录，用于下载按钮的悬停提示。 */
+  downloadDir?: string
+  /** 当前这篇的下载状态；未点击过时不传。 */
+  download?: PdfDownloadUi
+  /** 已下载时点击：先复核文件仍在，再在右侧面板预览本地 PDF。 */
+  onOpenLocal?: (taskId: string, paperId: string, path: string) => void
+  /** 已下载时点箭头菜单：在系统文件管理器中定位该 PDF。 */
+  onRevealLocal?: (path: string) => void
   selected?: boolean
   onToggleSelect?: (paperId: string) => void
   onInsert: (paper: Paper) => void
@@ -73,6 +94,10 @@ export function PaperCard({
   state,
   groups,
   busy,
+  downloadDir,
+  download,
+  onOpenLocal,
+  onRevealLocal,
   selected = false,
   onToggleSelect,
   onInsert,
@@ -85,21 +110,18 @@ export function PaperCard({
   const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState(false)
   const [entities, setEntities] = useState(false)
-  const [preview, setPreview] = useState<'pdf' | 'html' | null>(null)
+  const [showHtml, setShowHtml] = useState(false)
   const [note, setNote] = useState(state?.note ?? '')
-  const [tags, setTags] = useState((state?.tags ?? []).join(', '))
   const [order, setOrder] = useState(
     state?.shortlistOrder === undefined ? '' : String(state.shortlistOrder),
   )
 
   const noteKey = state?.note ?? ''
-  const tagsKey = (state?.tags ?? []).join(',')
   const orderKey = state?.shortlistOrder ?? ''
   useEffect(() => {
     setNote(noteKey)
-    setTags(tagsKey)
     setOrder(orderKey === '' ? '' : String(orderKey))
-  }, [noteKey, tagsKey, orderKey])
+  }, [noteKey, orderKey])
 
   const authors =
     paper.authors.length === 0
@@ -116,23 +138,54 @@ export function PaperCard({
 
   const screening = state?.screening ?? 'unread'
   const groupName = groups.find((group) => group.id === state?.groupId)?.name
-  const hasNote = (state?.note ?? '') !== '' || (state?.tags ?? []).length > 0
+  const hasNote = (state?.note ?? '') !== ''
   const pdfStatus: PdfStatus = state?.pdfStatus ?? (paper.pdfUrl === '' ? 'unknown' : 'available')
   const canPdf =
-    paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '' || paper.doi !== ''
+    !NO_PDF_STATUSES.has(pdfStatus) &&
+    (paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '' || paper.doi !== '')
   const canHtml = paper.ids.pmcid !== ''
 
+  // 下载状态优先取面板的即时结果；刷新后回落到 Host 记录的已下载路径。
+  const downloading = download?.state === 'downloading'
+  const pdfMissing = !downloading && pdfStatus === 'missing'
+  // Host 的 missing 状态优先于本地下载记录：文件被删后按钮要立刻变成「重新下载」。
+  const downloaded =
+    !pdfMissing &&
+    (download?.state === 'downloaded' ||
+      (pdfStatus === 'downloaded' && !downloading))
+  const downloadedPath = downloaded
+    ? download?.path ?? state?.pdfFile
+    : undefined
+  const failedMessage =
+    download?.state === 'failed'
+      ? download.error
+      : pdfStatus === 'failed'
+        ? state?.pdfError
+        : undefined
+  const pdfLabel = downloading
+    ? t('pdf.downloading')
+    : downloaded
+      ? t('pdf.downloadedAction')
+      : pdfMissing
+        ? t('pdf.missingAction')
+        : pdfStatus === 'failed'
+          ? t('pdf.retry')
+          : t('pdf.download')
+  const pdfHint = downloading
+    ? t('pdf.downloadingHint')
+    : downloaded
+      ? tpl(t('pdf.downloadedHint'), { path: downloadedPath ?? downloadDir ?? '' })
+      : pdfMissing
+        ? t('pdf.missingHint')
+        : failedMessage !== undefined
+        ? tpl(t('pdf.retryHint'), { message: failedMessage })
+        : tpl(t('pdf.downloadHint'), { path: downloadDir ?? t('pdf.downloadDirUnknown') })
   const saveDetail = (): void => {
     const trimmedOrder = order.trim()
     const parsedOrder = Number(trimmedOrder)
-    const tagList = tags
-      .split(/[,，;；]/u)
-      .map((tag) => tag.trim())
-      .filter((tag) => tag !== '')
     onAnnotate({
       paperId: paper.paperId,
       note,
-      tags: tagList,
       shortlistOrder:
         trimmedOrder === '' || !Number.isFinite(parsedOrder) ? null : Math.floor(parsedOrder),
     })
@@ -211,15 +264,6 @@ export function PaperCard({
               onChange={(event) => setNote(event.target.value)}
             />
           </label>
-          <label style={EDIT_FIELD_STYLE}>
-            <span>{t('annotate.tags')}</span>
-            <input
-              style={INPUT_STYLE}
-              value={tags}
-              placeholder={t('annotate.tagsPlaceholder')}
-              onChange={(event) => setTags(event.target.value)}
-            />
-          </label>
           <label style={{ ...EDIT_FIELD_STYLE, maxWidth: 120 }}>
             <span>{t('annotate.shortlistOrder')}</span>
             <input
@@ -288,10 +332,6 @@ export function PaperCard({
         </div>
       )}
 
-      {state?.pdfError !== undefined && (
-        <div style={PDF_ERROR_STYLE}>{tpl(t('pdf.error'), { message: state.pdfError })}</div>
-      )}
-
       <div style={CARD_ROW_STYLE} title={t('result.infoHint')}>
         <span style={INFO_LABEL_STYLE}>{t('result.infoLabel')}</span>
         <div style={{ ...badgeRowStyle, ...FIELD_BODY_STYLE, marginTop: 0 }}>
@@ -313,7 +353,10 @@ export function PaperCard({
             <span style={INFO_BADGE_STYLE}>{tpl(t('result.citedBy'), { n: paper.citedBy })}</span>
           )}
           {paper.openAccess && <span style={INFO_BADGE_STYLE}>{t('result.openAccess')}</span>}
-          <span style={{ ...INFO_BADGE_STYLE, color: PDF_COLOR[pdfStatus] }}>
+          <span
+            style={{ ...INFO_BADGE_STYLE, color: PDF_COLOR[pdfStatus] }}
+            title={state?.pdfError}
+          >
             {t(`pdf.status.${pdfStatus}`)}
           </span>
         </div>
@@ -354,29 +397,27 @@ export function PaperCard({
             </button>
           )}
           {canPdf && (
-            <button
-              type="button"
-              style={linkButtonStyle}
-              onClick={() => setPreview((value) => (value === 'pdf' ? null : 'pdf'))}
-            >
-              {t('pdf.preview')}
-            </button>
-          )}
-          {canPdf && (
-            <button
-              type="button"
-              style={linkButtonStyle}
+            <DownloadButton
+              t={t}
+              label={pdfLabel}
+              hint={pdfHint}
+              {...(downloadedPath === undefined ? {} : { downloadedPath })}
+              missing={pdfMissing}
+              downloading={downloading}
               disabled={busy}
-              onClick={() => onDownload(paper)}
-            >
-              {t('pdf.download')}
-            </button>
+              style={linkButtonStyle}
+              onDownload={() => onDownload(paper)}
+              {...(onOpenLocal === undefined
+                ? {}
+                : { onOpen: (path: string) => onOpenLocal(taskId, paper.paperId, path) })}
+              {...(onRevealLocal === undefined ? {} : { onReveal: onRevealLocal })}
+            />
           )}
           {canHtml && (
             <button
               type="button"
               style={linkButtonStyle}
-              onClick={() => setPreview((value) => (value === 'html' ? null : 'html'))}
+              onClick={() => setShowHtml((value) => !value)}
             >
               {t('pdf.fulltext')}
             </button>
@@ -411,24 +452,13 @@ export function PaperCard({
         <EntityPanel t={t} taskId={taskId} paperId={paper.paperId} pmid={paper.ids.pmid} />
       )}
 
-      {preview !== null && (
-        <div style={PREVIEW_WRAP_STYLE}>
-          <div style={PREVIEW_HEAD_STYLE}>
-            <span>{preview === 'pdf' ? t('pdf.preview') : t('pdf.fulltext')}</span>
-            <button type="button" style={linkButtonStyle} onClick={() => setPreview(null)}>
-              {t('pdf.closePreview')}
-            </button>
-          </div>
-          <iframe
-            title={preview === 'pdf' ? t('pdf.preview') : t('pdf.fulltext')}
-            src={
-              preview === 'pdf'
-                ? paperPdfUrl(taskId, paper.paperId)
-                : paperFullTextUrl(taskId, paper.paperId)
-            }
-            style={IFRAME_STYLE}
-          />
-        </div>
+      {showHtml && (
+        <PreviewFrame
+          t={t}
+          src={paperFullTextUrl(taskId, paper.paperId)}
+          height={360}
+          onClose={() => setShowHtml(false)}
+        />
       )}
     </article>
   )
@@ -438,38 +468,11 @@ const PDF_COLOR: Record<PdfStatus, string> = {
   unknown: 'rgba(127,127,127,0.8)',
   available: '#508cff',
   downloaded: '#2e9e5b',
+  missing: '#d64545',
   'html-only': '#b26a00',
   paywalled: '#b26a00',
   blocked: '#d64545',
   failed: '#d64545',
-}
-
-const PDF_ERROR_STYLE: CSSProperties = {
-  fontSize: 11,
-  lineHeight: 1.5,
-  color: '#b26a00',
-  marginTop: 2,
-}
-const PREVIEW_WRAP_STYLE: CSSProperties = {
-  marginTop: 6,
-  border: '1px solid rgba(127,127,127,0.22)',
-  borderRadius: 6,
-  overflow: 'hidden',
-}
-const PREVIEW_HEAD_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-  padding: '3px 8px',
-  fontSize: 11,
-  background: 'rgba(127,127,127,0.08)',
-}
-const IFRAME_STYLE: CSSProperties = {
-  width: '100%',
-  height: 360,
-  border: 'none',
-  background: '#fff',
 }
 
 /** 卡片顶部工具行：勾选 / 筛读 / 分组 / 标注。 */

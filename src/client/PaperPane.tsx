@@ -22,13 +22,15 @@ import {
   exportUrl,
   fetchPaper,
   paperFullTextUrl,
-  paperPdfUrl,
   syncZotero,
 } from './api'
 import { paperSummary, paperText } from './compose'
+import { DownloadButton } from './DownloadButton'
 import { EntityPanel } from './Entities'
 import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
+import { PreviewFrame } from './PreviewFrame'
+import { subscribeTaskSummary } from './taskListStore'
 import {
   ERROR,
   abstractStyle,
@@ -40,6 +42,8 @@ import {
   panelStyle,
   statusStyle,
   titleStyle,
+  toastErrorStyle,
+  toastStackStyle,
   toastStyle,
 } from './styles'
 
@@ -57,6 +61,10 @@ interface Props {
   t: Translate
   useTabInfo(): TabInfoLike
   inputActions?: InputActions
+  /** 已下载时点击：先复核文件仍在，再在右侧面板预览本地 PDF。 */
+  onOpenLocal?: (taskId: string, paperId: string, path: string) => void
+  /** 已下载时点箭头菜单：在系统文件管理器中定位该 PDF。 */
+  onRevealLocal?: (path: string) => void
 }
 
 export function paperRefFromAddress(
@@ -82,6 +90,7 @@ const PDF_COLOR: Record<PdfStatus, string> = {
   unknown: 'rgba(127,127,127,0.8)',
   available: '#508cff',
   downloaded: '#2e9e5b',
+  missing: '#d64545',
   'html-only': '#b26a00',
   paywalled: '#b26a00',
   blocked: '#d64545',
@@ -92,19 +101,30 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement {
+export function PaperPane({
+  t,
+  useTabInfo,
+  inputActions,
+  onOpenLocal,
+  onRevealLocal,
+}: Props): ReactElement {
   const info = useTabInfo()
   const ref = paperRefFromAddress(info.tab.navigation?.address || info.tab.contentId || '')
   const [detail, setDetail] = useState<PaperDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const [nonce, setNonce] = useState(0)
-  const [toast, setToast] = useState('')
+  const [toast, setToastState] = useState('')
+  const [toastTone, setToastTone] = useState<'info' | 'error'>('info')
+  const notify = (text: string, tone: 'info' | 'error' = 'info'): void => {
+    setToastState(text)
+    setToastTone(tone)
+  }
   const [editing, setEditing] = useState(false)
-  const [preview, setPreview] = useState<'pdf' | 'html' | null>(null)
+  const [showHtml, setShowHtml] = useState(false)
   const [note, setNote] = useState('')
-  const [tags, setTags] = useState('')
   const [order, setOrder] = useState('')
   const [risFallback, setRisFallback] = useState<{ ids: readonly string[]; message: string } | null>(
     null,
@@ -137,26 +157,32 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
     return () => controller.abort()
   }, [ref?.taskId, ref?.paperId, nonce, t])
 
+  // Host 复核出「文件已删除」等状态时 rev 会变化：重新取一次详情换掉按钮文案。
+  useEffect(() => {
+    if (ref === null) return undefined
+    return subscribeTaskSummary((summary) => {
+      if (summary.id === ref.taskId) setNonce((value) => value + 1)
+    })
+  }, [ref?.taskId])
+
   const state = detail?.state
   const noteKey = state?.note ?? ''
-  const tagsKey = (state?.tags ?? []).join(',')
   const orderKey = state?.shortlistOrder ?? ''
 
   useEffect(() => {
     setNote(noteKey)
-    setTags(tagsKey)
     setOrder(orderKey === '' ? '' : String(orderKey))
-  }, [noteKey, tagsKey, orderKey])
+  }, [noteKey, orderKey])
 
   useEffect(() => {
     setEditing(false)
-    setPreview(null)
+    setShowHtml(false)
     setRisFallback(null)
   }, [ref?.taskId, ref?.paperId])
 
   useEffect(() => {
     if (toast === '') return undefined
-    const timer = setTimeout(() => setToast(''), 2400)
+    const timer = setTimeout(() => setToastState(''), 4000)
     return () => clearTimeout(timer)
   }, [toast])
 
@@ -183,21 +209,16 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
     setBusy(true)
     void annotateTask(taskId, [input])
       .then(() => setNonce((value) => value + 1))
-      .catch((err: unknown) => setToast(messageOf(err)))
+      .catch((err: unknown) => notify(messageOf(err)))
       .finally(() => setBusy(false))
   }
 
   const saveDetail = (): void => {
     const trimmedOrder = order.trim()
     const parsedOrder = Number(trimmedOrder)
-    const tagList = tags
-      .split(/[,，;；]/u)
-      .map((tag) => tag.trim())
-      .filter((tag) => tag !== '')
     annotate({
       paperId: paper.paperId,
       note,
-      tags: tagList,
       shortlistOrder:
         trimmedOrder === '' || !Number.isFinite(parsedOrder) ? null : Math.floor(parsedOrder),
     })
@@ -206,25 +227,29 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
 
   const insert = (): void => {
     const outcome = insertQuote(inputActions, paperText(t, paper), paperSummary(t, paper))
-    if (outcome === 'inserted') setToast(t('result.inserted'))
-    else setToast(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
+    if (outcome === 'inserted') notify(t('result.inserted'))
+    else notify(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
   const download = (): void => {
     setBusy(true)
+    setDownloading(true)
     void downloadPaperPdf(taskId, paper.paperId)
       .then((result) => {
         if (result.status === 'downloaded') {
-          setToast(tpl(t('pdf.downloaded'), { name: result.filename ?? '' }))
+          notify(tpl(t('pdf.downloaded'), { name: result.filename ?? '' }))
         } else if (result.status === 'html-only') {
-          setToast(tpl(t('pdf.htmlFallback'), { message: result.error ?? '' }))
+          notify(tpl(t('pdf.htmlFallback'), { message: result.error ?? '' }), 'error')
         } else {
-          setToast(tpl(t('pdf.error'), { message: result.error ?? result.status }))
+          notify(tpl(t('pdf.error'), { message: result.error ?? result.status }), 'error')
         }
       })
-      .catch((err: unknown) => setToast(tpl(t('pdf.error'), { message: messageOf(err) })))
+      .catch((err: unknown) =>
+        notify(tpl(t('pdf.error'), { message: messageOf(err) }), 'error'),
+      )
       .finally(() => {
         setBusy(false)
+        setDownloading(false)
         setNonce((value) => value + 1)
       })
   }
@@ -235,9 +260,9 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
       .then((result) => {
         const message = result.messages[0] ?? ''
         if (result.failed === 0 && message === '') {
-          setToast(tpl(t('pdf.zoteroDone'), { n: result.saved }))
+          notify(tpl(t('pdf.zoteroDone'), { n: result.saved }))
         } else {
-          setToast(
+          notify(
             tpl(t('pdf.zoteroPartial'), {
               saved: result.saved,
               failed: result.failed,
@@ -251,7 +276,7 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
       })
       .catch((err: unknown) => {
         const message = messageOf(err)
-        setToast(tpl(t('pdf.zoteroFailed'), { message }))
+        notify(tpl(t('pdf.zoteroFailed'), { message }))
         setRisFallback({ ids: [paper.paperId], message })
       })
       .finally(() => setBusy(false))
@@ -262,6 +287,33 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
   const canPdf =
     paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '' || paper.doi !== ''
   const canHtml = paper.ids.pmcid !== ''
+  const downloaded = !downloading && state?.pdfStatus === 'downloaded'
+  const downloadedPath = downloaded ? state?.pdfFile : undefined
+  const pdfMissing = !downloading && state?.pdfStatus === 'missing'
+  const failedMessage =
+    !downloading && state?.pdfStatus === 'failed' ? state.pdfError : undefined
+  const downloadLabel = downloading
+    ? t('pdf.downloading')
+    : downloaded
+      ? t('pdf.downloadedAction')
+      : pdfMissing
+        ? t('pdf.missingAction')
+        : state?.pdfStatus === 'failed'
+          ? t('pdf.retry')
+          : t('pdf.download')
+  const downloadHint = downloading
+    ? t('pdf.downloadingHint')
+    : downloaded
+      ? tpl(t('pdf.downloadedHint'), {
+          path: downloadedPath ?? detail.downloadDir ?? '',
+        })
+      : pdfMissing
+        ? t('pdf.missingHint')
+        : failedMessage !== undefined
+          ? tpl(t('pdf.retryHint'), { message: failedMessage })
+          : tpl(t('pdf.downloadHint'), {
+              path: detail.downloadDir ?? t('pdf.downloadDirUnknown'),
+            })
   const authors =
     paper.authors.length === 0
       ? ''
@@ -272,7 +324,7 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
   const groupName = detail.groups.find((group) => group.id === state?.groupId)?.name
 
   return (
-    <div style={panelStyle}>
+    <div style={{ ...panelStyle, position: 'relative' }}>
       <div style={{ ...statusStyle, opacity: 0.66 }}>
         {tpl(t('paperTab.fromTask'), { title: detail.taskTitle })}
       </div>
@@ -309,12 +361,6 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
           {t(`pdf.status.${pdfStatus}`)}
         </span>
       </div>
-
-      {state?.pdfError !== undefined && (
-        <div style={{ ...statusStyle, color: '#b26a00' }}>
-          {tpl(t('pdf.error'), { message: state.pdfError })}
-        </div>
-      )}
 
       <div style={STATE_ROW_STYLE}>
         <select
@@ -367,15 +413,6 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
               rows={3}
               placeholder={t('annotate.notePlaceholder')}
               onChange={(event) => setNote(event.target.value)}
-            />
-          </label>
-          <label style={FIELD_STYLE}>
-            <span>{t('annotate.tags')}</span>
-            <input
-              style={INPUT_STYLE}
-              value={tags}
-              placeholder={t('annotate.tagsPlaceholder')}
-              onChange={(event) => setTags(event.target.value)}
             />
           </label>
           <label style={{ ...FIELD_STYLE, maxWidth: 120 }}>
@@ -459,39 +496,47 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
         <EntityPanel t={t} taskId={taskId} paperId={paper.paperId} pmid={paper.ids.pmid} />
       </section>
 
-      {preview !== null && (
-        <div style={PREVIEW_WRAP_STYLE}>
-          <div style={PREVIEW_HEAD_STYLE}>
-            <span>{preview === 'pdf' ? t('pdf.preview') : t('pdf.fulltext')}</span>
-            <button type="button" style={linkButtonStyle} onClick={() => setPreview(null)}>
-              {t('pdf.closePreview')}
-            </button>
-          </div>
-          <iframe
-            title={preview === 'pdf' ? t('pdf.preview') : t('pdf.fulltext')}
-            src={
-              preview === 'pdf'
-                ? paperPdfUrl(taskId, paper.paperId)
-                : paperFullTextUrl(taskId, paper.paperId)
-            }
-            style={IFRAME_STYLE}
-          />
-        </div>
+      {showHtml && (
+        <PreviewFrame
+          t={t}
+          src={paperFullTextUrl(taskId, paper.paperId)}
+          height={420}
+          onClose={() => setShowHtml(false)}
+        />
       )}
 
-      {toast !== '' && <div style={toastStyle}>{toast}</div>}
+      {(toast !== '' || risFallback !== null) && (
+        <div style={toastStackStyle}>
+          {toast !== '' && (
+            <div
+              role="status"
+              style={{ ...toastStyle, ...(toastTone === 'error' ? toastErrorStyle : null) }}
+            >
+              {toast}
+            </div>
+          )}
 
-      {risFallback !== null && (
-        <div style={FALLBACK_STYLE}>
-          <span style={{ minWidth: 0 }}>
-            {tpl(t('pdf.zoteroFallback'), { message: risFallback.message })}
-          </span>
-          <a href={exportUrl(taskId, 'ris', {}, risFallback.ids)} download style={linkStyle}>
-            {t('pdf.zoteroFallbackLink')}
-          </a>
-          <button type="button" style={linkButtonStyle} onClick={() => setRisFallback(null)}>
-            {t('pdf.zoteroFallbackDismiss')}
-          </button>
+          {risFallback !== null && (
+            <div style={FALLBACK_STYLE}>
+              <span style={{ minWidth: 0 }}>
+                {tpl(t('pdf.zoteroFallback'), { message: risFallback.message })}
+              </span>
+              <a
+                href={exportUrl(taskId, 'ris', {}, risFallback.ids)}
+                download
+                style={FALLBACK_LINK_STYLE}
+              >
+                {t('pdf.zoteroFallbackLink')}
+              </a>
+              <button
+                type="button"
+                style={FALLBACK_BUTTON_STYLE}
+                onClick={() => setRisFallback(null)}
+              >
+                {t('pdf.zoteroFallbackDismiss')}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -500,24 +545,27 @@ export function PaperPane({ t, useTabInfo, inputActions }: Props): ReactElement 
           {t('result.insert')}
         </Button>
         {canPdf && (
-          <button
-            type="button"
+          <DownloadButton
+            t={t}
+            label={downloadLabel}
+            hint={downloadHint}
+            {...(downloadedPath === undefined ? {} : { downloadedPath })}
+            missing={pdfMissing}
+            downloading={downloading}
+            disabled={busy}
             style={linkButtonStyle}
-            onClick={() => setPreview((value) => (value === 'pdf' ? null : 'pdf'))}
-          >
-            {t('pdf.preview')}
-          </button>
-        )}
-        {canPdf && (
-          <button type="button" style={linkButtonStyle} disabled={busy} onClick={download}>
-            {t('pdf.download')}
-          </button>
+            onDownload={download}
+            {...(onOpenLocal === undefined
+              ? {}
+              : { onOpen: (path: string) => onOpenLocal(taskId, paper.paperId, path) })}
+            {...(onRevealLocal === undefined ? {} : { onReveal: onRevealLocal })}
+          />
         )}
         {canHtml && (
           <button
             type="button"
             style={linkButtonStyle}
-            onClick={() => setPreview((value) => (value === 'html' ? null : 'html'))}
+            onClick={() => setShowHtml((value) => !value)}
           >
             {t('pdf.fulltext')}
           </button>
@@ -609,37 +657,24 @@ const IDS_STYLE: CSSProperties = {
   gap: 3,
   fontSize: 12,
 }
-const PREVIEW_WRAP_STYLE: CSSProperties = {
-  border: '1px solid rgba(127,127,127,0.22)',
-  borderRadius: 6,
-  overflow: 'hidden',
-}
-const PREVIEW_HEAD_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-  padding: '3px 8px',
-  fontSize: 11,
-  background: 'rgba(127,127,127,0.08)',
-}
-const IFRAME_STYLE: CSSProperties = {
-  width: '100%',
-  height: 420,
-  border: 'none',
-  background: '#fff',
-}
 const FALLBACK_STYLE: CSSProperties = {
+  ...toastStyle,
+  pointerEvents: 'auto',
   display: 'flex',
   alignItems: 'center',
   flexWrap: 'wrap',
   gap: 8,
-  padding: '5px 8px',
-  borderRadius: 6,
-  border: '1px solid rgba(178,106,0,0.4)',
-  background: 'rgba(178,106,0,0.08)',
-  fontSize: 11,
-  lineHeight: 1.5,
+  borderLeft: '3px solid #b26a00',
+}
+const FALLBACK_LINK_STYLE: CSSProperties = {
+  color: '#fff',
+  fontSize: 12,
+  textDecoration: 'underline',
+}
+const FALLBACK_BUTTON_STYLE: CSSProperties = {
+  ...linkButtonStyle,
+  color: '#fff',
+  textDecoration: 'underline',
 }
 const ACTION_STYLE: CSSProperties = {
   display: 'flex',

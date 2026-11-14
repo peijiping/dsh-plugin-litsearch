@@ -22,8 +22,6 @@ const MAX_GROUPS = 50
 const MAX_GROUP_NAME = 60
 const MAX_GROUP_DESCRIPTION = 500
 const MAX_NOTE = 4000
-const MAX_TAGS = 20
-const MAX_TAG = 40
 const MAX_PDF_ERROR = 300
 const MAX_PDF_FILE = 1024
 const MAX_SHORTLIST_ORDER = 100_000
@@ -34,6 +32,7 @@ export const PDF_STATUSES: readonly PdfStatus[] = [
   'unknown',
   'available',
   'downloaded',
+  'missing',
   'html-only',
   'paywalled',
   'blocked',
@@ -141,14 +140,6 @@ export function applyAnnotations(
       touched = true
     }
 
-    if (input.tags !== undefined) {
-      if (!Array.isArray(input.tags)) throw new SearchError('bad_request', 'tags 必须是字符串数组')
-      const tags = normalizeTags(input.tags)
-      if (tags.length === 0) delete next.tags
-      else next.tags = tags
-      touched = true
-    }
-
     if (input.pdfStatus !== undefined) {
       if (!isPdfStatus(input.pdfStatus)) {
         throw new SearchError('bad_request', `pdfStatus 只能是 ${PDF_STATUSES.join(' / ')}`)
@@ -233,14 +224,4 @@ export function sortGroupPapers(task: SearchTask, papers: readonly Paper[]): Pap
     }
     return (b.year ?? 0) - (a.year ?? 0) || a.title.localeCompare(b.title)
   })
-}
-
-function normalizeTags(values: readonly string[]): string[] {
-  const seen = new Set<string>()
-  for (const raw of values) {
-    const tag = raw.trim().slice(0, MAX_TAG)
-    if (tag !== '') seen.add(tag)
-    if (seen.size >= MAX_TAGS) break
-  }
-  return [...seen]
 }

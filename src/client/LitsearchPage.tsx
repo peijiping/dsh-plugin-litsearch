@@ -36,6 +36,8 @@ import {
   sourceRowStyle,
   statusStyle,
   titleStyle,
+  toastStackStyle,
+  toastStyle,
 } from './styles'
 
 interface Props {
@@ -176,7 +178,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   const pageSize = health?.settings.defaultPageSize ?? DEFAULT_PAGE_SIZE
 
   return (
-    <div style={panelStyle}>
+    <div style={{ ...panelStyle, position: 'relative' }}>
       <div style={pageHeaderStyle}>
         <span style={{ fontSize: 13, fontWeight: 650, opacity: 0.85 }}>{t('tab.title')}</span>
         <IconButton label={t('taskList.open')} onClick={() => setShowTaskList(true)}>
@@ -248,11 +250,13 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
       {error !== null && <div style={{ ...statusStyle, color: ERROR }}>{error}</div>}
 
       {pending.length > 0 && (
-        <div style={bannerStyle}>
-          <span>{tpl(t('pending.title'), { n: pending.length })}</span>
-          <Button variant="outline" size="sm" type="button" onClick={openPending}>
-            {t('pending.open')}
-          </Button>
+        <div style={toastStackStyle}>
+          <div style={bannerStyle}>
+            <span style={{ minWidth: 0 }}>{tpl(t('pending.title'), { n: pending.length })}</span>
+            <button type="button" style={bannerButtonStyle} onClick={openPending}>
+              {t('pending.open')}
+            </button>
+          </div>
         </div>
       )}
 
@@ -386,12 +390,16 @@ const historyMetaStyle = {
 } as const
 
 const bannerStyle = {
+  ...toastStyle,
+  pointerEvents: 'auto',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
-  padding: '6px 8px',
-  border: '1px solid rgba(80,140,255,0.4)',
-  borderRadius: 6,
-  fontSize: 12,
+} as const
+const bannerButtonStyle = {
+  ...linkButtonStyle,
+  color: '#fff',
+  textDecoration: 'underline',
+  flexShrink: 0,
 } as const

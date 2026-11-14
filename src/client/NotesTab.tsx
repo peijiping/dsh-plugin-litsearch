@@ -1,5 +1,5 @@
 /**
- * 任务「笔记」tab：任务级研究笔记 + 逐篇备注/标签汇总。
+ * 任务「笔记」tab：任务级研究笔记 + 逐篇备注汇总。
  *
  * 逐篇备注通过 /results 取回当前任务前 200 篇的标题做映射；任务笔记直接写回
  * `updateTask({notes})`，与模型工具看到的是同一份数据。
@@ -11,7 +11,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { PaperState, TaskDetail } from '../search/types'
 import { fetchResults, updateTask } from './api'
-import { tpl, type Translate } from './locales'
+import type { Translate } from './locales'
 import { ERROR, statusStyle } from './styles'
 
 const NOTE_PAGE_LIMIT = 200
@@ -21,6 +21,8 @@ interface Props {
   taskId: string
   detail: TaskDetail
   onSaved(): void
+  /** 保存结果走面板底部浮层提醒。 */
+  onNotify(text: string): void
 }
 
 interface Entry {
@@ -28,10 +30,9 @@ interface Entry {
   state: PaperState
 }
 
-export function NotesTab({ t, taskId, detail, onSaved }: Props): ReactElement {
+export function NotesTab({ t, taskId, detail, onSaved, onNotify }: Props): ReactElement {
   const [notes, setNotes] = useState(detail.notes)
   const [busy, setBusy] = useState(false)
-  const [toast, setToast] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [titles, setTitles] = useState<Record<string, string>>({})
   const [loadingTitles, setLoadingTitles] = useState(true)
@@ -61,7 +62,7 @@ export function NotesTab({ t, taskId, detail, onSaved }: Props): ReactElement {
 
   const entries = useMemo<Entry[]>(() => {
     return Object.entries(detail.states)
-      .filter(([, state]) => (state.note ?? '') !== '' || (state.tags ?? []).length > 0)
+      .filter(([, state]) => (state.note ?? '') !== '')
       .map(([paperId, state]) => ({ paperId, state }))
   }, [detail.states])
 
@@ -71,7 +72,7 @@ export function NotesTab({ t, taskId, detail, onSaved }: Props): ReactElement {
     setError(null)
     void updateTask(taskId, { notes })
       .then(() => {
-        setToast(t('notes.saved'))
+        onNotify(t('notes.saved'))
         onSaved()
       })
       .catch((reason: unknown) => {
@@ -103,7 +104,6 @@ export function NotesTab({ t, taskId, detail, onSaved }: Props): ReactElement {
           >
             {t('notes.save')}
           </Button>
-          {toast !== '' && <span style={TOAST_STYLE}>{toast}</span>}
         </div>
         {error !== null && <div style={{ ...statusStyle, color: ERROR }}>{error}</div>}
       </section>
@@ -120,12 +120,7 @@ export function NotesTab({ t, taskId, detail, onSaved }: Props): ReactElement {
             {entries.map((entry) => (
               <div key={entry.paperId} style={ENTRY_STYLE}>
                 <div style={ENTRY_TITLE_STYLE}>{titles[entry.paperId] ?? entry.paperId}</div>
-                <div style={ENTRY_META_STYLE}>
-                  {t(`screening.${entry.state.screening}`)}
-                  {entry.state.tags === undefined || entry.state.tags.length === 0
-                    ? ''
-                    : ` · ${tpl(t('notes.tags'), { value: entry.state.tags.join(', ') })}`}
-                </div>
+                <div style={ENTRY_META_STYLE}>{t(`screening.${entry.state.screening}`)}</div>
                 {entry.state.note !== undefined && entry.state.note !== '' && (
                   <div style={ENTRY_NOTE_STYLE}>{entry.state.note}</div>
                 )}
@@ -175,4 +170,3 @@ const ENTRY_STYLE: CSSProperties = {
 const ENTRY_TITLE_STYLE: CSSProperties = { fontSize: 12.5, fontWeight: 650, lineHeight: 1.45 }
 const ENTRY_META_STYLE: CSSProperties = { fontSize: 11, opacity: 0.7 }
 const ENTRY_NOTE_STYLE: CSSProperties = { fontSize: 12, lineHeight: 1.55, opacity: 0.85 }
-const TOAST_STYLE: CSSProperties = { fontSize: 12, color: '#2e9e5b' }

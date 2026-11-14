@@ -133,8 +133,33 @@ export const actionRowStyle = {
   marginTop: 8,
 } as const
 
-/** Toast。 */
+/** 提醒浮层容器：贴面板底部堆叠，不遮挡操作按钮的点击。 */
+export const toastStackStyle = {
+  position: 'absolute',
+  left: 15,
+  right: 15,
+  bottom: 14,
+  zIndex: 30,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  pointerEvents: 'none',
+} as const
+
+/** 底部自动消失的提醒：黑底白字。 */
 export const toastStyle = {
+  padding: '8px 12px',
+  borderRadius: 8,
+  border: '1px solid rgba(255,255,255,0.16)',
+  background: 'rgba(0,0,0,0.92)',
+  color: '#fff',
   fontSize: 12,
-  color: ACCENT,
+  lineHeight: 1.5,
+  boxShadow: '0 6px 20px rgba(0,0,0,0.28)',
+  pointerEvents: 'none',
+} as const
+
+/** 下载失败等错误提醒：同样黑底白字，左侧红条区分。 */
+export const toastErrorStyle = {
+  borderLeft: `3px solid ${ERROR}`,
 } as const
