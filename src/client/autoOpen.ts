@@ -20,6 +20,7 @@ import { fetchEvents, fetchTask } from './api'
 import { publishDownloadCommands } from './downloadCommandStore'
 import { getHealth, refreshHealth } from './health'
 import { publishTaskSummaries } from './taskListStore'
+import { publishZoteroCommands } from './zoteroCommandStore'
 
 const OPENED_KEY = 'dsh-litsearch.opened'
 const PENDING_KEY = 'dsh-litsearch.pending'
@@ -300,6 +301,8 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
     // 模型下载指令总是入队，不受「自动打开开关 / 首次轮询」影响：tab 可能还没
     // 挂载，指令在 store 里等工具同时发出的 focus 把 tab 拉起后再被消费。
     publishDownloadCommands(page.downloads, options.sessionId?.())
+    // Zotero 同步指令与下载并列入队：两条链路各自消费，互不覆盖。
+    publishZoteroCommands(page.zotero, options.sessionId?.())
 
     const settings = getHealth()?.settings
     const autoOpen = settings?.autoOpenTaskTab ?? DEFAULT_AUTO_OPEN

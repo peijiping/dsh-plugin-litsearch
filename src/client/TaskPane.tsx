@@ -34,7 +34,8 @@ import { ConditionEditor } from './ConditionEditor'
 import { paperSummary, paperText, papersSummary, papersText, taskSummary, taskText } from './compose'
 import { markConsumed, usePendingDownloadCommands } from './downloadCommandStore'
 import { DownloadDialog, type BatchDownloadItem } from './DownloadDialog'
-import { ZoteroSyncDialog } from './ZoteroSyncDialog'
+import { ZoteroSyncDialog, type ZoteroCommandMeta } from './ZoteroSyncDialog'
+import { markZoteroConsumed, usePendingZoteroCommands } from './zoteroCommandStore'
 import { FullTextTab, type FullTextView } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
 import {
@@ -175,14 +176,17 @@ export function TaskPane({
   /** Zotero 同步弹窗：单篇与批量共用，先选目标目录再同步，并展示逐篇结果。 */
   const [zoteroItems, setZoteroItems] = useState<readonly BatchDownloadItem[]>([])
   const [zoteroOpen, setZoteroOpen] = useState(false)
+  /** 模型发起的同步：范围说明、原话与目标目录；手动操作时为 undefined。 */
+  const [zoteroMeta, setZoteroMeta] = useState<ZoteroCommandMeta | undefined>(undefined)
   const [batchRunning, setBatchRunning] = useState(false)
   const batchRunningRef = useRef(false)
   /** 模型发起的下载：弹窗标明来源/范围，并提供独立的「取消下载」。 */
   const [batchMeta, setBatchMeta] = useState<BatchMeta>({ origin: 'panel' })
   const [batchCancelled, setBatchCancelled] = useState(false)
   const batchAbortRef = useRef<AbortController | null>(null)
-  /** 待消费的模型下载指令；tab 未挂载时由模块级 store 暂存。 */
+  /** 待消费的模型指令；tab 未挂载时由模块级 store 暂存，focus 拉起后再消费。 */
   const pendingCommands = usePendingDownloadCommands(taskId)
+  const pendingZoteroCommands = usePendingZoteroCommands(taskId)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   /** 结果页里见过的文献：跨页选中的条目做「加入对话」时要能拿到论文详情。 */
   const papersByIdRef = useRef<Map<string, Paper>>(new Map())
@@ -350,10 +354,14 @@ export function TaskPane({
     })()
   }
 
-  /** 单篇 / 批量共用一个弹窗：先选 Zotero 目录，再逐篇同步。 */
-  const openZotero = (nextItems: readonly BatchDownloadItem[]): void => {
+  /** 单篇 / 批量 / 模型指令共用一个弹窗：先选 Zotero 目录，再逐篇同步。 */
+  const openZotero = (
+    nextItems: readonly BatchDownloadItem[],
+    meta?: ZoteroCommandMeta,
+  ): void => {
     if (taskId === null || nextItems.length === 0) return
     setZoteroItems(nextItems)
+    setZoteroMeta(meta)
     setZoteroOpen(true)
   }
 
@@ -600,6 +608,39 @@ export function TaskPane({
     // startBatchDownload 每次渲染都是新函数，故意不进依赖：运行中靠
     // batchRunningRef 同步拦截，结束后靠 batchRunning 变化重新消费队列。
   }, [taskId, pendingCommands, batchRunning])
+
+  // 消费模型 Zotero 指令：同步弹窗同时只能跑一批，弹窗开着时指令留在队列里，
+  // 关闭后自动接着消费下一条（与下载队列互不干扰）。tab 未挂载时由 store 暂存。
+  useEffect(() => {
+    if (taskId === null || zoteroOpen) return
+    const command = pendingZoteroCommands[0]
+    if (command === undefined) return
+    if (command.paperIds.length === 0) {
+      markZoteroConsumed(command.commandId)
+      notify(t('zotero.dialog.modelEmpty'))
+      return
+    }
+    const byId = new Map(command.items.map((item) => [item.paperId, item]))
+    const items: BatchDownloadItem[] = command.paperIds.map((paperId) => {
+      const item = byId.get(paperId)
+      return {
+        paperId,
+        title: item?.title ?? papersByIdRef.current.get(paperId)?.title ?? '',
+        ...(item?.source === undefined ? {} : { source: item.source }),
+        ...(item?.meta === undefined ? {} : { meta: item.meta }),
+      }
+    })
+    markZoteroConsumed(command.commandId)
+    openZotero(items, {
+      origin: 'model',
+      scopeLabel: command.scopeLabel,
+      reason: command.reason,
+      ...(command.target === undefined ? {} : { initialTarget: command.target }),
+      autoStart: command.autoStart,
+    })
+    // openZotero 每次渲染都是新函数，故意不进依赖：zoteroOpen 变化即代表
+    // 弹窗已关闭，可以消费下一条；运行中的弹窗靠 zoteroOpen 拦截。
+  }, [taskId, pendingZoteroCommands, zoteroOpen])
 
   const zoteroIds = (paperIds: readonly string[]): void => {
     if (taskId === null || paperIds.length === 0) return
@@ -1268,6 +1309,7 @@ export function TaskPane({
         taskId={taskId}
         items={zoteroItems}
         states={detail.states}
+        meta={zoteroMeta}
         onClose={() => {
           setZoteroOpen(false)
           view.reload()

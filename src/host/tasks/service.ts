@@ -49,6 +49,7 @@ import type {
   TaskStatsReport,
   TaskSummary,
   ViewSnapshot,
+  ZoteroCommand,
   ZoteroProbeResult,
   ZoteroSyncResult,
   ZoteroSyncStatus,
@@ -405,6 +406,11 @@ export class TaskService {
   /** 下发一条模型批量下载指令；右侧栏轮询 /events 拿增量后自行执行。 */
   publishDownloadCommand(command: DownloadCommand): void {
     this.events.publishDownload(command)
+  }
+
+  /** 下发一条模型批量存入 Zotero 指令；与下载指令走独立的事件日志。 */
+  publishZoteroCommand(command: ZoteroCommand): void {
+    this.events.publishZotero(command)
   }
 
   /**

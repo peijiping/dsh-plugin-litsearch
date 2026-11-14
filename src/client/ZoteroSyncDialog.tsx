@@ -3,6 +3,9 @@
  *
  * 与下载弹窗一致：逐篇调用 Host（单篇一次请求），因此能实时展示进度；
  * 最终状态由 Host 写回任务，关掉弹窗再打开仍能看到「已同步」。
+ *
+ * 模型发起时额外带 `meta`：展示范围说明与用户原话；若对话里点名了目录且
+ * Host 已核实，则预选该目录并自动开跑，否则保持「选目录 → 点同步」原样。
  */
 
 import type { CSSProperties, ReactElement } from 'react'
@@ -25,6 +28,22 @@ interface Row {
   phase: RowPhase
   error?: string
   note?: string
+  /** 命中数据源 / `期刊 · 年份`；模型发起时由 Host 直接带上，便于核对。 */
+  source?: string
+  meta?: string
+}
+
+/** 模型发起的 Zotero 同步：弹窗展示信息与自动执行开关。 */
+export interface ZoteroCommandMeta {
+  origin: 'model'
+  /** Host 生成的中文范围说明（含篇数），这里只展示。 */
+  scopeLabel: string
+  /** 模型复述的用户意图。 */
+  reason: string
+  /** 对话里点名、且已在 Zotero 目录列表里核实过的目标目录。 */
+  initialTarget?: ZoteroTarget
+  /** true = 目录已确定，弹窗加载完立即自动同步；false = 等用户选目录。 */
+  autoStart: boolean
 }
 
 /** 批量同步的并发数，与批量下载保持一致。 */
@@ -46,6 +65,8 @@ interface Props {
   onClose(): void
   /** 同步结束后回调（失败文献 id 用于展示 RIS 兜底）。 */
   onDone(failedPaperIds: readonly string[]): void
+  /** 模型发起时传入；不传则与手动同步完全一致。 */
+  meta?: ZoteroCommandMeta
 }
 
 function initialRows(
@@ -64,6 +85,8 @@ function initialRows(
       paperId: item.paperId,
       title: item.title,
       phase,
+      ...(item.source === undefined || item.source === '' ? {} : { source: item.source }),
+      ...(item.meta === undefined || item.meta === '' ? {} : { meta: item.meta }),
       ...(state?.zoteroError === undefined ? {} : { error: state.zoteroError }),
       ...(phase === 'synced' && state?.zoteroCollection !== undefined
         ? { note: state.zoteroCollection }
@@ -91,20 +114,27 @@ export function ZoteroSyncDialog({
   states,
   onClose,
   onDone,
+  meta,
 }: Props): ReactElement {
   const [rows, setRows] = useState<Row[]>(() => initialRows(items, states))
   const [targets, setTargets] = useState<ZoteroTarget[]>([])
   const [currentId, setCurrentId] = useState<string | undefined>(undefined)
   const [targetId, setTargetId] = useState<string>('')
   const [loading, setLoading] = useState(false)
+  /** 目录列表本轮是否已读完（含失败）；自动同步必须等它就绪，避免用到上一批目录。 */
+  const [targetsReady, setTargetsReady] = useState(false)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [running, setRunning] = useState(false)
   const [notice, setNotice] = useState<string | undefined>(undefined)
   const [hasRun, setHasRun] = useState(false)
   /** 取消后停止派发剩余文献；已发出的请求仍会完成。 */
   const stopRef = useRef(false)
+  /** 自动同步只跑一次；每次打开/换清单时重置。 */
+  const autoStartRef = useRef(false)
 
   const key = items.map((item) => item.paperId).join(',')
+  const desiredId = meta?.initialTarget?.id
+  const desiredName = meta?.initialTarget?.name ?? ''
 
   // 每次打开（或换了一批文献）都重置进度，并重新读取目录列表。
   useEffect(() => {
@@ -113,6 +143,10 @@ export function ZoteroSyncDialog({
     setHasRun(false)
     setNotice(undefined)
     setLoadError(undefined)
+    setTargetsReady(false)
+    setTargets([])
+    setTargetId('')
+    autoStartRef.current = false
     let cancelled = false
     setLoading(true)
     fetchZoteroTargets()
@@ -125,7 +159,15 @@ export function ZoteroSyncDialog({
         }
         setTargets(result.targets)
         setCurrentId(result.current?.id)
-        setTargetId(result.current?.id ?? result.targets[0]?.id ?? '')
+        // 模型点名了目录就预选它；目录已被删掉时回落到当前目录，并提示用户自己选。
+        const matched =
+          desiredId === undefined
+            ? undefined
+            : result.targets.find((entry) => entry.id === desiredId)
+        if (desiredId !== undefined && matched === undefined) {
+          setNotice(tpl(t('zotero.dialog.modelTargetMissing'), { name: desiredName }))
+        }
+        setTargetId(matched?.id ?? result.current?.id ?? result.targets[0]?.id ?? '')
       })
       .catch((error: unknown) => {
         if (cancelled) return
@@ -133,13 +175,16 @@ export function ZoteroSyncDialog({
         setLoadError(error instanceof Error ? error.message : String(error))
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (cancelled) return
+        setLoading(false)
+        setTargetsReady(true)
       })
     return () => {
       cancelled = true
     }
     // key 覆盖「同一弹窗内切换文献」；items/states 的引用变化不触发重置。
-  }, [open, key])
+    // desiredId 变化时（连发两条不同目录的指令）也要重读目录并重新预选。
+  }, [open, key, desiredId])
 
   const target = targets.find((entry) => entry.id === targetId)
   const total = rows.length
@@ -221,6 +266,40 @@ export function ZoteroSyncDialog({
     onDone(failedIds)
   }
 
+  // 模型点名了目录：等目录加载完、预选生效后自动开跑一次（ref 防重复）。
+  // 目录读不到 / 指定目录不在列表里时一律退回手动，绝不猜一个目录就写入数据。
+  useEffect(() => {
+    if (!open || loading || !targetsReady || meta?.autoStart !== true || autoStartRef.current) return
+    if (running) return
+    if (desiredId === undefined) {
+      autoStartRef.current = true
+      return
+    }
+    if (target === undefined || target.id !== desiredId) {
+      // targetId 还是旧值时不要提前判失败；只有目录确实加载完了才收口。
+      if (loadError !== undefined || targets.length === 0) {
+        autoStartRef.current = true
+        setNotice(t('zotero.dialog.modelNoAuto'))
+      } else if (!targets.some((entry) => entry.id === desiredId)) {
+        autoStartRef.current = true
+      }
+      return
+    }
+    autoStartRef.current = true
+    void run()
+    // run 每次渲染都是新函数，故意不进依赖；ref + running 保证只执行一次。
+  }, [
+    open,
+    loading,
+    targetsReady,
+    running,
+    target,
+    targets,
+    loadError,
+    desiredId,
+    meta?.autoStart,
+  ])
+
   const summary = running
     ? t('zotero.dialog.running')
     : done > 0 && failed === 0 && pending === 0
@@ -235,8 +314,15 @@ export function ZoteroSyncDialog({
       onClose={() => {
         if (!running) onClose()
       }}
-      title={t('zotero.dialog.title')}
-      description={tpl(t('zotero.dialog.desc'), { n: total })}
+      title={meta === undefined ? t('zotero.dialog.title') : t('zotero.dialog.modelTitle')}
+      description={tpl(
+        meta === undefined
+          ? t('zotero.dialog.desc')
+          : meta.autoStart
+            ? t('zotero.dialog.modelDescAuto')
+            : t('zotero.dialog.modelDescPick'),
+        { n: total },
+      )}
       className={WIDE_MODAL_CLASS}
       footer={
         <div style={FOOTER_STYLE}>
@@ -303,10 +389,26 @@ export function ZoteroSyncDialog({
             ))}
           </select>
         )}
+        {meta?.initialTarget !== undefined && (
+          <div style={HINT_STYLE}>
+            {tpl(t('zotero.dialog.modelTarget'), { name: meta.initialTarget.name })}
+          </div>
+        )}
         {rerunHint && <div style={HINT_STYLE}>{t('zotero.dialog.rerunHint')}</div>}
       </div>
 
       <div style={OVERVIEW_STYLE} role="status" aria-live="polite">
+        {meta !== undefined && (
+          <div style={MODEL_BADGE_STYLE}>
+            <span style={MODEL_TAG_STYLE}>{t('zotero.dialog.originModel')}</span>
+            {meta.scopeLabel !== '' && <span>{meta.scopeLabel}</span>}
+            {meta.reason !== '' && (
+              <span style={REASON_STYLE} title={meta.reason}>
+                {meta.reason}
+              </span>
+            )}
+          </div>
+        )}
         <div style={COUNTS_STYLE}>
           <span>{tpl(t('zotero.dialog.total'), { n: total })}</span>
           <span style={{ color: PHASE_COLOR.synced }}>
@@ -341,6 +443,19 @@ export function ZoteroSyncDialog({
               <span style={ROW_TITLE_STYLE} title={row.title}>
                 {row.title === '' ? t('zotero.dialog.untitled') : row.title}
               </span>
+              {(row.source !== undefined && row.source !== '') ||
+              (row.meta !== undefined && row.meta !== '') ? (
+                <span style={ROW_META_STYLE}>
+                  {[
+                    row.source === undefined || row.source === ''
+                      ? ''
+                      : tpl(t('zotero.dialog.source'), { source: row.source }),
+                    row.meta ?? '',
+                  ]
+                    .filter((part) => part !== '')
+                    .join(' · ')}
+                </span>
+              ) : null}
               {row.error !== undefined && row.error !== '' && (
                 <span style={ROW_ERROR_STYLE} title={row.error}>
                   {row.error}
@@ -522,6 +637,44 @@ const ROW_NOTE_STYLE: CSSProperties = {
   WebkitLineClamp: 1,
   WebkitBoxOrient: 'vertical',
   wordBreak: 'break-word',
+}
+
+const MODEL_BADGE_STYLE: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 8,
+  fontSize: 12,
+  lineHeight: 1.5,
+  paddingBottom: 4,
+  borderBottom: '1px solid rgba(127,127,127,0.18)',
+}
+
+const MODEL_TAG_STYLE: CSSProperties = {
+  flexShrink: 0,
+  padding: '1px 6px',
+  borderRadius: 4,
+  border: `1px solid ${ACCENT}`,
+  color: ACCENT,
+  fontWeight: 650,
+  fontSize: 11,
+}
+
+const REASON_STYLE: CSSProperties = {
+  opacity: 0.75,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  maxWidth: '100%',
+}
+
+const ROW_META_STYLE: CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.4,
+  opacity: 0.65,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const STATUS_CHIP_STYLE: CSSProperties = {

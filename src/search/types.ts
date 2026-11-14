@@ -732,6 +732,31 @@ export interface DownloadCommand {
   items: DownloadCommandItem[]
 }
 
+/**
+ * 模型发起的批量存入 Zotero 指令。
+ *
+ * 与下载指令共用同一套范围解析与 `items` 展示元数据；多出来的只有目标目录：
+ * 用户在对话里点名了目录且 Host 匹配成功时带上 `target` 并 `autoStart`，
+ * 否则弹窗加载好文献后由用户自己选目录再点「同步」。
+ */
+export interface ZoteroCommand {
+  commandId: string
+  taskId: string
+  sessionId?: string
+  at: number
+  origin: 'model'
+  /** 用户原话 / 模型对范围的解释，弹窗里展示。 */
+  reason: string
+  /** Host 生成的中文范围说明（含篇数），Client 纯展示。 */
+  scopeLabel: string
+  paperIds: string[]
+  items: DownloadCommandItem[]
+  /** 对话里点名、且已在 Zotero 目录列表里核实过的目标目录。 */
+  target?: ZoteroTarget
+  /** true = 目录已确定，弹窗加载完立即自动同步；false = 等用户选目录。 */
+  autoStart: boolean
+}
+
 /** `/events` 的响应；`reset` 表示客户端的 sinceRev 比服务端新（宿主重启）。 */
 export interface EventsPage {
   rev: number
@@ -740,6 +765,8 @@ export interface EventsPage {
   focus?: TaskFocus
   /** 增量下发的模型下载指令；数组而非单值，避免两次轮询间连发时丢指令。 */
   downloads?: DownloadCommand[]
+  /** 增量下发的模型 Zotero 同步指令，与 downloads 并列、互不影响。 */
+  zotero?: ZoteroCommand[]
 }
 
 /** `/health` 的响应：数据源能力 + 客户端需要的默认设置（不含密钥）。 */

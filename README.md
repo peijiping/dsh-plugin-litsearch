@@ -4,7 +4,7 @@
 
 不用注册账号、不用申请密钥、也不用另外启动什么服务。装上以后，AI 可以直接帮你查公开学术文献；你也可以在 DSH 右侧栏用同样的数据源自己查，看到感兴趣的论文，点一下就能交给 AI 接着读。
 
-> 当前版本 **v0.3.5**：七个免费文献来源，外加可选的谷歌学术；支持一次写多条检索式、反复调整条件重搜、自动去重、筛选与图表概览、边读边筛与分组、跨页选中与批量操作、PDF 预览下载（含开放获取补全与失败归类）、**在对话里说一句话就批量下载**、选目录同步到 Zotero、导出台账与批量加入对话。
+> 当前版本 **v0.3.5**：七个免费文献来源，外加可选的谷歌学术；支持一次写多条检索式、反复调整条件重搜、自动去重、筛选与图表概览、边读边筛与分组、跨页选中与批量操作、PDF 预览下载（含开放获取补全与失败归类）、**在对话里说一句话就批量下载或批量存入 Zotero**、选目录同步、导出台账与批量加入对话。
 >
 > 下面的「能做什么」是写给使用者的；再往后的安装、配置、数据目录、架构等章节面向开发者和运维。
 
@@ -57,7 +57,7 @@
 - 能免费下载的 PDF 可以直接在结果里预览，或下载到电脑（默认放在当前工作目录的 `dsh-litsearch/` 文件夹，文件名带作者、年份、标题，好认好找）。没有 PDF 但有 PMC 编号时，会给出排版好的网页版全文。
 - 下载前会按「论文自带的 PDF 直链 → 开放获取副本 → 全文渲染页」依次尝试；**在设置页填了联系邮箱还会启用 Unpaywall**，按 DOI 补出更多开放获取地址。补出来的出版商直链仍可能被拒绝，此时会落到下面的失败归类。
 - 批量下载把「需手动获取」和「失败」分开统计：出版商要求订阅、登录或人机验证时，后台程序拿不到 PDF（浏览器带着会话和机构授权反而能打开）；403 / 限流、人机验证页、返回的其实是 HTML 登录页、压根没有 PDF 地址，都会分别给出原因，点卡片上的 PDF / DOI 链接在浏览器打开后手动另存即可。
-- 电脑上开着 Zotero 桌面端的话，点「存入 Zotero」会先弹出目录选择框（列出 Zotero 里的目录，标明当前选中和不可写附件的目录），确认后 5 并发逐篇同步、实时显示结果，可随时取消；没连上、存了一半失败或目录只读都会明确告诉你，并保留一条只含本次条目的 RIS 导出作为备用。
+- 电脑上开着 Zotero 桌面端的话，点「存入 Zotero」会先弹出目录选择框（列出 Zotero 里的目录，标明当前选中和不可写附件的目录），确认后 5 并发逐篇同步、实时显示结果，可随时取消；没连上、存了一半失败或目录只读都会明确告诉你，并保留一条只含本次条目的 RIS 导出作为备用。**也可以直接在对话框里说一句「把这批存到综述目录」**，详见下面两节。
 - 要交给别的软件用，可以导出 CSV 表格、RIS、BibTeX 或 Markdown 报告；按当前筛选或只按勾选的条目都行。
 
 ### 和 AI 接着聊
@@ -65,7 +65,7 @@
 - 点「加入对话」，论文会变成输入框里的一个小卡片（胶囊），鼠标停上去就能看到标题、出处和摘要；发送后 AI 拿到的是完整信息。一次勾多篇会合成一个卡片，按顺序编号。
 - 整个任务也能「加入对话」，方便在新会话里明确续接同一个任务。
 - **不会自动发送，也不会自作主张再搜一轮**：每轮结束后 AI 只给「怎么把检索改得更好」的建议，是否继续由你决定。
-- **下载也能直接说**：在对话框说「下载当前页的所有 PDF」「下载综述分组下的文献」，AI 会把范围算准并让右侧栏弹出批量下载框，详见下一节。
+- **下载和存 Zotero 都能直接说**：在对话框说「下载当前页的所有 PDF」「把这批存到综述目录」，AI 会把范围算准并让右侧栏弹出对应的批量操作框，详见下面两节。
 
 ### 在对话里批量下载
 
@@ -85,6 +85,24 @@
 - `hasPdf`（有 PDF 直链或已下载）与 `openAccessOnly`（上游标记为开放获取）是两套口径，不会混用；付费墙文献不会静默算作成功。
 - 不设单次篇数上限：几千篇会明显耗时并可能触发上游限流，已下载的会跳过、失败会归类，建议大范围下载前先收窄条件。视图快照只存内存，宿主重启后需重新打开任务页才能解析「当前页」。
 - 该功能依赖新增的模型工具，**升级后需重启宿主或重新加载插件**才会注册生效。
+
+### 在对话里批量存入 Zotero
+
+`literature_zotero` 与下载工具**共用同一套范围解析**（6 种 `scope` + `ResultsQuery` 筛选字段 + 视图快照 + 逐个校验 `paperId`），同样把范围算成一份已校验清单下发给右侧栏，由右侧栏复用「存入 Zotero」弹窗逐篇执行。区别只有一步：**目录**。
+
+| 你可以这么说 | 实际行为 |
+| --- | --- |
+| 「把『综述』分组的文献存到 Zotero」（没提目录） | 弹窗加载好文献和目录，**由你选目录再点「同步」**，与手动操作完全一致 |
+| 「把这批存到『综述』目录」 | 工具先在本机 Zotero 目录列表里核实目录 → 弹窗**自动预选并立即开始同步** |
+| 「存到『综述』」但 Zotero 里有多个匹配 / 找不到 | **不下发任何指令**，工具返回可用目录清单，让模型在对话里向你确认 |
+| 「把当前页的文献存到 Zotero」 | 范围与「当前页」下载一致：右侧栏正在看的这一页，可叠加 `hasPdf` 等条件 |
+
+- 目录匹配只认**唯一命中**：id 精确 → 名称精确（忽略大小写与空白）→ 名称包含；任何一步命中多个都算歧义。**绝不猜一个目录就写入数据**，因为同步会真的在 Zotero 里建条目。
+- 弹窗顶部标明「模型发起」、范围说明、篇数与你的原话；每篇显示标题、来源与期刊·年份，以及待同步 / 同步中 / 已同步 / 失败。可随时取消（只停止派发后续文献，已发出的请求仍会完成），失败时同样保留 RIS 兜底导出。
+- Zotero 桌面端没开、目录列表读不到、或设置里关闭了「Zotero 同步」时，工具直接返回错误**不下发指令**，也不会偷偷改存「我的文库」；指定目录只读时仍能同步条目，但不带 PDF 附件，弹窗会标明。
+- **不跳过「已同步」文献**：模型触发沿用现有重跑语义，会在 Zotero 里新建条目、不覆盖已有条目。大范围指令前建议先收窄条件。
+- 指令与下载链路**并列且互不干扰**：走 `/events` 的 `zotero[]` 增量（1.5s 轮询）、按 `commandId` 幂等、10 分钟窗口、任务 tab 没打开时先自动拉起；弹窗开着时后续指令排队，关闭后串行消费。手动同步的交互零变化。
+- 同样**需重启宿主或重新加载插件**，新工具才会注册生效。
 
 ## 搜索任务与轮次
 
@@ -126,7 +144,7 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 | `defaultPageSize` | 每个来源默认取多少条 | 20 |
 | `requestTimeoutMs` | 单次上游请求超时（毫秒）；Europe PMC 检索另有 25000 下限 | 20000 |
 | `defaultSources` / `defaultSort` / `defaultLanguage` | 新任务默认勾选的数据源、排序与语言；设置页按来源分组，可逐个开关（至少保留一个） | 七个免费源 / 相关度 / 不限 |
-| `autoOpenTaskTab` / `maxTaskTabs` | 模型发起检索**或对话里下发批量下载指令**后自动打开 / 聚焦任务 tab；每个对话只保留一个任务 tab，打开新任务会替换旧的。`maxTaskTabs` 为自动打开的兜底上限（按最近真实打开过的 tab 计数，30 分钟后释放名额） | 开 / 5 |
+| `autoOpenTaskTab` / `maxTaskTabs` | 模型发起检索**或对话里下发批量下载 / 存入 Zotero 指令**后自动打开 / 聚焦任务 tab；每个对话只保留一个任务 tab，打开新任务会替换旧的。`maxTaskTabs` 为自动打开的兜底上限（按最近真实打开过的 tab 计数，30 分钟后释放名额） | 开 / 5 |
 | `taskRetentionDays` / `taskRetentionCount` / `taskMaxPapers` | 未保留任务保留天数、保留条数、单任务结果上限（在任务列表中可标记「保留」跳过清理） | 90 / 120 / 1500 |
 | `pdfRoot` / `pdfMaxMb` / `autoDownloadPdf` | PDF 保存目录、单文件上限（MB）、检索完成后自动下载；`pdfRoot` 留空时落在当前会话工作目录下的 `dsh-litsearch/` | 跟随工作目录 / 30 / 关 |
 | `pdfCacheMaxMb` | 内部 PDF 去重缓存总量上限（MB），超出时从最旧文件开始清理；0 表示不自动清理 | 512 |
@@ -162,14 +180,16 @@ $DSH_HOME/storages/dsh-plugin-litsearch/
 2. 在「设置 → 高级」中允许其他应用与本机通信（若该版本提供此开关）；
 3. 勾选文献（或单篇卡片）点「存入 Zotero」，弹窗里**先选目标目录**再点「同步」。目录列表直接来自本机 Zotero，会标出「当前选中」和「不可写附件」的目录，不必事先在 Zotero 里选中分类；没有可写目录时会提示先在 Zotero 中新建分类。
 
-同步以 5 并发逐篇进行，弹窗实时显示每篇的待同步 / 同步中 / 已同步 / 失败，可随时取消（已发出的请求仍会完成）。写入条目元数据、分组名（作为标签）与可选 PDF 附件；连接失败、目录不可写附件、单篇条目或附件失败都会给出具体原因，目录只读时只保存条目、不尝试上传 PDF。重新同步会在 Zotero 里新建条目，**不会覆盖已有条目**。同步失败或部分失败时，任务页会保留一条 RIS 导出入口（只含本次同步的条目），可先导出备用。
+同步以 5 并发逐篇进行，弹窗实时显示每篇的待同步 / 同步中 / 已同步 / 失败，可随时取消（已发出的请求仍会完成）。写入条目元数据、分组名（作为标签）与可选 PDF 附件；连接失败、目录不可写附件、单篇条目或附件失败都会给出具体原因，目录只读时只保存条目、不尝试上传 PDF。重新同步会在 Zotero 里新建条目，**不会覆盖已有条目**，也不会跳过已同步的文献。同步失败或部分失败时，任务页会保留一条 RIS 导出入口（只含本次同步的条目），可先导出备用。
+
+在对话里说一句也能触发同样的同步，且支持在话术里直接点名目录（点名且唯一匹配时自动预选并开跑）；详见「在对话里批量存入 Zotero」。目录名称的匹配在插件后台完成，不需要先在 Zotero 里选中分类。
 
 ## 隐私
 
 - 检索词会发送给所选数据源（PubMed、Europe PMC、OpenAlex、Crossref、Semantic Scholar、arXiv、PubTator）的公开 API。
 - 配置了 `contactEmail` 后，下载 PDF 会用 DOI 和该邮箱查询 Unpaywall（`api.unpaywall.org`）以寻找开放获取副本；不配置则不发这项请求。
 - 启用「谷歌学术」时，检索词会经第三方服务 SerpAPI 转发，并受其使用条款与额度约束；该来源默认关闭。
-- PDF 下载与 Zotero 连接都只在本机进行；Zotero connector 仅允许回环地址。右侧栏的视图快照与模型下载指令也只在宿主内存里传递，不落盘、不上传。
+- PDF 下载与 Zotero 连接都只在本机进行；Zotero connector 仅允许回环地址。右侧栏的视图快照与模型下载 / 同步指令也只在宿主内存里传递，不落盘、不上传。
 - 各类 API Key（含 `serpApiKey`）只保存在本机配置文件（明文）中，界面不回显、不写日志。
 
 ## 本地开发
@@ -182,7 +202,7 @@ pnpm typecheck:client
 pnpm test             # node:test 单元测试（test/**/*.test.ts）
 ```
 
-下载链路另有专项单测：`test/download-scope.test.ts`（范围解析、无效 id 过滤、当前页顺序）、`download-events.test.ts`（事件增量与裁剪 / 重置）、`download-store.test.ts`（指令幂等与会话隔离）。
+下载 / Zotero 指令链路另有专项单测：`test/download-scope.test.ts`（范围解析、无效 id 过滤、当前页顺序）、`download-events.test.ts`（事件增量与裁剪 / 重置）、`download-store.test.ts`（指令幂等与会话隔离）、`zotero-command.test.ts`（目录匹配歧义、指令幂等、事件增量）。
 
 构建后用独立的本地 profile 启动调试：
 
@@ -197,29 +217,31 @@ dsh --profile litsearch
 
 - `src/search/`：数据源无关的检索层（类型、聚合、身份合并、查询适配、限流、健康状态）。
 - `src/search/providers/`：每家 API 一个 provider，新增数据源只需实现 `Provider` 并注册；其中 `googlescholar` 为需自备密钥的可选源。
-- `src/host/`：`/dsh-litsearch/api/*` 端点、任务执行 / 持久化 / 统计 / 导出，以及五个模型工具（`literature_search` / `literature_sources` / `literature_task` / `literature_export` / `literature_download`）的注册。
-- `src/host/tasks/download.ts`：把模型的下载范围（6 种 `scope` + 复用 `ResultsQuery` 的筛选字段）解析成已校验的 paperId 清单与中文范围说明；复用 `filterPapers`，不自造筛选 DSL。
+- `src/host/`：`/dsh-litsearch/api/*` 端点、任务执行 / 持久化 / 统计 / 导出，以及六个模型工具（`literature_search` / `literature_sources` / `literature_task` / `literature_export` / `literature_download` / `literature_zotero`）的注册。
+- `src/host/tasks/download.ts`：把模型的自然语言范围（6 种 `scope` + 复用 `ResultsQuery` 的筛选字段）解析成已校验的 paperId 清单与中文范围说明；复用 `filterPapers`，不自造筛选 DSL。下载与 Zotero 两个工具共用 `tools.ts` 里的 `resolveModelScope()`，不会出现两套筛选口径。
 - `src/host/paths.ts`：`$DSH_HOME` 解析、统一存储区路径、旧目录一次性迁移与失败回退。
 - `src/host/pdf/`：PDF 候选链、SSRF 防护的抓取与本地缓存、可读文件名、Europe PMC 全文兜底、下载失败原因归类。
-- `src/host/zotero/`：本机 Zotero connector 协议封装（探测、目录列表、保存条目、上传附件）。
-- `src/client/`：右侧栏检索面板、任务 tab（结果 / 概览 / 分组 / 笔记 / 对比 / 全文）、独立论文 tab 与设置页；`DownloadDialog.tsx` 是批量下载进度弹窗，`ZoteroSyncDialog.tsx` 是选目录 + 逐篇同步弹窗。
-- `src/client/downloadCommandStore.ts`：模型下载指令的幂等去重与待消费队列（按 `commandId`，10 分钟窗口）。
+- `src/host/zotero/`：本机 Zotero connector 协议封装（探测、目录列表、保存条目、上传附件），以及 `match.ts`（把对话里点名的目录唯一匹配到真实目标，歧义返回候选）。
+- `src/client/`：右侧栏检索面板、任务 tab（结果 / 概览 / 分组 / 笔记 / 对比 / 全文）、独立论文 tab 与设置页；`DownloadDialog.tsx` 是批量下载进度弹窗，`ZoteroSyncDialog.tsx` 是选目录 + 逐篇同步弹窗（模型发起时支持预选目录并自动开跑）。
+- `src/client/downloadCommandStore.ts` / `zoteroCommandStore.ts`：两类模型指令各自的幂等去重与待消费队列（按 `commandId`，10 分钟窗口），彼此独立、互不覆盖。
 
-### 模型 → 右侧栏的下载链路
+### 模型 → 右侧栏的指令链路
 
 Host 没有原生推送，两侧靠 `/events` 增量轮询联动：
 
 ```text
 右侧栏 POST /view（400ms 节流上报当前页 / 筛选 / 选中）
   → Host 按 sessionId 存内存 Map（30 分钟过期）
-  → 模型调 literature_download：读快照 + 服务端筛选算出 paperId 清单
-  → publishDownload 写入事件日志并推进 rev（最多保留 50 条）
-  → 右侧栏 GET /events?sinceRev=…（1.5s 轮询）拿到 downloads[]
-  → downloadCommandStore 按 commandId 去重、排队
+  → 模型调 literature_download / literature_zotero：读快照 + 服务端筛选算出 paperId 清单
+     （Zotero 额外读本机目录列表，点名了目录就唯一匹配，歧义/找不到一律不下发）
+  → publishDownload / publishZotero 写入各自日志并推进 rev（各最多保留 50 条）
+  → 右侧栏 GET /events?sinceRev=…（1.5s 轮询）拿到 downloads[] / zotero[]
+  → downloadCommandStore / zoteroCommandStore 按 commandId 去重、排队
   → TaskPane 消费 → startBatchDownload（5 并发）→ DownloadDialog
+                  → ZoteroSyncDialog（选目录；已指定目录则自动开跑）
 ```
 
-工具同时 `focusTask` 拉起任务 tab；tab 没挂载时指令在 store 里等待，不会丢失。快照、指令、事件日志都在内存里，宿主重启后归零，不重放历史下载。
+两个工具都同时 `focusTask` 拉起任务 tab；tab 没挂载时指令在 store 里等待，不会丢失。快照、指令、事件日志都在内存里，宿主重启后归零，不重放历史指令。
 
 ## 路线图
 
@@ -241,6 +263,7 @@ Host 没有原生推送，两侧靠 `/events` 增量轮询联动：
 - [x] PDF 候选补全与失败归类（403 / 限流 / 人机验证 / HTML 页 / 无候选）
 - [x] Zotero 同步前选择目标目录与逐篇结果
 - [x] 对话里自然语言触发批量下载（视图快照 + 已校验 paperId 清单）
+- [x] 对话里自然语言触发批量存入 Zotero（共用范围解析 + 目录唯一匹配 + 自动开跑）
 - [ ] DOAJ
 
 ## License
