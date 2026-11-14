@@ -27,6 +27,9 @@ interface Row {
   note?: string
 }
 
+/** 批量同步的并发数，与批量下载保持一致。 */
+const SYNC_CONCURRENCY = 5
+
 const PHASE_COLOR: Record<RowPhase, string> = {
   pending: 'rgba(127,127,127,0.9)',
   syncing: ACCENT,
@@ -157,9 +160,7 @@ export function ZoteroSyncDialog({
     setRows(list)
     const failedIds: string[] = []
 
-    for (let index = 0; index < list.length; index += 1) {
-      if (stopRef.current) break
-      const row = list[index]!
+    const runOne = async (row: Row): Promise<void> => {
       setRows((prev) =>
         prev.map((entry) =>
           entry.paperId === row.paperId ? { ...entry, phase: 'syncing', error: undefined } : entry,
@@ -191,20 +192,31 @@ export function ZoteroSyncDialog({
           ),
         )
       } catch (error) {
+        // 连接层面的错误（Zotero 没开、目录失效）：记下原因并停止派发后续文献。
         const message = error instanceof Error ? error.message : String(error)
-        const rest = list.slice(index).map((entry) => entry.paperId)
-        failedIds.push(...rest)
+        stopRef.current = true
+        failedIds.push(row.paperId)
         setRows((prev) =>
           prev.map((entry) =>
-            rest.includes(entry.paperId)
-              ? { ...entry, phase: 'failed', error: message }
-              : entry,
+            entry.paperId === row.paperId ? { ...entry, phase: 'failed', error: message } : entry,
           ),
         )
         setNotice(message)
-        break
       }
     }
+
+    // 固定 5 个 worker 从同一个游标取任务：并发不超过 5，也不会重复同步同一篇。
+    let cursor = 0
+    const worker = async (): Promise<void> => {
+      while (!stopRef.current && cursor < list.length) {
+        const row = list[cursor]
+        cursor += 1
+        if (row !== undefined) await runOne(row)
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(SYNC_CONCURRENCY, list.length) }, () => worker()),
+    )
     setRunning(false)
     onDone(failedIds)
   }
