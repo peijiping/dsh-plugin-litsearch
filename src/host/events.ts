@@ -6,7 +6,7 @@
  * 单调递增，重启后归零 —— 客户端发现 `sinceRev` 比服务端大就以 `reset` 重新同步。
  */
 
-import type { EventsPage, TaskSummary } from '../search/types.js'
+import type { DownloadCommand, EventsPage, TaskSummary } from '../search/types.js'
 
 interface EventEntry {
   globalRev: number
@@ -21,12 +21,23 @@ interface FocusEntry {
   sessionId?: string
 }
 
+interface DownloadEntry {
+  globalRev: number
+  command: DownloadCommand
+}
+
+/** 事件日志里最多保留多少条下载指令，避免长时间运行无限增长。 */
+const MAX_DOWNLOAD_ENTRIES = 50
+
 export class TaskEvents {
   private rev = 0
 
   private readonly entries = new Map<string, EventEntry>()
 
   private focus: FocusEntry | undefined
+
+  /** 下载指令日志：数组而非单值，两次轮询之间连发多条也不会互相覆盖。 */
+  private readonly downloadEntries: DownloadEntry[] = []
 
   get currentRev(): number {
     return this.rev
@@ -49,17 +60,30 @@ export class TaskEvents {
     }
   }
 
+  /** 下发一条模型批量下载指令；与 focus 一样推进 globalRev 走增量轮询。 */
+  publishDownload(command: DownloadCommand): void {
+    this.rev += 1
+    this.downloadEntries.push({ globalRev: this.rev, command })
+    if (this.downloadEntries.length > MAX_DOWNLOAD_ENTRIES) {
+      this.downloadEntries.splice(0, this.downloadEntries.length - MAX_DOWNLOAD_ENTRIES)
+    }
+  }
+
   remove(id: string): void {
     this.entries.delete(id)
     if (this.focus?.taskId === id) this.focus = undefined
+    for (let index = this.downloadEntries.length - 1; index >= 0; index -= 1) {
+      if (this.downloadEntries[index]?.command.taskId === id) this.downloadEntries.splice(index, 1)
+    }
   }
 
   since(sinceRev: number): EventsPage {
     if (!Number.isFinite(sinceRev) || sinceRev < 0) {
-      return { rev: this.rev, reset: true, tasks: [] }
+      // 宿主重启 / 客户端状态错乱：重新对齐，不重放历史下载指令。
+      return { rev: this.rev, reset: true, tasks: [], downloads: [] }
     }
     if (sinceRev > this.rev) {
-      return { rev: this.rev, reset: true, tasks: [] }
+      return { rev: this.rev, reset: true, tasks: [], downloads: [] }
     }
     const tasks = [...this.entries.values()]
       .filter((entry) => entry.globalRev > sinceRev)
@@ -76,6 +100,16 @@ export class TaskEvents {
               : { sessionId: this.focus.sessionId }),
           }
         : undefined
-    return { rev: this.rev, reset: false, tasks, ...(focus === undefined ? {} : { focus }) }
+    const downloads = this.downloadEntries
+      .filter((entry) => entry.globalRev > sinceRev)
+      .sort((a, b) => a.globalRev - b.globalRev)
+      .map((entry) => entry.command)
+    return {
+      rev: this.rev,
+      reset: false,
+      tasks,
+      ...(focus === undefined ? {} : { focus }),
+      downloads,
+    }
   }
 }

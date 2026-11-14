@@ -30,6 +30,7 @@ import type {
   TaskLanguage,
   TaskStatsReport,
   TaskSummary,
+  ViewSnapshot,
   ZoteroProbeResult,
   ZoteroSyncResult,
   ZoteroTargetsResult,
@@ -175,6 +176,14 @@ export function fetchHealth(signal?: AbortSignal): Promise<HealthInfo> {
 
 export function fetchEvents(sinceRev: number, signal?: AbortSignal): Promise<EventsPage> {
   return request<EventsPage>(`/events?sinceRev=${encodeURIComponent(String(sinceRev))}`, { signal })
+}
+
+/** 上报给 Host 的视图快照（会话 id 与时间由请求头 / Host 填充）。 */
+export type ViewSnapshotBody = Omit<ViewSnapshot, 'sessionId' | 'at'>
+
+/** 面板把「当前页 / 当前筛选」告诉 Host，模型工具才能准确解析下载范围。 */
+export function postViewSnapshot(body: ViewSnapshotBody): Promise<{ saved: boolean }> {
+  return request<{ saved: boolean }>('/view', writeInit('POST', body))
 }
 
 export function listTasks(signal?: AbortSignal): Promise<TaskSummary[]> {

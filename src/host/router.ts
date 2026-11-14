@@ -32,6 +32,7 @@ import type {
   TaskGroup,
   TaskLanguage,
   TaskOrigin,
+  ViewSnapshot,
 } from '../search/types.js'
 import type {
   CreateTaskInput,
@@ -308,6 +309,40 @@ function readStringArray(
     throw new SearchError('bad_request', `${name} 最多 ${maxItems} 项`)
   }
   return value.map((item) => item.trim().slice(0, maxLength)).filter((item) => item !== '')
+}
+
+/**
+ * 解析客户端上报的当前视图快照。
+ *
+ * 只按白名单取值，未知字段 / 非基本类型一律丢弃；会话 id 由请求头决定，
+ * 时间由 Host 重置，避免客户端伪造别的会话或让快照永不过期。
+ */
+function readViewSnapshot(body: Record<string, unknown>, sessionId: string): ViewSnapshot {
+  const taskId = readString(body['taskId'], 'taskId', 200) ?? ''
+  if (taskId === '') throw new SearchError('bad_request', '缺少 taskId')
+  const filters: Record<string, string | number | boolean> = {}
+  const rawFilters = body['filters']
+  if (rawFilters !== null && typeof rawFilters === 'object' && !Array.isArray(rawFilters)) {
+    for (const [key, value] of Object.entries(asRecord(rawFilters))) {
+      const name = key.slice(0, 60)
+      if (typeof value === 'string' && value.length <= 200) filters[name] = value
+      else if (typeof value === 'number' && Number.isFinite(value)) filters[name] = value
+      else if (typeof value === 'boolean') filters[name] = value
+    }
+  }
+  const sort = readEnum(body['sort'], 'sort', SORT_MODES)
+  return {
+    sessionId,
+    taskId,
+    at: Date.now(),
+    pageIndex: readInt(body['pageIndex'], 'pageIndex', 0, 1_000_000) ?? 0,
+    pageSize: readInt(body['pageSize'], 'pageSize', 1, 200) ?? 20,
+    ...(sort === undefined ? {} : { sort }),
+    filters,
+    pagePaperIds: readStringArray(body['pagePaperIds'], 'pagePaperIds', 200, 200) ?? [],
+    selectedIds: readStringArray(body['selectedIds'], 'selectedIds', 1500, 200) ?? [],
+    rev: readInt(body['rev'], 'rev', 0, 1_000_000_000) ?? 0,
+  }
 }
 
 function readQueriesValue(value: unknown): QueryInput[] | undefined {
@@ -851,6 +886,18 @@ export function createHandler(
         const raw = url.searchParams.get('sinceRev') ?? '0'
         const sinceRev = Number(raw)
         ok(res, await service.eventsSince(Number.isFinite(sinceRev) ? sinceRev : 0))
+        return
+      }
+
+      if (head === 'view') {
+        if (req.method !== 'POST') {
+          fail(res, 405, 'bad_request', 'view 仅支持 POST')
+          return
+        }
+        const sessionId = readSessionId(req, url.searchParams)
+        if (sessionId === undefined) throw new SearchError('bad_request', '缺少会话 id')
+        service.saveViewSnapshot(sessionId, readViewSnapshot(await readJsonBody(req), sessionId))
+        ok(res, { saved: true })
         return
       }
 

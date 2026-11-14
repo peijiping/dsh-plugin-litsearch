@@ -24,12 +24,15 @@ import {
   exportUrl,
   fetchPaper,
   fetchStats,
+  postViewSnapshot,
   type ResultsQuery,
+  type ViewSnapshotBody,
 } from './api'
 import { rememberTaskTitle } from './autoOpen'
 import { CompareTab } from './CompareTab'
 import { ConditionEditor } from './ConditionEditor'
 import { paperSummary, paperText, papersSummary, papersText, taskSummary, taskText } from './compose'
+import { markConsumed, usePendingDownloadCommands } from './downloadCommandStore'
 import { DownloadDialog, type BatchDownloadItem } from './DownloadDialog'
 import { ZoteroSyncDialog } from './ZoteroSyncDialog'
 import { FullTextTab, type FullTextView } from './FullTextTab'
@@ -119,6 +122,26 @@ function formatDate(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
+/** 弹窗来源信息：手动批量不带说明，模型发起时展示范围与用户意图。 */
+interface BatchMeta {
+  origin: 'panel' | 'model'
+  scopeLabel?: string
+  reason?: string
+}
+
+/** `ResultsQuery` 的扁平投影：只保留已生效、可序列化的筛选值。 */
+function snapshotFilters(filters: ResultsQuery): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(filters)) {
+    if (key === 'offset' || key === 'limit') continue
+    if (value === undefined || value === null || value === '' || value === false) continue
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      out[key] = value
+    }
+  }
+  return out
+}
+
 export function TaskPane({
   t,
   useTabInfo,
@@ -154,6 +177,12 @@ export function TaskPane({
   const [zoteroOpen, setZoteroOpen] = useState(false)
   const [batchRunning, setBatchRunning] = useState(false)
   const batchRunningRef = useRef(false)
+  /** 模型发起的下载：弹窗标明来源/范围，并提供独立的「取消下载」。 */
+  const [batchMeta, setBatchMeta] = useState<BatchMeta>({ origin: 'panel' })
+  const [batchCancelled, setBatchCancelled] = useState(false)
+  const batchAbortRef = useRef<AbortController | null>(null)
+  /** 待消费的模型下载指令；tab 未挂载时由模块级 store 暂存。 */
+  const pendingCommands = usePendingDownloadCommands(taskId)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   /** 结果页里见过的文献：跨页选中的条目做「加入对话」时要能拿到论文详情。 */
   const papersByIdRef = useRef<Map<string, Paper>>(new Map())
@@ -382,13 +411,21 @@ export function TaskPane({
    * 每篇的结果实时写入 downloads，弹窗只做集中展示。批量未结束时再次触发
    * 只重新打开弹窗，避免两轮循环重复下载同一批文献。
    */
-  const startBatchDownload = (entries: readonly BatchDownloadItem[]): void => {
+  const startBatchDownload = (
+    entries: readonly BatchDownloadItem[],
+    meta: BatchMeta = { origin: 'panel' },
+  ): void => {
     if (taskId === null || entries.length === 0) return
     if (batchRunningRef.current) {
       // 上一轮还没跑完：只把弹窗叫回来，不替换清单、也不重复下载。
+      // 模型指令不会走到这里（消费 effect 在运行时不取队列），因此不会丢指令。
       setBatchOpen(true)
       return
     }
+    const controller = new AbortController()
+    batchAbortRef.current = controller
+    setBatchCancelled(false)
+    setBatchMeta(meta)
     setBatchItems(entries.map((entry) => ({ ...entry })))
     setBatchOpen(true)
     batchRunningRef.current = true
@@ -412,7 +449,7 @@ export function TaskPane({
         changed = true
         setDownloads((previous) => ({ ...previous, [paperId]: { state: 'downloading' } }))
         try {
-          const result = await downloadPaperPdf(taskId, paperId)
+          const result = await downloadPaperPdf(taskId, paperId, controller.signal)
           if (result.status === 'downloaded') {
             ok += 1
             setDownloads((previous) => ({
@@ -435,6 +472,15 @@ export function TaskPane({
             }))
           }
         } catch (error: unknown) {
+          if (controller.signal.aborted) {
+            // 被取消的篇不算失败，回到待下载状态，弹窗里仍能看到它。
+            setDownloads((previous) => {
+              const next = { ...previous }
+              delete next[paperId]
+              return next
+            })
+            return
+          }
           failedCount += 1
           setDownloads((previous) => ({
             ...previous,
@@ -446,6 +492,7 @@ export function TaskPane({
       let cursor = 0
       const worker = async (): Promise<void> => {
         while (cursor < entries.length) {
+          if (controller.signal.aborted) return
           const entry = entries[cursor]
           cursor += 1
           if (entry !== undefined) await runOne(entry.paperId)
@@ -457,10 +504,13 @@ export function TaskPane({
         )
       } finally {
         batchRunningRef.current = false
+        batchAbortRef.current = null
+        // 置回 false 会触发模型指令消费 effect，自动接着跑队列里的下一条。
         setBatchRunning(false)
         if (changed) view.reload()
       }
-      if (changed) {
+      // 被取消时不报「下载完成」：弹窗里已有「已取消」说明。
+      if (changed && !controller.signal.aborted) {
         notify(
           tpl(t('bulk.downloadDone'), { ok, manual: manualCount, failed: failedCount }),
           failedCount > 0 ? 'error' : 'info',
@@ -492,6 +542,64 @@ export function TaskPane({
       ),
     )
   }
+
+  /** 只有显式的「取消下载」才中止；关闭弹窗仍只隐藏，后台继续跑完。 */
+  const cancelBatch = (): void => {
+    batchAbortRef.current?.abort()
+    setBatchCancelled(true)
+  }
+
+  // 上报当前视图快照：Host 侧的模型工具靠它算准「当前页 / 当前筛选全部」。
+  // 变化时节流 400ms，切任务或卸载时清理；后台标签页不上报。
+  useEffect(() => {
+    if (taskId === null || view.detail === null || view.page === null) return undefined
+    const body: ViewSnapshotBody = {
+      taskId,
+      pageIndex: view.pageIndex,
+      pageSize: view.pageSize,
+      ...(filters.sort === undefined ? {} : { sort: filters.sort }),
+      filters: snapshotFilters(filters),
+      pagePaperIds: view.page.papers.map((paper) => paper.paperId),
+      selectedIds: [...selected],
+      rev: view.page.rev,
+    }
+    const timer = setTimeout(() => {
+      if (document.hidden) return
+      void postViewSnapshot(body).catch(() => undefined)
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [taskId, view.detail, view.page, view.pageIndex, view.pageSize, filters, selected])
+
+  // 消费模型下载指令：始终串行。上一轮没跑完就留在 store 队列里，
+  // 结束（setBatchRunning(false)）后自动接着跑下一条，不丢也不重复。
+  useEffect(() => {
+    if (taskId === null || batchRunningRef.current || batchRunning) return
+    const command = pendingCommands[0]
+    if (command === undefined) return
+    if (command.paperIds.length === 0) {
+      markConsumed(command.commandId)
+      notify(t('batch.empty'))
+      return
+    }
+    const byId = new Map(command.items.map((item) => [item.paperId, item]))
+    const items: BatchDownloadItem[] = command.paperIds.map((paperId) => {
+      const item = byId.get(paperId)
+      return {
+        paperId,
+        title: item?.title ?? papersByIdRef.current.get(paperId)?.title ?? '',
+        ...(item?.source === undefined ? {} : { source: item.source }),
+        ...(item?.meta === undefined ? {} : { meta: item.meta }),
+      }
+    })
+    markConsumed(command.commandId)
+    startBatchDownload(items, {
+      origin: 'model',
+      scopeLabel: command.scopeLabel,
+      reason: command.reason,
+    })
+    // startBatchDownload 每次渲染都是新函数，故意不进依赖：运行中靠
+    // batchRunningRef 同步拦截，结束后靠 batchRunning 变化重新消费队列。
+  }, [taskId, pendingCommands, batchRunning])
 
   const zoteroIds = (paperIds: readonly string[]): void => {
     if (taskId === null || paperIds.length === 0) return
@@ -1143,6 +1251,11 @@ export function TaskPane({
         items={batchItems}
         states={detail.states}
         downloads={downloads}
+        origin={batchMeta.origin}
+        scopeLabel={batchMeta.scopeLabel}
+        reason={batchMeta.reason}
+        cancelled={batchCancelled}
+        onCancel={batchMeta.origin === 'model' ? cancelBatch : undefined}
         onClose={() => {
           setBatchOpen(false)
           // 关闭即刷新列表：下载可能仍在后台继续，让文献状态跟上 Host 的真实结果。

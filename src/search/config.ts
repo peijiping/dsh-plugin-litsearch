@@ -8,9 +8,6 @@
 import type { SortMode, SourceId, TaskLanguage } from './types.js'
 import { SOURCE_IDS } from './types.js'
 
-/** 插件版本（与 package.json 同步；仅用于 /health 诊断展示）。 */
-export const PLUGIN_VERSION = '0.1.0'
-
 /**
  * 默认数据源。
  *

@@ -673,12 +673,73 @@ export interface TaskFocus {
   sessionId?: string
 }
 
+/** 模型侧下载范围；工具把自然语言收敛成这 6 种之一。 */
+export type DownloadScope = 'ids' | 'currentPage' | 'currentView' | 'all' | 'group' | 'filters'
+
+/**
+ * 客户端当前视图快照。
+ *
+ * 模型工具跑在 Host 侧，看不到右侧栏翻到第几页、用了什么筛选。面板按变化
+ * 节流上报这份快照，Host 才能把「当前页」「当前筛选全部」算准。仅存内存，
+ * 宿主重启即失效（与事件日志 rev 一致）。
+ */
+export interface ViewSnapshot {
+  sessionId: string
+  taskId: string
+  /** 上报时间（epoch ms）；Host 只接受 30 分钟内的快照。 */
+  at: number
+  pageIndex: number
+  pageSize: number
+  /** 当前结果排序；快照缺 paperIds 时用它重算当前页。 */
+  sort?: SortMode
+  /** 当前生效的筛选；键名沿用 ResultsQuery，值已去除 undefined / 空串。 */
+  filters: Record<string, string | number | boolean>
+  /** 当前页按用户所见顺序的 paperId。 */
+  pagePaperIds: string[]
+  /** 跨页累计勾选的 paperId。 */
+  selectedIds: string[]
+  /** 客户端看到的任务 rev；每下载一篇都会自增，故只做宽松校验。 */
+  rev: number
+}
+
+/** 一条待下载文献的展示元数据；由 Host 生成，Client 无需再查详情。 */
+export interface DownloadCommandItem {
+  paperId: string
+  title: string
+  source: string
+  /** `期刊 · 年份` 之类的副行，可缺省。 */
+  meta?: string
+}
+
+/**
+ * 模型发起的批量下载指令。
+ *
+ * 范围在 Host 侧已解析、逐个校验完毕；右侧栏只按 paperIds 执行，不解析
+ * 任何条件，也不反查别的任务。弹窗靠 scopeLabel / reason / items 让用户
+ * 看清「大模型正在下载哪些文献」。
+ */
+export interface DownloadCommand {
+  commandId: string
+  taskId: string
+  sessionId?: string
+  at: number
+  origin: 'model'
+  /** 用户原话 / 模型对范围的解释，弹窗里展示。 */
+  reason: string
+  /** Host 生成的中文范围说明（含篇数），Client 纯展示。 */
+  scopeLabel: string
+  paperIds: string[]
+  items: DownloadCommandItem[]
+}
+
 /** `/events` 的响应；`reset` 表示客户端的 sinceRev 比服务端新（宿主重启）。 */
 export interface EventsPage {
   rev: number
   reset: boolean
   tasks: TaskSummary[]
   focus?: TaskFocus
+  /** 增量下发的模型下载指令；数组而非单值，避免两次轮询间连发时丢指令。 */
+  downloads?: DownloadCommand[]
 }
 
 /** `/health` 的响应：数据源能力 + 客户端需要的默认设置（不含密钥）。 */
@@ -711,7 +772,6 @@ export interface HealthInfo {
   }
   /** 任务文件存放目录（设置页只读展示）。 */
   storageDir: string
-  version: string
 }
 
 /** Host HTTP 端点统一信封。 */

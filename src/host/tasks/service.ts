@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { MAX_LIMIT, PLUGIN_VERSION, getSettings } from '../../search/config.js'
+import { MAX_LIMIT, getSettings } from '../../search/config.js'
 import { SearchError } from '../../search/errors.js'
 import { cooldownUntil, sourceHealthList } from '../../search/health.js'
 import { PROVIDER_INFOS } from '../../search/providers/index.js'
@@ -22,6 +22,7 @@ import type {
   CleanupResult,
   CleanupScope,
   CompareResult,
+  DownloadCommand,
   EventsPage,
   ExportFile,
   ExportFormat,
@@ -47,6 +48,7 @@ import type {
   TaskOrigin,
   TaskStatsReport,
   TaskSummary,
+  ViewSnapshot,
   ZoteroProbeResult,
   ZoteroSyncResult,
   ZoteroSyncStatus,
@@ -85,6 +87,12 @@ const PROBE_QUERY = 'machine learning'
 /** 已下载文件存在性检查的短缓存：详情轮询时不必反复 stat 同一批文件。 */
 const PDF_EXISTS_TTL_MS = 10_000
 const pdfExistsCache = new Map<string, { exists: boolean; at: number }>()
+
+/** 右侧栏视图快照有效期：面板长时间不动时不拿旧页码替模型算「当前页」。 */
+const VIEW_TTL_MS = 30 * 60 * 1000
+
+/** 最多保留多少个会话的视图快照，超出按上报时间淘汰最旧的。 */
+const MAX_VIEWS = 64
 
 async function pdfFileExists(filePath: string): Promise<boolean> {
   const cached = pdfExistsCache.get(filePath)
@@ -192,6 +200,14 @@ export class TaskService {
   private readonly events = new TaskEvents()
 
   private readonly runner = new TaskRunner()
+
+  /**
+   * 每个会话最近一次的右侧栏视图快照（内存、不落盘）。
+   *
+   * 模型工具跑在 Host 侧看不到界面，靠它把「当前页」「当前筛选全部」算准；
+   * 宿主重启即失效，与事件日志 rev 的生命周期一致。
+   */
+  private readonly views = new Map<string, ViewSnapshot>()
 
   /**
    * 全局「当前任务」：最后一次使用或打开的任务。
@@ -317,7 +333,6 @@ export class TaskService {
         tag: settings.zoteroTag,
       },
       storageDir: this.store.root,
-      version: PLUGIN_VERSION,
     }
   }
 
@@ -385,6 +400,49 @@ export class TaskService {
   /** 请求客户端打开/聚焦某任务 tab（面板被关掉时重新打开）。 */
   focusTask(id: string, title: string, sessionId?: string): void {
     this.events.requestFocus(id, title, sessionId)
+  }
+
+  /** 下发一条模型批量下载指令；右侧栏轮询 /events 拿增量后自行执行。 */
+  publishDownloadCommand(command: DownloadCommand): void {
+    this.events.publishDownload(command)
+  }
+
+  /**
+   * 面板上报当前视图。会话 id 以请求头为准覆盖 body，防止伪造别的会话的视图；
+   * 时间也由 Host 重置，避免客户端时钟偏差影响过期判断。
+   */
+  saveViewSnapshot(sessionId: string, snapshot: ViewSnapshot): void {
+    if (sessionId === '' || snapshot.taskId === '') return
+    this.views.set(sessionId, { ...snapshot, sessionId, at: Date.now() })
+    if (this.views.size <= MAX_VIEWS) return
+    let oldestKey: string | undefined
+    let oldestAt = Number.MAX_SAFE_INTEGER
+    for (const [key, value] of this.views) {
+      if (value.at < oldestAt) {
+        oldestAt = value.at
+        oldestKey = key
+      }
+    }
+    if (oldestKey !== undefined) this.views.delete(oldestKey)
+  }
+
+  /** 取该会话在该任务上的最近视图；过期、跨任务或 rev 超前都视为不可信。 */
+  async getViewSnapshot(
+    sessionId: string | undefined,
+    taskId: string,
+  ): Promise<ViewSnapshot | undefined> {
+    await this.ready
+    if (sessionId === undefined || sessionId === '') return undefined
+    const snapshot = this.views.get(sessionId)
+    if (snapshot === undefined || snapshot.taskId !== taskId) return undefined
+    if (Date.now() - snapshot.at > VIEW_TTL_MS) {
+      this.views.delete(sessionId)
+      return undefined
+    }
+    // 每下载一篇都会让 rev +1，因此只做「快照不比任务更新」的宽松校验。
+    const task = await this.tryGet(taskId)
+    if (task === undefined || snapshot.rev > task.rev) return undefined
+    return snapshot
   }
 
   private persistCurrent(): void {
@@ -534,6 +592,9 @@ export class TaskService {
     // 模型工具导出到 <storage>/out/<taskId>/ 的文件随任务一起清掉。
     await rm(join(this.store.root, 'out', task.id), { recursive: true, force: true })
     this.events.remove(task.id)
+    for (const [key, value] of this.views) {
+      if (value.taskId === task.id) this.views.delete(key)
+    }
     if (this.currentTaskId !== task.id) return
     this.currentTaskId = undefined
     this.bootstrapCurrentTask()
@@ -1066,6 +1127,14 @@ export class TaskService {
     const base = await this.tryGet(task.fromTaskId)
     if (base === undefined) return undefined
     return { paperIds: new Set(base.result.papers.map((paper) => paper.paperId)), rev: base.rev }
+  }
+
+  /**
+   * 供模型下载工具复用：`newOnly` 需要基准任务的论文集合才能与界面口径一致。
+   * 直接暴露给工具层，避免下载范围解析和 `/results` 出现两套过滤逻辑。
+   */
+  async resolveDownloadFilter(id: string, filter: PaperFilter): Promise<PaperFilter> {
+    return this.withBaseFilter(await this.get(id), filter)
   }
 
   /** `newOnly` 需要基准任务的论文集合；基准已删除时忽略该条件。 */

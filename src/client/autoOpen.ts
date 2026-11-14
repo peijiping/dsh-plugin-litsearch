@@ -17,6 +17,7 @@ import { useSyncExternalStore } from 'react'
 import { DEFAULT_AUTO_OPEN, DEFAULT_MAX_TASK_TABS } from '../search/config'
 import type { TaskSummary } from '../search/types'
 import { fetchEvents, fetchTask } from './api'
+import { publishDownloadCommands } from './downloadCommandStore'
 import { getHealth, refreshHealth } from './health'
 import { publishTaskSummaries } from './taskListStore'
 
@@ -295,6 +296,10 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
 
     // 已挂载的任务 tab 靠这份增量同步宿主侧的变化（例如模型在同一任务里开新一轮）。
     publishTaskSummaries(page.tasks)
+
+    // 模型下载指令总是入队，不受「自动打开开关 / 首次轮询」影响：tab 可能还没
+    // 挂载，指令在 store 里等工具同时发出的 focus 把 tab 拉起后再被消费。
+    publishDownloadCommands(page.downloads, options.sessionId?.())
 
     const settings = getHealth()?.settings
     const autoOpen = settings?.autoOpenTaskTab ?? DEFAULT_AUTO_OPEN

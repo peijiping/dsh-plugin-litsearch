@@ -9,9 +9,13 @@
  * - `literature_task`：读取/修改已保存任务（含轮次历史），写入筛读与分组，
  *   做新老对比与统计。
  * - `literature_export`：把任务（按筛选）导出为 CSV / RIS / BibTeX / Markdown 并落盘。
+ * - `literature_download`：把自然语言下载请求解析成已校验的 paperId 清单，
+ *   通过事件下发给右侧栏，由右侧栏复用批量下载弹窗执行并逐篇展示。
  *
  * 参数在边界做一次校验（模型输出不可信），服务层仍会再兜底。
  */
+
+import { randomUUID } from 'node:crypto'
 
 import { MAX_LIMIT } from '../search/config.js'
 import { SearchError } from '../search/errors.js'
@@ -20,8 +24,11 @@ import { PROVIDER_INFOS } from '../search/providers/index.js'
 import type {
   AnnotationInput,
   CompareResult,
+  DownloadCommand,
+  DownloadScope,
   ExportFormat,
   PaperState,
+  PdfStatus,
   ResultsPage,
   Screening,
   SearchRound,
@@ -35,7 +42,8 @@ import type {
   TaskSummary,
 } from '../search/types.js'
 import { SOURCE_IDS, TASK_LANGUAGES } from '../search/types.js'
-import type { PaperFilter } from './tasks/filter.js'
+import { mergeDownloadFilter, resolveDownloadScope, toPaperFilter } from './tasks/download.js'
+import { filterPapers, type PaperFilter } from './tasks/filter.js'
 import type { QueryInput, TaskPatch, TaskService } from './tasks/service.js'
 import { resolveSessionWorkspace } from './workspace.js'
 
@@ -52,6 +60,24 @@ const SORT_MODES: readonly SortMode[] = ['relevance', 'citations', 'year']
 const LANGUAGES = TASK_LANGUAGES
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
 const EXPORT_FORMATS: readonly ExportFormat[] = ['csv', 'ris', 'bibtex', 'md']
+const DOWNLOAD_SCOPES: readonly DownloadScope[] = [
+  'ids',
+  'currentPage',
+  'currentView',
+  'all',
+  'group',
+  'filters',
+]
+const PDF_STATUSES: readonly PdfStatus[] = [
+  'unknown',
+  'available',
+  'downloaded',
+  'missing',
+  'html-only',
+  'paywalled',
+  'blocked',
+  'failed',
+]
 const TASK_ACTIONS = [
   'current',
   'list',
@@ -298,6 +324,62 @@ const EXPORT_PARAMETERS = {
   additionalProperties: false,
 }
 
+/**
+ * 下载范围参数的字段名一律沿用 `ResultsQuery` / `PaperFilter`，让模型下载与
+ * 界面筛选共用同一套口径；这里不引入任何新的条件表达式。
+ */
+const DOWNLOAD_PARAMETERS = {
+  type: 'object',
+  properties: {
+    taskId: { type: 'string', description: '要下载的任务 id；省略则用当前任务。' },
+    scope: {
+      type: 'string',
+      enum: [...DOWNLOAD_SCOPES],
+      description:
+        '下载范围，按用户话术选择：ids = 用户点名了具体文献且你已从工具结果看到确切 paperId；currentPage = 「当前页/这一页」；currentView = 「当前全部/当前筛选下全部」（含跨页，默认，不等于整个任务）；all = 用户明确说「整个任务/所有文献/不管筛选」；group = 「xx 分组」（必须同时给 groupId）；filters = 用户给了年份、开放获取、关键词、来源、筛读状态等条件。',
+    },
+    reason: {
+      type: 'string',
+      description: '一句话复述用户要下载的范围（会显示在右侧批量下载框里），必填。',
+    },
+    paperIds: {
+      type: 'array',
+      maxItems: 1500,
+      items: { type: 'string' },
+      description:
+        'scope=ids 时的确切 paperId 列表。只能填你在工具返回的「paperId:」行里看到的 id，禁止编造或猜测；其余 id 会被忽略。',
+    },
+    q: { type: 'string', description: '标题/摘要关键词，用于「下载关于 xx 的文献」。' },
+    groupId: { type: 'string', description: '任务内分组 id；scope=group 时必填。' },
+    queryId: { type: 'string', description: '只下某条检索式命中的文献。' },
+    source: { type: 'string', enum: [...SOURCE_IDS], description: '只下该数据源命中的文献。' },
+    yearFrom: { type: 'integer', minimum: 1, maximum: 3000, description: '起始年份。' },
+    yearTo: { type: 'integer', minimum: 1, maximum: 3000, description: '截止年份。' },
+    openAccessOnly: {
+      type: 'boolean',
+      description: '仅上游标记为开放获取的文献；与 hasPdf 不等价，不要同时默认开启。',
+    },
+    hasPdf: {
+      type: 'boolean',
+      description:
+        '仅有 PDF 直链或已下载的文献。「下载当前页的所有 pdf 文献」用这个；付费墙文献会被跳过。',
+    },
+    missingFullText: { type: 'boolean', description: '只下尚无可用全文的文献。' },
+    pdfStatus: {
+      type: 'string',
+      enum: [...PDF_STATUSES],
+      description: '按全文状态精确筛选（如只要 missing 或 failed 的重试）。',
+    },
+    screening: { type: 'string', enum: [...SCREENINGS], description: '按筛读状态过滤。' },
+    type: { type: 'string', description: '文献类型（精确匹配）。' },
+    language: { type: 'string', enum: [...TASK_LANGUAGES], description: '语言码。' },
+    venue: { type: 'string', description: '期刊/出处（精确匹配）。' },
+    author: { type: 'string', description: '作者全名（精确匹配）。' },
+  },
+  required: ['scope', 'reason'],
+  additionalProperties: false,
+}
+
 interface TaskArgs {
   action: (typeof TASK_ACTIONS)[number]
   id?: string
@@ -320,6 +402,15 @@ interface ExportArgs {
   screening?: Screening
   groupId?: string
   queryId?: string
+}
+
+interface DownloadArgs {
+  taskId?: string
+  scope: DownloadScope
+  reason: string
+  paperIds?: string[]
+  /** 模型显式给出的附加条件（视图筛选由服务层另行合并）。 */
+  filter: PaperFilter
 }
 
 interface SearchArgs {
@@ -437,7 +528,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
       name: 'literature_task',
       description:
         '读取与推进已保存的检索任务。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词过滤）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态与分组；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
-        '注意：一个对话只保留一个任务 tab，切换任务由用户在任务列表里完成；run 会在指定任务内开新一轮检索（并把它设为当前任务），与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。',
+        '注意：一个对话只保留一个任务 tab，切换任务由用户在任务列表里完成；run 会在指定任务内开新一轮检索（并把它设为当前任务），与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。用户要求批量下载 PDF 时改用 literature_download。',
       parameters: TASK_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args, exec): Promise<{ text: string }> {
@@ -454,6 +545,19 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
       output: TEXT_OUTPUT,
       async execute(args): Promise<{ text: string }> {
         return { text: await runExport(service, readExportArgs(args)) }
+      },
+    },
+    {
+      name: 'literature_download',
+      description:
+        '在用户要求「帮我下载 XX 文献 / 下载当前页的所有 pdf 文献 / 下载 xx 分组下的文献 / 下载 xx 条件的文献 / 帮我下载当前全部文献」时调用：把范围算成一份已校验的 paperId 清单，下发给右侧栏，右侧栏会自动弹出批量下载框并立即逐篇下载，用户能看到每篇标题、来源与实时状态，也能点「取消下载」中止。' +
+        '【范围怎么选】用户点名具体文献且你已在工具结果的「paperId:」行看到确切 id → scope=ids 并给 paperIds；「当前页/这一页」→ scope=currentPage；「当前全部/当前筛选下全部」→ scope=currentView（含跨页，不等于整个任务）；明确说「整个任务/所有文献/不管筛选」→ scope=all；「xx 分组」→ scope=group + groupId；给了年份、OA、关键词、来源、筛读状态等条件 → scope=filters 并填对应字段。' +
+        '【重要】你看不到右侧栏界面，「当前页」「当前筛选全部」由宿主用面板上报的视图快照 + 服务端筛选精确计算，不要自己猜页码或编造 paperId；scope=ids 时只能使用工具结果里出现过的 paperId，无效 id 会被忽略。hasPdf 表示「有 PDF 直链或已下载」，openAccessOnly 表示上游标记为开放获取，两者不等价，不要同时默认开启。' +
+        '本工具只下发指令、不等待下载完成，也不要重复调用同一条指令或臆测下载结果；若范围为空会返回原因而不下发。需要检索后再下载时，先按检索工具的轮次约束完成检索，再由用户明确提出下载。',
+      parameters: DOWNLOAD_PARAMETERS,
+      output: TEXT_OUTPUT,
+      async execute(args, exec): Promise<{ text: string }> {
+        return { text: await runDownload(service, readDownloadArgs(args), exec.agent?.id) }
       },
     },
   ]
@@ -823,6 +927,102 @@ function readExportArgs(args: unknown): ExportArgs {
   return input
 }
 
+/** 下载参数边界校验：枚举白名单、严格布尔、paperIds 去空去重且保序。 */
+function readDownloadArgs(args: unknown): DownloadArgs {
+  const record = asRecord(args)
+  const scope = record['scope']
+  if (typeof scope !== 'string' || !(DOWNLOAD_SCOPES as readonly string[]).includes(scope)) {
+    throw new Error(`scope 只能是 ${DOWNLOAD_SCOPES.join(' / ')}`)
+  }
+  const reason = readText(record['reason'], 'reason')
+  if (reason === undefined) throw new Error('缺少 reason：请用一句话复述用户要下载的范围')
+  const input: DownloadArgs = {
+    scope: scope as DownloadScope,
+    reason: reason.slice(0, 200),
+    filter: {},
+  }
+  const taskId = readText(record['taskId'], 'taskId')
+  if (taskId !== undefined) input.taskId = taskId
+
+  if (record['paperIds'] !== undefined) {
+    const papers = record['paperIds']
+    if (!Array.isArray(papers) || !papers.every((item) => typeof item === 'string')) {
+      throw new Error('paperIds 必须是字符串数组')
+    }
+    if (papers.length > 1500) throw new Error('paperIds 最多 1500 条')
+    input.paperIds = [
+      ...new Set((papers as string[]).map((id) => id.trim()).filter((id) => id !== '')),
+    ]
+  }
+  if (input.scope === 'ids' && (input.paperIds ?? []).length === 0) {
+    throw new Error('scope=ids 必须给出 paperIds，且只能使用工具结果里出现过的 paperId')
+  }
+
+  const filter: PaperFilter = {}
+  const q = readText(record['q'], 'q')
+  if (q !== undefined) filter.q = q.slice(0, 200)
+  const groupId = readText(record['groupId'], 'groupId')
+  if (groupId !== undefined) filter.groupId = groupId
+  const queryId = readText(record['queryId'], 'queryId')
+  if (queryId !== undefined) filter.queryId = queryId
+  const type = readText(record['type'], 'type')
+  if (type !== undefined) filter.type = type.slice(0, 100)
+  const venue = readText(record['venue'], 'venue')
+  if (venue !== undefined) filter.venue = venue.slice(0, 200)
+  const author = readText(record['author'], 'author')
+  if (author !== undefined) filter.author = author.slice(0, 200)
+
+  const yearFrom = readInteger(record['yearFrom'], 'yearFrom', 3000)
+  if (yearFrom !== undefined) filter.yearFrom = yearFrom
+  const yearTo = readInteger(record['yearTo'], 'yearTo', 3000)
+  if (yearTo !== undefined) filter.yearTo = yearTo
+  if (yearFrom !== undefined && yearTo !== undefined && yearFrom > yearTo) {
+    throw new Error('yearFrom 不能大于 yearTo')
+  }
+
+  for (const key of ['openAccessOnly', 'hasPdf', 'missingFullText'] as const) {
+    const value = record[key]
+    if (value === undefined) continue
+    if (typeof value !== 'boolean') throw new Error(`${key} 必须是布尔值`)
+    if (value) filter[key] = true
+  }
+
+  const source = record['source']
+  if (source !== undefined) {
+    if (typeof source !== 'string' || !(SOURCE_IDS as readonly string[]).includes(source)) {
+      throw new Error(`source 只能是 ${SOURCE_IDS.join(' / ')}`)
+    }
+    filter.source = source
+  }
+  const language = record['language']
+  if (language !== undefined) {
+    if (typeof language !== 'string' || !(LANGUAGES as readonly string[]).includes(language)) {
+      throw new Error('language 不是支持的语言码')
+    }
+    filter.language = language as TaskLanguage
+  }
+  const screening = record['screening']
+  if (screening !== undefined) {
+    if (typeof screening !== 'string' || !(SCREENINGS as readonly string[]).includes(screening)) {
+      throw new Error(`screening 只能是 ${SCREENINGS.join(' / ')}`)
+    }
+    filter.screening = screening as Screening
+  }
+  const pdfStatus = record['pdfStatus']
+  if (pdfStatus !== undefined) {
+    if (typeof pdfStatus !== 'string' || !(PDF_STATUSES as readonly string[]).includes(pdfStatus)) {
+      throw new Error(`pdfStatus 只能是 ${PDF_STATUSES.join(' / ')}`)
+    }
+    filter.pdfStatus = pdfStatus as PdfStatus
+  }
+
+  if (input.scope === 'group' && filter.groupId === undefined) {
+    throw new Error('scope=group 必须给出 groupId')
+  }
+  input.filter = filter
+  return input
+}
+
 async function runTaskAction(
   service: TaskService,
   args: TaskArgs,
@@ -918,6 +1118,123 @@ async function runExport(service: TaskService, args: ExportArgs): Promise<string
     '内容开头：',
     preview,
   ].join('\n')
+}
+
+/**
+ * 把自然语言下载请求算成已校验的 paperId 清单并下发指令。
+ *
+ * 只等服务端把范围算完（毫秒级），不等右侧栏下载完成：下载由 Client 复用
+ * 现有批量下载弹窗执行，模型拿到的只是「已受理」的说明。
+ */
+async function runDownload(
+  service: TaskService,
+  args: DownloadArgs,
+  sessionId: string | undefined,
+): Promise<string> {
+  const task =
+    args.taskId !== undefined ? await service.get(args.taskId) : await service.currentTask()
+  if (task === undefined) {
+    return '当前没有检索任务：请先检索文献，或让用户从右侧栏打开一个任务，再让我下载。'
+  }
+  const snapshot = await service.getViewSnapshot(sessionId, task.id)
+  if ((args.scope === 'currentPage' || args.scope === 'currentView') && snapshot === undefined) {
+    return [
+      `任务「${task.title}」（id: ${task.id}）暂时读不到右侧栏的当前视图，无法准确判断「当前页 / 当前全部」。`,
+      '请让用户先在右侧栏打开该任务的结果页、翻到要看的那一页，再重复这条指令；也可以改用 scope=all 下载整个任务、用 filters 给明确条件、用 ids 指定文献。',
+      '本次没有下发任何下载指令。',
+    ].join('\n')
+  }
+
+  // 「当前页 / 当前全部」以界面筛选打底；其余范围忽略界面筛选，避免用户说
+  // 「下载全部」时却只下了筛出来的那批。
+  const viewFilter =
+    args.scope === 'currentPage' || args.scope === 'currentView'
+      ? toPaperFilter(snapshot?.filters ?? {})
+      : {}
+  const filter = await service.resolveDownloadFilter(
+    task.id,
+    mergeDownloadFilter(viewFilter, args.filter),
+  )
+
+  // 当前页优先用面板直接上报的顺序；缺 paperIds 时按视图筛选与排序重算这一页。
+  let pagePaperIds: readonly string[] | undefined
+  if (args.scope === 'currentPage' && snapshot !== undefined) {
+    if (snapshot.pagePaperIds.length > 0) {
+      pagePaperIds = snapshot.pagePaperIds
+    } else {
+      const page = await service.results(task.id, {
+        ...viewFilter,
+        ...(snapshot.sort === undefined ? {} : { sort: snapshot.sort }),
+        offset: snapshot.pageIndex * snapshot.pageSize,
+        limit: snapshot.pageSize,
+      })
+      pagePaperIds = page.papers.map((paper) => paper.paperId)
+    }
+  }
+
+  const groupName =
+    args.scope === 'group' && args.filter.groupId !== undefined
+      ? task.groups.find((group) => group.id === args.filter.groupId)?.name
+      : undefined
+  const resolved = resolveDownloadScope(task, {
+    scope: args.scope,
+    filter,
+    matched: filterPapers(task, filter),
+    ...(args.paperIds === undefined ? {} : { explicitIds: args.paperIds }),
+    ...(snapshot === undefined ? {} : { snapshot }),
+    ...(pagePaperIds === undefined ? {} : { pagePaperIds }),
+    ...(groupName === undefined ? {} : { groupName }),
+  })
+
+  if (resolved.paperIds.length === 0) {
+    return [
+      `没有匹配到可下载的文献（${resolved.scopeLabel}）。`,
+      `任务「${task.title}」共 ${task.result.papers.length} 篇；本次没有下发任何下载指令。`,
+      '请放宽条件、确认分组/年份是否正确，或改用 scope=all；不要重复下发同一条指令。',
+    ].join('\n')
+  }
+
+  const command: DownloadCommand = {
+    commandId: randomUUID(),
+    taskId: task.id,
+    ...(sessionId === undefined ? {} : { sessionId }),
+    at: Date.now(),
+    origin: 'model',
+    reason: args.reason,
+    scopeLabel: resolved.scopeLabel,
+    paperIds: resolved.paperIds,
+    items: resolved.items,
+  }
+  // 先请求打开任务 tab，再下发指令；两者在同一次 /events 增量里送到客户端，
+  // 面板即使原本没挂载也能被拉起后再消费指令。
+  service.focusTask(task.id, task.title, sessionId)
+  service.publishDownloadCommand(command)
+
+  const preview = resolved.items
+    .slice(0, 5)
+    .map((item, index) => `${index + 1}. ${item.title}（${item.source}）`)
+    .join('\n')
+  const lines = [
+    `已向右侧栏下发批量下载指令：${resolved.scopeLabel}。`,
+    `任务「${task.title}」（id: ${task.id}）；范围：${args.reason}`,
+    `清单已逐个校验：${resolved.paperIds.length} 篇属于该任务且满足条件${
+      resolved.ignored > 0
+        ? `，另有 ${resolved.ignored} 个 id 被忽略（不属于该任务或不满足条件）`
+        : ''
+    }。`,
+    '',
+    '清单前几篇：',
+    preview,
+    '',
+    '右侧栏会自动弹出批量下载框并立即开始，用户能看到每篇标题、来源与实时状态，也可点「取消下载」中止。本工具只下发指令、不等待下载完成；请勿重复调用，也不要替用户臆测下载结果。',
+  ]
+  if (resolved.paperIds.length > 200) {
+    lines.push(
+      '',
+      `注意：本次 ${resolved.paperIds.length} 篇数量较大，可能耗时较长并触发上游限流；已下载的会跳过，建议提示用户必要时收窄范围。`,
+    )
+  }
+  return lines.join('\n')
 }
 
 function readFilterArgs(args: TaskArgs): PaperFilter {
@@ -1057,6 +1374,8 @@ function formatTaskDetail(
       paper.citedBy === null ? '' : `被引 ${paper.citedBy}`,
     ].filter((part) => part !== '')
     lines.push(`${page.offset + index + 1}. [${marks.join('|')}] ${paper.title}`)
+    // 供 literature_download 的 scope=ids 引用；模型不得编造这个 id。
+    lines.push(`   paperId: ${paper.paperId}`)
     if (meta.length > 0) lines.push(`   ${meta.join(' | ')}`)
     if (paper.abstract !== '') lines.push(`   摘要：${truncate(paper.abstract, 300)}`)
   })
@@ -1211,6 +1530,8 @@ function formatTaskResult(
   page.papers.forEach((paper, index) => {
     lines.push('')
     lines.push(`${index + 1}. ${paper.title}`)
+    // 供 literature_download 的 scope=ids 引用；模型不得编造这个 id。
+    lines.push(`   paperId: ${paper.paperId}`)
     const meta = [
       paper.authors.slice(0, 6).join(', '),
       paper.year === null ? '' : String(paper.year),

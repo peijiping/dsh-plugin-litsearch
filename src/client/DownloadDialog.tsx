@@ -20,6 +20,10 @@ import { ACCENT, ERROR, statusStyle } from './styles'
 export interface BatchDownloadItem {
   paperId: string
   title: string
+  /** 命中数据源；模型发起时由 Host 直接带上，便于用户核对在下哪几篇。 */
+  source?: string
+  /** `期刊 · 年份` 之类的副行。 */
+  meta?: string
 }
 
 type BatchPhase = 'pending' | 'downloading' | 'downloaded' | 'manual' | 'failed'
@@ -40,6 +44,14 @@ interface Props {
   states: Record<string, PaperState>
   /** 任务面板维护的即时下载状态（下载中 / 刚完成 / 刚失败）。 */
   downloads: Readonly<Record<string, PdfDownloadUi>>
+  /** 发起方；模型发起时额外展示范围说明、来源，并提供独立取消按钮。 */
+  origin?: 'panel' | 'model'
+  /** Host 生成的中文范围说明（含篇数），这里只展示。 */
+  scopeLabel?: string
+  /** 模型复述的用户下载意图。 */
+  reason?: string
+  cancelled?: boolean
+  onCancel?(): void
   onClose(): void
 }
 
@@ -75,6 +87,11 @@ export function DownloadDialog({
   items,
   states,
   downloads,
+  origin = 'panel',
+  scopeLabel,
+  reason,
+  cancelled = false,
+  onCancel,
   onClose,
 }: Props): ReactElement {
   const phases = items.map((item) => phaseOf(item.paperId, states, downloads))
@@ -88,27 +105,44 @@ export function DownloadDialog({
   const rate = total === 0 ? 0 : Math.round((done / total) * 100)
   // 没有待下载、也没有在下载的条目时即为完成（全都已下载时立刻完成）。
   const complete = total > 0 && pending === 0 && downloading === 0
+  const allSkipped = complete && downloaded === total
 
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title={t('batch.title')}
-      description={tpl(t('batch.desc'), { n: total })}
+      title={origin === 'model' ? t('batch.modelTitle') : t('batch.title')}
+      description={tpl(origin === 'model' ? t('batch.modelDesc') : t('batch.desc'), { n: total })}
       className={WIDE_MODAL_CLASS}
       footer={
         <div style={FOOTER_STYLE}>
-          <span style={statusStyle}>
-            {tpl(t('batch.progress'), { done, total })}
-          </span>
-          <Button variant="outline" size="sm" type="button" onClick={onClose}>
-            {t('batch.close')}
-          </Button>
+          <span style={statusStyle}>{tpl(t('batch.progress'), { done, total })}</span>
+          <div style={FOOTER_ACTIONS_STYLE}>
+            {onCancel !== undefined && !cancelled && !complete && (
+              <Button variant="outline" size="sm" type="button" onClick={onCancel}>
+                {t('batch.cancel')}
+              </Button>
+            )}
+            <Button variant="outline" size="sm" type="button" onClick={onClose}>
+              {t('batch.close')}
+            </Button>
+          </div>
         </div>
       }
     >
       <style>{WIDE_MODAL_CSS}</style>
       <div style={OVERVIEW_STYLE} role="status" aria-live="polite">
+        {origin === 'model' && (
+          <div style={MODEL_BADGE_STYLE}>
+            <span style={MODEL_TAG_STYLE}>{t('batch.originModel')}</span>
+            {scopeLabel !== undefined && scopeLabel !== '' && <span>{scopeLabel}</span>}
+            {reason !== undefined && reason !== '' && (
+              <span style={REASON_STYLE} title={reason}>
+                {reason}
+              </span>
+            )}
+          </div>
+        )}
         <div style={COUNTS_STYLE}>
           <span>{tpl(t('batch.total'), { n: total })}</span>
           <span style={{ color: PHASE_COLOR.downloaded }}>
@@ -128,7 +162,12 @@ export function DownloadDialog({
         <div style={BAR_TRACK_STYLE}>
           <div style={{ ...BAR_FILL_STYLE, width: `${rate}%` }} />
         </div>
-        {complete && <div style={COMPLETE_STYLE}>{t('batch.complete')}</div>}
+        {complete && (
+          <div style={COMPLETE_STYLE}>
+            {allSkipped ? t('batch.allSkipped') : t('batch.complete')}
+          </div>
+        )}
+        {cancelled && <div style={CANCELLED_STYLE}>{t('batch.cancelled')}</div>}
       </div>
 
       <ul style={LIST_STYLE}>
@@ -145,6 +184,19 @@ export function DownloadDialog({
                 <span style={ROW_TITLE_STYLE} title={item.title}>
                   {item.title === '' ? t('batch.untitled') : item.title}
                 </span>
+                {(item.source !== undefined && item.source !== '') ||
+                (item.meta !== undefined && item.meta !== '') ? (
+                  <span style={ROW_META_STYLE}>
+                    {[
+                      item.source === undefined || item.source === ''
+                        ? ''
+                        : tpl(t('batch.source'), { source: item.source }),
+                      item.meta ?? '',
+                    ]
+                      .filter((part) => part !== '')
+                      .join(' · ')}
+                  </span>
+                ) : null}
                 {error !== undefined && error !== '' && (
                   <span style={ROW_ERROR_STYLE} title={error}>
                     {error}
@@ -282,4 +334,54 @@ const STATUS_CHIP_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.5,
   whiteSpace: 'nowrap',
+}
+
+const FOOTER_ACTIONS_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+const MODEL_BADGE_STYLE: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 8,
+  fontSize: 12,
+  lineHeight: 1.5,
+  paddingBottom: 4,
+  borderBottom: '1px solid rgba(127,127,127,0.18)',
+}
+
+const MODEL_TAG_STYLE: CSSProperties = {
+  flexShrink: 0,
+  padding: '1px 6px',
+  borderRadius: 4,
+  border: `1px solid ${ACCENT}`,
+  color: ACCENT,
+  fontWeight: 650,
+  fontSize: 11,
+}
+
+const REASON_STYLE: CSSProperties = {
+  opacity: 0.75,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  maxWidth: '100%',
+}
+
+const ROW_META_STYLE: CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.4,
+  opacity: 0.65,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const CANCELLED_STYLE: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 650,
+  color: ERROR,
 }
