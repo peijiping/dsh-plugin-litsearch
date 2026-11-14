@@ -49,6 +49,8 @@ import type {
   TaskSummary,
   ZoteroProbeResult,
   ZoteroSyncResult,
+  ZoteroSyncStatus,
+  ZoteroTargetsResult,
 } from '../../search/types.js'
 import { SOURCE_IDS } from '../../search/types.js'
 import { TaskEvents } from '../events.js'
@@ -846,16 +848,27 @@ export class TaskService {
     }
   }
 
-  /** 把选中论文同步到 Zotero（含本地 PDF 附件）。 */
+  /** 可写入的 Zotero 库与分类，供同步弹窗选择目标目录。 */
+  async zoteroTargets(): Promise<ZoteroTargetsResult> {
+    const settings = getSettings()
+    try {
+      return await new ZoteroConnector(settings.zoteroBaseUrl).listTargets()
+    } catch (error) {
+      return { ok: false, targets: [], error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 把选中论文同步到 Zotero（含本地 PDF 附件），并记录每篇的同步状态。 */
   async zoteroSync(
     id: string,
     paperIds?: readonly string[],
     workspace?: string,
+    target?: { id: string; name?: string; filesEditable?: boolean },
   ): Promise<ZoteroSyncResult> {
     const settings = getSettings()
     if (!settings.zoteroEnabled) throw new SearchError('bad_request', 'Zotero 同步已在设置中关闭')
     const task = await this.get(id)
-    const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
+    const workspaceDir = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
     const wanted =
       paperIds === undefined || paperIds.length === 0
         ? task.result.papers.slice(0, 50)
@@ -871,8 +884,9 @@ export class TaskService {
       )
     }
 
-    const readOnlyAttachments =
-      settings.zoteroAttachPdf && probe.collection?.filesEditable === false
+    // 目标目录优先：用户选定的分类可能是另一个库，不能只看当前选中的分类。
+    const filesEditable = target?.filesEditable ?? probe.collection?.filesEditable
+    const readOnlyAttachments = settings.zoteroAttachPdf && filesEditable === false
     const attachPdf = settings.zoteroAttachPdf && !readOnlyAttachments
     const inputs: { paper: Paper; tags: string[]; pdfPath?: string }[] = []
     for (const paper of wanted) {
@@ -881,7 +895,7 @@ export class TaskService {
       const group = task.groups.find((entry) => entry.id === state?.groupId)
       const tags = group === undefined ? [] : [group.name]
       const pdfPath = attachPdf
-        ? await this.ensureLocalPdf(paper, target, state?.pdfFile)
+        ? await this.ensureLocalPdf(paper, workspaceDir, state?.pdfFile)
         : undefined
       inputs.push({ paper, tags, ...(pdfPath === undefined ? {} : { pdfPath }) })
     }
@@ -891,11 +905,35 @@ export class TaskService {
         baseUrl: settings.zoteroBaseUrl,
         attachPdf,
         tag: settings.zoteroTag,
+        ...(target === undefined
+          ? {}
+          : {
+              targetId: target.id,
+              ...(target.name === undefined ? {} : { targetName: target.name }),
+            }),
       })
-      if (probe.collection === undefined) {
+      if (target === undefined && probe.collection === undefined) {
         result.messages.unshift('Zotero 当前未选择分类，条目已保存到「我的文库」')
       } else if (readOnlyAttachments) {
-        result.messages.unshift('当前分类不可写附件，已只保存条目；可在 Zotero 中换一个可写分类后重试')
+        const label = target === undefined ? '当前分类' : `「${target.name ?? target.id}」`
+        result.messages.unshift(`${label}不可写附件，已只保存条目；可换一个可写目录后重试`)
+      }
+
+      const collectionName = target === undefined ? probe.collection?.name : target.name
+      for (const item of result.items) {
+        await this.setZoteroState(
+          task,
+          item.paperId,
+          item.ok
+            ? {
+                zoteroStatus: 'synced',
+                ...(collectionName === undefined ? {} : { zoteroCollection: collectionName }),
+              }
+            : {
+                zoteroStatus: 'failed',
+                zoteroError: item.error ?? result.messages[0] ?? '同步失败',
+              },
+        )
       }
       return result
     } catch (error) {
@@ -904,6 +942,26 @@ export class TaskService {
         error instanceof Error ? error.message : String(error),
       )
     }
+  }
+
+  /** 记录单篇文献的 Zotero 同步状态；与 PDF 状态一样写回任务并广播。 */
+  private async setZoteroState(
+    task: SearchTask,
+    paperId: string,
+    patch: { zoteroStatus: ZoteroSyncStatus; zoteroCollection?: string; zoteroError?: string },
+  ): Promise<void> {
+    if (this.store.summary(task.id) === undefined) return
+    const current = task.states[paperId] ?? emptyState()
+    const next: PaperState = { ...current, zoteroStatus: patch.zoteroStatus }
+    if (patch.zoteroCollection === undefined) delete next.zoteroCollection
+    else next.zoteroCollection = patch.zoteroCollection.slice(0, 200)
+    if (patch.zoteroError === undefined) delete next.zoteroError
+    else next.zoteroError = patch.zoteroError.slice(0, 300)
+    task.states[paperId] = next
+    task.rev += 1
+    task.updatedAt = new Date().toISOString()
+    await this.store.save(task)
+    this.events.publish(toSummary(task))
   }
 
   /** 下载目录可写性测试（设置页）。 */

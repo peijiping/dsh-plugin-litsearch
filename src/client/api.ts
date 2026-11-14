@@ -32,6 +32,7 @@ import type {
   TaskSummary,
   ZoteroProbeResult,
   ZoteroSyncResult,
+  ZoteroTargetsResult,
 } from '../search/types'
 
 const BASE = '/dsh-litsearch/api'
@@ -334,6 +335,11 @@ export function probeZotero(): Promise<ZoteroProbeResult> {
   return request<ZoteroProbeResult>('/settings/zotero', writeInit('POST', {}))
 }
 
+/** 读取可写入的 Zotero 库与分类。 */
+export function fetchZoteroTargets(): Promise<ZoteroTargetsResult> {
+  return request<ZoteroTargetsResult>('/settings/zotero/targets', writeInit('POST', {}))
+}
+
 /** 下载单篇 PDF 到用户目录。 */
 export function downloadPaperPdf(
   taskId: string,
@@ -349,8 +355,23 @@ export function downloadPaperPdf(
 export function syncZotero(
   taskId: string,
   paperIds: readonly string[],
+  target?: { id: string; name?: string; filesEditable?: boolean },
 ): Promise<ZoteroSyncResult> {
-  return request<ZoteroSyncResult>(taskPath(taskId, '/zotero'), writeInit('POST', { paperIds }))
+  return request<ZoteroSyncResult>(
+    taskPath(taskId, '/zotero'),
+    writeInit('POST', {
+      paperIds,
+      ...(target === undefined
+        ? {}
+        : {
+            target: target.id,
+            ...(target.name === undefined ? {} : { targetName: target.name }),
+            ...(target.filesEditable === undefined
+              ? {}
+              : { targetFilesEditable: target.filesEditable }),
+          }),
+    }),
+  )
 }
 
 /** 点击「查看已下载」前确认本地文件仍在（页面加载后可能被删除）。 */

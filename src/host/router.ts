@@ -743,12 +743,24 @@ async function handleTasks(
     }
     const body = await readJsonBody(req)
     const ids = readStringArray(body['paperIds'], 'paperIds', 50, 80)
+    const targetId = readString(body['target'], 'target', 40)
+    const targetName = readString(body['targetName'], 'targetName', 200)
+    const targetFilesEditable = body['targetFilesEditable']
+    const target =
+      targetId === undefined || targetId === ''
+        ? undefined
+        : {
+            id: targetId,
+            ...(targetName === undefined || targetName === '' ? {} : { name: targetName }),
+            ...(typeof targetFilesEditable === 'boolean' ? { filesEditable: targetFilesEditable } : {}),
+          }
     ok(
       res,
       await service.zoteroSync(
         id,
         ids === undefined || ids === null ? undefined : ids,
         await resolveSessionWorkspace(sessionId),
+        target,
       ),
     )
     return
@@ -875,6 +887,10 @@ export function createHandler(
           const scope =
             readEnum((await readJsonBody(req))['scope'], 'scope', CLEANUP_SCOPES) ?? 'tasks'
           ok(res, await service.cleanup(scope))
+          return
+        }
+        if (seg[1] === 'zotero' && seg[2] === 'targets' && req.method === 'POST') {
+          ok(res, await service.zoteroTargets())
           return
         }
         if (seg[1] === 'zotero' && req.method === 'POST') {

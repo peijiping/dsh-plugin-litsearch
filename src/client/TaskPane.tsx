@@ -24,7 +24,6 @@ import {
   exportUrl,
   fetchPaper,
   fetchStats,
-  syncZotero,
   type ResultsQuery,
 } from './api'
 import { rememberTaskTitle } from './autoOpen'
@@ -32,6 +31,7 @@ import { CompareTab } from './CompareTab'
 import { ConditionEditor } from './ConditionEditor'
 import { paperSummary, paperText, papersSummary, papersText, taskSummary, taskText } from './compose'
 import { DownloadDialog, type BatchDownloadItem } from './DownloadDialog'
+import { ZoteroSyncDialog } from './ZoteroSyncDialog'
 import { FullTextTab, type FullTextView } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
 import {
@@ -149,6 +149,9 @@ export function TaskPane({
   /** 批量下载弹窗：只集中展示，真实状态仍写在 downloads / 任务详情的 states 里。 */
   const [batchItems, setBatchItems] = useState<readonly BatchDownloadItem[]>([])
   const [batchOpen, setBatchOpen] = useState(false)
+  /** Zotero 同步弹窗：单篇与批量共用，先选目标目录再同步，并展示逐篇结果。 */
+  const [zoteroItems, setZoteroItems] = useState<readonly BatchDownloadItem[]>([])
+  const [zoteroOpen, setZoteroOpen] = useState(false)
   const [batchRunning, setBatchRunning] = useState(false)
   const batchRunningRef = useRef(false)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
@@ -318,23 +321,15 @@ export function TaskPane({
     })()
   }
 
+  /** 单篇 / 批量共用一个弹窗：先选 Zotero 目录，再逐篇同步。 */
+  const openZotero = (nextItems: readonly BatchDownloadItem[]): void => {
+    if (taskId === null || nextItems.length === 0) return
+    setZoteroItems(nextItems)
+    setZoteroOpen(true)
+  }
+
   const zoteroPaper = (paper: Paper): void => {
-    if (taskId === null) return
-    void syncZotero(taskId, [paper.paperId])
-      .then((result) => {
-        notify(zoteroToast(t, result.saved, result.failed, result.messages))
-        if (result.failed > 0) {
-          setRisFallback({
-            ids: [paper.paperId],
-            message: result.messages[0] ?? t('pdf.zoteroFailed'),
-          })
-        }
-      })
-      .catch((error: unknown) => {
-        const message = messageOf(error)
-        notify(tpl(t('pdf.zoteroFailed'), { message }))
-        setRisFallback({ ids: [paper.paperId], message })
-      })
+    openZotero([{ paperId: paper.paperId, title: paper.title }])
   }
 
   const toggleSelect = (paperId: string): void => {
@@ -500,21 +495,13 @@ export function TaskPane({
 
   const zoteroIds = (paperIds: readonly string[]): void => {
     if (taskId === null || paperIds.length === 0) return
-    void syncZotero(taskId, paperIds)
-      .then((result) => {
-        notify(zoteroToast(t, result.saved, result.failed, result.messages))
-        if (result.failed > 0) {
-          setRisFallback({
-            ids: [...paperIds],
-            message: result.messages[0] ?? t('pdf.zoteroFailed'),
-          })
-        }
-      })
-      .catch((error: unknown) => {
-        const message = messageOf(error)
-        notify(tpl(t('pdf.zoteroFailed'), { message }))
-        setRisFallback({ ids: [...paperIds], message })
-      })
+    // 标题优先取当前页与已加载过的文献；跨页未加载的先留空，由弹窗显示「无标题」。
+    const known = new Map<string, string>()
+    for (const paper of view.page?.papers ?? []) known.set(paper.paperId, paper.title)
+    for (const paper of papersByIdRef.current.values()) {
+      if (!known.has(paper.paperId)) known.set(paper.paperId, paper.title)
+    }
+    openZotero(paperIds.map((paperId) => ({ paperId, title: known.get(paperId) ?? '' })))
   }
 
   const zoteroMany = (): void => zoteroIds(ids)
@@ -1162,6 +1149,26 @@ export function TaskPane({
           view.reload()
         }}
       />
+      <ZoteroSyncDialog
+        t={t}
+        open={zoteroOpen}
+        taskId={taskId}
+        items={zoteroItems}
+        states={detail.states}
+        onClose={() => {
+          setZoteroOpen(false)
+          view.reload()
+        }}
+        onDone={(failedIds) => {
+          // 同步状态已写回 Host，刷新列表让卡片上的「已同步」立刻生效。
+          view.reload()
+          if (failedIds.length === 0) return
+          setRisFallback({
+            ids: failedIds,
+            message: t('zotero.dialog.failFallback'),
+          })
+        }}
+      />
       <RoundsDialog
         t={t}
         open={showRounds}
@@ -1691,17 +1698,6 @@ function Pager({
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function zoteroToast(
-  t: Translate,
-  saved: number,
-  failed: number,
-  messages: readonly string[],
-): string {
-  const detail = messages[0] ?? ''
-  if (failed === 0 && detail === '') return tpl(t('pdf.zoteroDone'), { n: saved })
-  return tpl(t('pdf.zoteroPartial'), { saved, failed, message: detail })
 }
 
 /** 结果页「检索还在进行」的提示条：蓝色高亮块 + 旋转图标。 */

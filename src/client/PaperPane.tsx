@@ -22,7 +22,6 @@ import {
   exportUrl,
   fetchPaper,
   paperFullTextUrl,
-  syncZotero,
 } from './api'
 import { paperSummary, paperText } from './compose'
 import { DownloadButton } from './DownloadButton'
@@ -30,6 +29,7 @@ import { EntityPanel } from './Entities'
 import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
 import { PreviewFrame } from './PreviewFrame'
+import { ZoteroSyncDialog } from './ZoteroSyncDialog'
 import { subscribeTaskSummary } from './taskListStore'
 import {
   ERROR,
@@ -123,6 +123,7 @@ export function PaperPane({
     setToastTone(tone)
   }
   const [showHtml, setShowHtml] = useState(false)
+  const [zoteroOpen, setZoteroOpen] = useState(false)
   const [risFallback, setRisFallback] = useState<{ ids: readonly string[]; message: string } | null>(
     null,
   )
@@ -232,31 +233,7 @@ export function PaperPane({
   }
 
   const zotero = (): void => {
-    setBusy(true)
-    void syncZotero(taskId, [paper.paperId])
-      .then((result) => {
-        const message = result.messages[0] ?? ''
-        if (result.failed === 0 && message === '') {
-          notify(tpl(t('pdf.zoteroDone'), { n: result.saved }))
-        } else {
-          notify(
-            tpl(t('pdf.zoteroPartial'), {
-              saved: result.saved,
-              failed: result.failed,
-              message,
-            }),
-          )
-        }
-        if (result.failed > 0) {
-          setRisFallback({ ids: [paper.paperId], message: message || t('pdf.zoteroFailed') })
-        }
-      })
-      .catch((err: unknown) => {
-        const message = messageOf(err)
-        notify(tpl(t('pdf.zoteroFailed'), { message }))
-        setRisFallback({ ids: [paper.paperId], message })
-      })
-      .finally(() => setBusy(false))
+    setZoteroOpen(true)
   }
 
   const pdfStatus: PdfStatus =
@@ -481,6 +458,23 @@ export function PaperPane({
         </div>
       )}
 
+      <ZoteroSyncDialog
+        t={t}
+        open={zoteroOpen}
+        taskId={taskId}
+        items={[{ paperId: paper.paperId, title: paper.title }]}
+        states={state === undefined ? {} : { [paper.paperId]: state }}
+        onClose={() => {
+          setZoteroOpen(false)
+          setNonce((value) => value + 1)
+        }}
+        onDone={(failedIds) => {
+          setNonce((value) => value + 1)
+          if (failedIds.length === 0) return
+          setRisFallback({ ids: failedIds, message: t('zotero.dialog.failFallback') })
+        }}
+      />
+
       <div style={ACTION_STYLE}>
         <Button variant="ghost" size="sm" type="button" onClick={insert}>
           {t('result.insert')}
@@ -511,8 +505,30 @@ export function PaperPane({
             {t('pdf.fulltext')}
           </button>
         )}
-        <button type="button" style={linkButtonStyle} disabled={busy} onClick={zotero}>
-          {t('pdf.zotero')}
+        <button
+          type="button"
+          style={
+            state?.zoteroStatus === 'synced'
+              ? { ...linkButtonStyle, color: '#2e9e5b' }
+              : state?.zoteroStatus === 'failed'
+                ? { ...linkButtonStyle, color: ERROR }
+                : linkButtonStyle
+          }
+          title={
+            state?.zoteroStatus === 'synced'
+              ? state.zoteroCollection
+              : state?.zoteroStatus === 'failed'
+                ? state.zoteroError
+                : undefined
+          }
+          disabled={busy}
+          onClick={zotero}
+        >
+          {state?.zoteroStatus === 'synced'
+            ? t('pdf.zoteroSynced')
+            : state?.zoteroStatus === 'failed'
+              ? t('pdf.zoteroRetry')
+              : t('pdf.zotero')}
         </button>
         {paper.pdfUrl !== '' && (
           <a style={linkStyle} href={paper.pdfUrl} target="_blank" rel="noreferrer noopener">

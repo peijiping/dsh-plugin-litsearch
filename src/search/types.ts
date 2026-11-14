@@ -231,6 +231,9 @@ export function isManualPdfFailure(reason: PdfFailureReason | undefined): boolea
   return reason !== undefined && reason !== 'failed'
 }
 
+/** 文献 → Zotero 的同步状态；缺省表示尚未同步。 */
+export type ZoteroSyncStatus = 'synced' | 'failed'
+
 /** 论文级人工筛选状态。 */
 export interface PaperState {
   screening: Screening
@@ -240,6 +243,12 @@ export interface PaperState {
   pdfError?: string
   /** 已下载到用户目录的绝对路径。 */
   pdfFile?: string
+  /** 最近一次 Zotero 同步结果；缺省为未同步。 */
+  zoteroStatus?: ZoteroSyncStatus
+  /** 同步到的 Zotero 目录名，便于列表直接展示。 */
+  zoteroCollection?: string
+  /** 同步失败原因（面向用户的一句话）。 */
+  zoteroError?: string
 }
 
 export interface TaskGroup {
@@ -508,6 +517,32 @@ export interface ZoteroProbeResult {
   error?: string
 }
 
+/** Zotero 可写入的目标（库或分类），id 为 connector 的 treeViewID。 */
+export interface ZoteroTarget {
+  id: string
+  name: string
+  level: number
+  filesEditable?: boolean
+  recent?: boolean
+}
+
+/** Zotero 目标目录列表。 */
+export interface ZoteroTargetsResult {
+  ok: boolean
+  targets: ZoteroTarget[]
+  /** 当前 Zotero 里选中的目标。 */
+  current?: { id: string; name: string }
+  error?: string
+}
+
+/** 单篇同步结果。 */
+export interface ZoteroSyncItemResult {
+  paperId: string
+  ok: boolean
+  attached: boolean
+  error?: string
+}
+
 /** Zotero 批量同步结果。 */
 export interface ZoteroSyncResult {
   ok: boolean
@@ -515,6 +550,7 @@ export interface ZoteroSyncResult {
   attached: number
   failed: number
   messages: string[]
+  items: ZoteroSyncItemResult[]
 }
 
 /** 下载目录可写性测试结果。 */

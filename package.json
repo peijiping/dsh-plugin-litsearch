@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-litsearch",
-  "version": "0.3.0",
+  "version": "0.3.5",
   "description": "Search free scholarly literature sources from DSH. The model can search OpenAlex, Crossref and more with native tools, while you can run the same searches in a sidebar panel and send any paper into the conversation.",
   "keywords": [
     "dsh",

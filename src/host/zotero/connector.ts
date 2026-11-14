@@ -9,7 +9,14 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 
-import type { Paper, ZoteroProbeResult, ZoteroSyncResult } from '../../search/types.js'
+import type {
+  Paper,
+  ZoteroProbeResult,
+  ZoteroSyncItemResult,
+  ZoteroSyncResult,
+  ZoteroTarget,
+  ZoteroTargetsResult,
+} from '../../search/types.js'
 
 const PING_TIMEOUT_MS = 3_000
 const SAVE_TIMEOUT_MS = 20_000
@@ -20,6 +27,10 @@ export interface ZoteroConnectorOptions {
   baseUrl: string
   attachPdf: boolean
   tag: string
+  /** connector 的 treeViewID（如 `C15`）；缺省沿用 Zotero 当前选中的目录。 */
+  targetId?: string
+  /** 目标目录名，仅用于失败提示。 */
+  targetName?: string
 }
 
 export interface ZoteroSyncInput {
@@ -63,7 +74,8 @@ export class ZoteroConnector {
         return { ok: false, error: `connector 返回 HTTP ${response.status}` }
       }
       const version = response.headers.get('x-zotero-version') ?? undefined
-      const collection = await this.selectedCollection().catch(() => null)
+      const info = await this.fetchTargetInfo().catch(() => null)
+      const collection = info === null ? null : selectedOf(info)
       const result: ZoteroProbeResult = { ok: true }
       if (version !== undefined) result.version = version
       if (collection !== null) {
@@ -82,25 +94,39 @@ export class ZoteroConnector {
     }
   }
 
-  /** 当前 Zotero 里选中的分类；未选中时返回 null。 */
-  async selectedCollection(): Promise<SelectedCollection | null> {
-    const response = await this.request('/connector/getSelectedCollection', {
-      method: 'GET',
-      timeoutMs: PING_TIMEOUT_MS,
-    })
-    if (!response.ok) return null
-    const body = (await response.json().catch(() => null)) as unknown
-    if (body === null || body === false || typeof body !== 'object') return null
-    const record = body as Record<string, unknown>
-    const id = record['id']
-    const name = record['name']
-    if ((typeof id !== 'number' && typeof id !== 'string') || typeof name !== 'string') return null
-    const collection: SelectedCollection = { id, name }
-    if (typeof record['libraryID'] === 'number') collection.libraryID = record['libraryID']
-    if (typeof record['filesEditable'] === 'boolean') {
-      collection.filesEditable = record['filesEditable']
+  /** 所有可写入的库与分类，供同步弹窗选择目标。 */
+  async listTargets(): Promise<ZoteroTargetsResult> {
+    try {
+      const info = await this.fetchTargetInfo()
+      const targets: ZoteroTarget[] = []
+      for (const raw of info.targets ?? []) {
+        const target = toTarget(raw)
+        if (target !== null) targets.push(target)
+      }
+      const selected = selectedOf(info)
+      const result: ZoteroTargetsResult = { ok: true, targets }
+      if (selected !== null) result.current = { id: selected.treeViewID, name: selected.name }
+      return result
+    } catch (error) {
+      return { ok: false, targets: [], error: describe(error) }
     }
-    return collection
+  }
+
+  /**
+   * `/connector/getSelectedCollection` 只接受 POST，返回当前目标与全部可写目标。
+   * 注意 GET 会直接 400，因此不能沿用 ping 的方式。
+   */
+  private async fetchTargetInfo(): Promise<TargetInfo> {
+    const response = await this.request('/connector/getSelectedCollection', {
+      method: 'POST',
+      timeoutMs: PING_TIMEOUT_MS,
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    if (!response.ok) throw new Error(`connector 返回 HTTP ${response.status}`)
+    const body = (await response.json().catch(() => null)) as unknown
+    if (body === null || typeof body !== 'object') throw new Error('connector 返回空响应')
+    return body as TargetInfo
   }
 
   /**
@@ -110,16 +136,17 @@ export class ZoteroConnector {
    * messages，条目仍算保存成功。
    */
   async sync(inputs: readonly ZoteroSyncInput[], options: ZoteroConnectorOptions): Promise<ZoteroSyncResult> {
-    if (inputs.length === 0) return { ok: true, saved: 0, attached: 0, failed: 0, messages: [] }
-    if (inputs.length > MAX_SYNC_ITEMS) {
-      throw new Error(`一次最多同步 ${MAX_SYNC_ITEMS} 篇`)
-    }
     const result: ZoteroSyncResult = {
       ok: true,
       saved: 0,
       attached: 0,
       failed: 0,
       messages: [],
+      items: [],
+    }
+    if (inputs.length === 0) return result
+    if (inputs.length > MAX_SYNC_ITEMS) {
+      throw new Error(`一次最多同步 ${MAX_SYNC_ITEMS} 篇`)
     }
 
     for (const input of inputs) {
@@ -127,30 +154,75 @@ export class ZoteroConnector {
       const item = toZoteroItem(input.paper, input.tags, options.tag)
       try {
         await this.saveItem(item, sessionID)
-        result.saved += 1
       } catch (error) {
+        const reason = describe(error)
         result.failed += 1
-        result.messages.push(`${shortTitle(input.paper.title)}：条目保存失败（${describe(error)}）`)
+        result.messages.push(`${shortTitle(input.paper.title)}：条目保存失败（${reason}）`)
+        result.items.push({ paperId: input.paper.paperId, ok: false, attached: false, error: reason })
         continue
       }
 
-      if (!options.attachPdf || input.pdfPath === undefined) continue
-      const parentId = typeof item['id'] === 'string' ? item['id'] : null
-      if (parentId === null) {
-        result.messages.push(`${shortTitle(input.paper.title)}：条目已保存，但缺少条目 id，未上传 PDF`)
-        continue
+      // 条目先落到 Zotero 当前选中的目录，再用 updateSession 搬到用户选的目录。
+      if (options.targetId !== undefined) {
+        try {
+          await this.moveToTarget(sessionID, options.targetId)
+        } catch (error) {
+          const targetName = options.targetName ?? options.targetId
+          const reason = `未能移入「${targetName}」（${describe(error)}）`
+          result.failed += 1
+          result.messages.push(`${shortTitle(input.paper.title)}：条目已保存，但${reason}`)
+          result.items.push({
+            paperId: input.paper.paperId,
+            ok: false,
+            attached: false,
+            error: reason,
+          })
+          continue
+        }
       }
-      try {
-        const buffer = await readFile(input.pdfPath)
-        await this.saveAttachment(parentId, sessionID, input.paper, buffer)
-        result.attached += 1
-      } catch (error) {
-        result.messages.push(`${shortTitle(input.paper.title)}：PDF 附件失败（${describe(error)}）`)
+      result.saved += 1
+
+      let attached = false
+      if (options.attachPdf && input.pdfPath !== undefined) {
+        const parentId = typeof item['id'] === 'string' ? item['id'] : null
+        if (parentId === null) {
+          result.messages.push(`${shortTitle(input.paper.title)}：条目已保存，但缺少条目 id，未上传 PDF`)
+        } else {
+          try {
+            const buffer = await readFile(input.pdfPath)
+            await this.saveAttachment(parentId, sessionID, input.paper, buffer)
+            result.attached += 1
+            attached = true
+          } catch (error) {
+            result.messages.push(`${shortTitle(input.paper.title)}：PDF 附件失败（${describe(error)}）`)
+          }
+        }
       }
+
+      result.items.push({ paperId: input.paper.paperId, ok: true, attached })
     }
 
     result.ok = result.failed === 0
     return result
+  }
+
+  /**
+   * 把本会话已保存的条目移动到指定目标。
+   *
+   * `tags` 传空数组：saveItems 用 `forceTagType: 1` 写入的标签是自动标签，
+   * updateSession 会保留自动标签；传空数组可避免同名标签重复写入。
+   */
+  private async moveToTarget(sessionID: string, target: string): Promise<void> {
+    const response = await this.request('/connector/updateSession', {
+      method: 'POST',
+      timeoutMs: SAVE_TIMEOUT_MS,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionID, target, tags: [] }),
+    })
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).slice(0, 120)
+      throw new Error(`connector 返回 HTTP ${response.status}${detail === '' ? '' : `（${detail}）`}`)
+    }
   }
 
   /**
@@ -230,11 +302,67 @@ export class ZoteroConnector {
   }
 }
 
+interface RawTarget {
+  id?: unknown
+  name?: unknown
+  level?: unknown
+  filesEditable?: unknown
+  recent?: unknown
+}
+
+/** `/connector/getSelectedCollection` 的响应（只声明用到的字段）。 */
+interface TargetInfo {
+  id?: unknown
+  name?: unknown
+  libraryID?: unknown
+  filesEditable?: unknown
+  targets?: RawTarget[]
+}
+
 interface SelectedCollection {
   id: number | string
   name: string
+  /** connector 用来标识目标的 treeViewID，如 `C15` / `L1`。 */
+  treeViewID: string
   libraryID?: number
   filesEditable?: boolean
+}
+
+/** 当前选中目标。未选中分类时 `id` 为 null，用 libraryID 组成 `L<n>`。 */
+function selectedOf(info: TargetInfo): SelectedCollection | null {
+  if (typeof info.name !== 'string') return null
+  const libraryID = typeof info.libraryID === 'number' ? info.libraryID : undefined
+  let treeViewID: string
+  if (typeof info.id === 'number') treeViewID = `C${info.id}`
+  else if (typeof info.id === 'string' && isTargetId(info.id)) treeViewID = info.id
+  else if (libraryID !== undefined) treeViewID = `L${libraryID}`
+  else return null
+
+  const selected: SelectedCollection = {
+    id: typeof info.id === 'number' || typeof info.id === 'string' ? info.id : treeViewID,
+    name: info.name,
+    treeViewID,
+  }
+  if (libraryID !== undefined) selected.libraryID = libraryID
+  if (typeof info.filesEditable === 'boolean') selected.filesEditable = info.filesEditable
+  return selected
+}
+
+function toTarget(raw: RawTarget): ZoteroTarget | null {
+  if (typeof raw.id !== 'string' || typeof raw.name !== 'string') return null
+  if (!isTargetId(raw.id)) return null
+  const target: ZoteroTarget = {
+    id: raw.id,
+    name: raw.name,
+    level: typeof raw.level === 'number' ? raw.level : 0,
+  }
+  if (typeof raw.filesEditable === 'boolean') target.filesEditable = raw.filesEditable
+  if (raw.recent === true) target.recent = true
+  return target
+}
+
+function isTargetId(value: string): boolean {
+  return /^[LC]\d+$/u.test(value)
 }
 
 function toZoteroItem(

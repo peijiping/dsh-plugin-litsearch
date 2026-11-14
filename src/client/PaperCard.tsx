@@ -25,6 +25,7 @@ import { tpl, type Translate } from './locales'
 import { PreviewFrame } from './PreviewFrame'
 import {
   ACCENT,
+  ERROR,
   abstractStyle,
   actionRowStyle,
   badgeRowStyle,
@@ -169,6 +170,25 @@ export function PaperCard({
         : failedMessage !== undefined
         ? tpl(t('pdf.retryHint'), { message: failedMessage })
         : tpl(t('pdf.downloadHint'), { path: downloadDir ?? t('pdf.downloadDirUnknown') })
+  // Zotero 状态沿用卡片上的既有约定：文字回显结果，悬停看目标目录或失败原因。
+  const zoteroLabel =
+    state?.zoteroStatus === 'synced'
+      ? t('pdf.zoteroSynced')
+      : state?.zoteroStatus === 'failed'
+        ? t('pdf.zoteroRetry')
+        : t('pdf.zotero')
+  const zoteroHint =
+    state?.zoteroStatus === 'synced'
+      ? state.zoteroCollection
+      : state?.zoteroStatus === 'failed'
+        ? state.zoteroError
+        : undefined
+  const zoteroColor =
+    state?.zoteroStatus === 'synced'
+      ? '#2e9e5b'
+      : state?.zoteroStatus === 'failed'
+        ? ERROR
+        : undefined
 
   return (
     <article style={cardStyle}>
@@ -363,11 +383,12 @@ export function PaperCard({
           )}
           <button
             type="button"
-            style={linkButtonStyle}
+            style={zoteroColor === undefined ? linkButtonStyle : { ...linkButtonStyle, color: zoteroColor }}
             disabled={busy}
+            title={zoteroHint}
             onClick={() => onZotero(paper)}
           >
-            {t('pdf.zotero')}
+            {zoteroLabel}
           </button>
           {paper.pdfUrl !== '' && (
             <a style={linkStyle} href={paper.pdfUrl} target="_blank" rel="noreferrer noopener">
