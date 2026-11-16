@@ -312,12 +312,39 @@ export function ZoteroSyncDialog({
     setNotice(undefined)
     setHasRun(true)
     stopRef.current = false
-    // 「已存在」的行保持跳过；其余重置为待同步后再开跑。
-    const list = rows.map((row) =>
-      row.phase === 'skipped'
-        ? row
-        : { ...row, phase: 'pending' as RowPhase, error: undefined, note: undefined },
-    )
+
+    // 每次开跑前重新查重：上一轮刚存入的条目此时已在目标目录里，必须改成跳过，
+    // 否则「重新同步」会把它们再存一遍，产生重复。
+    setChecking(true)
+    let found: Map<string, ZoteroDuplicateMatch> | undefined
+    try {
+      const result = await checkZoteroDuplicates(taskId, items.map((item) => item.paperId), {
+        id: target.id,
+        name: target.name,
+      })
+      found = result.ok
+        ? new Map(result.duplicates.map((entry) => [entry.paperId, entry.matchedBy]))
+        : undefined
+      setCheckNote(result.note)
+      setCheckedTargetId(target.id)
+    } catch (error) {
+      // 查重失败不阻塞同步；已确认的跳过项保持跳过，绝不自动重存。
+      setCheckNote(error instanceof Error ? error.message : String(error))
+    } finally {
+      setChecking(false)
+    }
+
+    const list = rows.map((row): Row => {
+      const matchedBy = found?.get(row.paperId)
+      if (matchedBy !== undefined) {
+        return { ...row, phase: 'skipped', duplicate: matchedBy, error: undefined, note: undefined }
+      }
+      if (row.phase === 'skipped') {
+        // 查重确认已不在目标目录（或本轮查重失败）：恢复待同步，绝不自动重存。
+        return found === undefined ? row : { ...row, phase: 'pending', duplicate: undefined }
+      }
+      return { ...row, phase: 'pending', error: undefined, note: undefined }
+    })
     setRows(list)
     const failedIds: string[] = []
     const work = list.filter((row) => row.phase !== 'skipped')

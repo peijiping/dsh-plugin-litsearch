@@ -32,8 +32,9 @@ export interface ZoteroTargetPath {
 /**
  * 由 connector 的扁平 targets 还原目标的库与名称路径。
  *
- * targets 按前序排列：每个库一个 level 0 项，随后是该库的集合（level = 深度+1）。
- * 因此从目标往前找最近一个 level 0 项即为所属库；level 0 之后的名字依次为路径。
+ * targets 按 Zotero 树的前序排列，`level` 是缩进层级：库为 0，库下集合为 1。
+ * 用 level 栈还原祖先链——只保留当前目标的真实祖先，不能把同级兄弟目录
+ * （如「减脂」与「口腔异味」）也算进路径。
  */
 export function resolveTargetPath(
   targets: readonly ZoteroTarget[],
@@ -41,12 +42,18 @@ export function resolveTargetPath(
 ): ZoteroTargetPath | undefined {
   const index = targets.findIndex((target) => target.id === targetId)
   if (index < 0) return undefined
-  let root = index
-  while (root > 0 && targets[root]?.level !== 0) root -= 1
-  const library = targets[root]
+  const stack: ZoteroTarget[] = []
+  for (let cursor = 0; cursor <= index; cursor += 1) {
+    const target = targets[cursor]
+    if (target === undefined) continue
+    const level = Number.isFinite(target.level) ? target.level : 0
+    while (stack.length > 0 && (stack[stack.length - 1]?.level ?? 0) >= level) stack.pop()
+    stack.push(target)
+  }
+  const library = stack[0]
   if (library === undefined || library.level !== 0) return undefined
-  const path = targets
-    .slice(root + 1, index + 1)
+  const path = stack
+    .slice(1)
     .map((target) => target.name)
     .filter((name) => name !== '')
   return { library, path }

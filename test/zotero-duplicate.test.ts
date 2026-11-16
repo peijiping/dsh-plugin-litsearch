@@ -20,6 +20,8 @@ function target(id: string, name: string, level: number): ZoteroTarget {
 
 const TARGETS: ZoteroTarget[] = [
   target('L1', '我的文库', 0),
+  // 同级兄弟目录：不能因为排在前面就被算进后续目标的祖先链。
+  target('C0', '减脂', 1),
   target('C1', '综述', 1),
   target('C2', '深度学习', 2),
   target('C3', '综述（待读）', 2),
