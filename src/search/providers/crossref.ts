@@ -16,7 +16,8 @@ import {
   normalizeDoi,
   stripTags,
 } from '../normalize.js'
-import type { PaperRecord, Provider } from '../types.js'
+import { bestPdfUrl, mergeOaLocations } from '../oa.js'
+import type { OaLocation, PaperRecord, Provider } from '../types.js'
 
 const ENDPOINT = 'https://api.crossref.org/works'
 
@@ -84,11 +85,12 @@ export const crossref: Provider = {
 function mapItem(raw: unknown): PaperRecord {
   const item = asRecord(raw)
   const doi = normalizeDoi(item['DOI'])
-  const links = asArray(item['link']).map(asRecord)
-  const pdfLink = links.find((link) => asString(link['content-type']) === 'application/pdf')
   const licenseText = asArray(item['license'])
     .map((entry) => asString(asRecord(entry)['URL']))
     .join(' ')
+  // Crossref 没有统一的 OA 标志，这里按许可证 URL 粗略判断。
+  const openAccess = /creativecommons|open\s*access/iu.test(licenseText)
+  const oaLocations = readLinks(item['link'], openAccess, licenseText)
   const issued = asArray(asRecord(item['issued'])['date-parts'])[0]
   const language = asString(item['language'])
 
@@ -107,11 +109,38 @@ function mapItem(raw: unknown): PaperRecord {
     abstract: stripTags(item['abstract']),
     ...(language === '' ? {} : { language }),
     citedBy: asNumber(item['is-referenced-by-count']),
-    // Crossref 没有统一的 OA 标志，这里按许可证 URL 粗略判断。
-    openAccess: /creativecommons|open\s*access/iu.test(licenseText),
-    pdfUrl: pdfLink === undefined ? '' : asString(pdfLink['URL']),
+    openAccess,
+    pdfUrl: bestPdfUrl(oaLocations),
+    ...(oaLocations.length === 0 ? {} : { oaLocations }),
     type: asString(item['type']),
   }
+}
+
+/**
+ * `link[]` 里 `content-type` 常带 charset，必须前缀匹配；`text-mining` 专用
+ * 链接只作信息保留，不作为自动下载候选（合规）。
+ */
+function readLinks(value: unknown, openAccess: boolean, licenseText: string): OaLocation[] {
+  const locations: OaLocation[] = []
+  for (const entry of asArray(value)) {
+    const link = asRecord(entry)
+    const url = asString(link['URL'])
+    if (url === '') continue
+    const type = asString(link['content-type']).toLowerCase()
+    if (!type.startsWith('application/pdf')) continue
+    const intended = asString(link['intended-application']).toLowerCase()
+    const textMining = intended === 'text-mining'
+    const license = licenseText === '' ? undefined : licenseText
+    locations.push({
+      url,
+      kind: 'pdf',
+      source: 'metadata',
+      oa: openAccess && !textMining,
+      ...(license === undefined ? {} : { license }),
+      ...(textMining ? { textMining: true } : {}),
+    })
+  }
+  return mergeOaLocations([locations])
 }
 
 function authorName(raw: unknown): string {

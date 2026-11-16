@@ -10,6 +10,7 @@
 
 import type { Paper, PaperHit, PaperIds, PaperRecord, SourceId } from './types.js'
 import { SOURCE_IDS } from './types.js'
+import { bestPdfUrl, mergeOaLocations } from './oa.js'
 
 /** 各源权重（与方案一致）。 */
 const RRF_WEIGHTS: Record<SourceId, number> = {
@@ -20,6 +21,10 @@ const RRF_WEIGHTS: Record<SourceId, number> = {
   semanticscholar: 0.9,
   arxiv: 0.85,
   pubtator: 0.7,
+  // 新增源权重低于老牌索引，避免专库结果在综合检索里刷屏。
+  doaj: 0.85,
+  openreview: 0.8,
+  openaire: 0.9,
   googlescholar: 0.95,
 }
 
@@ -136,7 +141,16 @@ function mergeRecord(base: PaperRecord, extra: PaperRecord): void {
   base.ids = mergeIds(base.ids, extra.ids)
   if (base.ids.doi !== '') base.doi = base.ids.doi
   if (extra.abstract.length > base.abstract.length) base.abstract = extra.abstract
-  if (base.pdfUrl === '' && extra.pdfUrl !== '') base.pdfUrl = extra.pdfUrl
+  // OA 位置取并集：多源各给一条时全部保留，`pdfUrl` 按统一排序重算，
+  // 避免「先到先得」让仓储渲染页压过静态直链。
+  const locations = mergeOaLocations([base.oaLocations ?? [], extra.oaLocations ?? []])
+  if (locations.length > 0) {
+    base.oaLocations = locations
+    const best = bestPdfUrl(locations)
+    if (best !== '') base.pdfUrl = best
+  } else if (base.pdfUrl === '' && extra.pdfUrl !== '') {
+    base.pdfUrl = extra.pdfUrl
+  }
   if (extra.venue.length > base.venue.length) base.venue = extra.venue
   if (base.year === null) base.year = extra.year
   if (base.citedBy === null || (extra.citedBy !== null && extra.citedBy > base.citedBy)) {

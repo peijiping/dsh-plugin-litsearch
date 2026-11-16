@@ -45,6 +45,11 @@ export type FieldName =
   | 'pdfCacheMaxMb'
   | 'autoDownloadPdf'
   | 'enableEpmcFulltext'
+  | 'pdfTimeoutMs'
+  | 'pdfRetryCount'
+  | 'pdfPerHostConcurrency'
+  | 'enableOaLookup'
+  | 'enableArxivHtml'
   | 'zoteroEnabled'
   | 'zoteroBaseUrl'
   | 'zoteroAttachPdf'
@@ -61,6 +66,8 @@ export const AUTO_OPEN_FIELD: FieldName = 'autoOpenTaskTab'
 export const PDF_ROOT_FIELD: FieldName = 'pdfRoot'
 export const AUTO_DOWNLOAD_FIELD: FieldName = 'autoDownloadPdf'
 export const EPMC_FULLTEXT_FIELD: FieldName = 'enableEpmcFulltext'
+export const OA_LOOKUP_FIELD: FieldName = 'enableOaLookup'
+export const ARXIV_HTML_FIELD: FieldName = 'enableArxivHtml'
 export const ZOTERO_ENABLED_FIELD: FieldName = 'zoteroEnabled'
 export const ZOTERO_BASE_URL_FIELD: FieldName = 'zoteroBaseUrl'
 export const ZOTERO_ATTACH_FIELD: FieldName = 'zoteroAttachPdf'
@@ -78,6 +85,9 @@ const NUMBER_FIELDS: readonly FieldName[] = [
   'taskMaxPapers',
   'pdfMaxMb',
   'pdfCacheMaxMb',
+  'pdfTimeoutMs',
+  'pdfRetryCount',
+  'pdfPerHostConcurrency',
 ]
 
 const TEXT_FIELDS: readonly FieldName[] = [
@@ -91,6 +101,8 @@ const BOOLEAN_FIELDS: readonly FieldName[] = [
   AUTO_OPEN_FIELD,
   AUTO_DOWNLOAD_FIELD,
   EPMC_FULLTEXT_FIELD,
+  OA_LOOKUP_FIELD,
+  ARXIV_HTML_FIELD,
   ZOTERO_ENABLED_FIELD,
   ZOTERO_ATTACH_FIELD,
 ]
@@ -189,6 +201,11 @@ export interface SettingsState extends SettingsFormState {
   pdfCacheMaxMb: SettingsFieldState
   autoDownloadPdf: SettingsFieldState
   enableEpmcFulltext: SettingsFieldState
+  pdfTimeoutMs: SettingsFieldState
+  pdfRetryCount: SettingsFieldState
+  pdfPerHostConcurrency: SettingsFieldState
+  enableOaLookup: SettingsFieldState
+  enableArxivHtml: SettingsFieldState
   zoteroEnabled: SettingsFieldState
   zoteroBaseUrl: SettingsFieldState
   zoteroAttachPdf: SettingsFieldState
@@ -245,6 +262,11 @@ export class LitsearchSettingsController {
       pdfCacheMaxMb: this.form.field('pdfCacheMaxMb'),
       autoDownloadPdf: this.form.field(AUTO_DOWNLOAD_FIELD),
       enableEpmcFulltext: this.form.field(EPMC_FULLTEXT_FIELD),
+      pdfTimeoutMs: this.form.field('pdfTimeoutMs'),
+      pdfRetryCount: this.form.field('pdfRetryCount'),
+      pdfPerHostConcurrency: this.form.field('pdfPerHostConcurrency'),
+      enableOaLookup: this.form.field(OA_LOOKUP_FIELD),
+      enableArxivHtml: this.form.field(ARXIV_HTML_FIELD),
       zoteroEnabled: this.form.field(ZOTERO_ENABLED_FIELD),
       zoteroBaseUrl: this.form.field(ZOTERO_BASE_URL_FIELD),
       zoteroAttachPdf: this.form.field(ZOTERO_ATTACH_FIELD),

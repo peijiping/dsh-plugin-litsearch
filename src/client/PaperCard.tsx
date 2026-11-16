@@ -10,6 +10,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type {
   AnnotationInput,
+  OaLocation,
   Paper,
   PaperState,
   PdfFailureReason,
@@ -55,6 +56,8 @@ export interface PdfDownloadUi {
   error?: string
   /** Host 返回的失败根因；用于区分「程序故障」与「需手动保存」。 */
   reason?: PdfFailureReason
+  /** Host 返回的可点击全文位置，失败时用于渲染动作条。 */
+  links?: OaLocation[]
 }
 
 const SCREENING_COLOR: Record<Screening, string> = {
@@ -133,7 +136,27 @@ export function PaperCard({
   const canPdf =
     !NO_PDF_STATUSES.has(pdfStatus) &&
     (paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '' || paper.doi !== '')
-  const canHtml = paper.ids.pmcid !== ''
+  // arXiv 预印本没有 PMCID，但有网页全文；条件不能只看 PMCID。
+  const canHtml = paper.ids.pmcid !== '' || paper.ids.arxivId !== ''
+  const pdfLocations = (paper.oaLocations ?? []).filter(
+    (location) => location.kind === 'pdf' && location.textMining !== true,
+  )
+  const directPdfUrl =
+    paper.pdfUrl !== '' ? paper.pdfUrl : pdfLocations[0]?.url ?? ''
+  // 下载失败（或已知被墙/需订阅）时给出可点击的替代路径，而不是只弹 toast。
+  const showLinkBar =
+    download?.state === 'failed' ||
+    pdfStatus === 'failed' ||
+    pdfStatus === 'blocked' ||
+    pdfStatus === 'paywalled'
+  const linkBarPdfs = [
+    ...new Set([
+      ...(download?.links ?? [])
+        .filter((location) => location.kind === 'pdf')
+        .map((location) => location.url),
+      ...pdfLocations.map((location) => location.url),
+    ]),
+  ].slice(0, 3)
 
   // 下载状态优先取面板的即时结果；刷新后回落到 Host 记录的已下载路径。
   const downloading = download?.state === 'downloading'
@@ -390,8 +413,8 @@ export function PaperCard({
           >
             {zoteroLabel}
           </button>
-          {paper.pdfUrl !== '' && (
-            <a style={linkStyle} href={paper.pdfUrl} target="_blank" rel="noreferrer noopener">
+          {directPdfUrl !== '' && (
+            <a style={linkStyle} href={directPdfUrl} target="_blank" rel="noreferrer noopener">
               {t('result.pdf')}
             </a>
           )}
@@ -407,6 +430,44 @@ export function PaperCard({
           )}
         </div>
       </div>
+
+      {showLinkBar && (linkBarPdfs.length > 0 || paper.doi !== '' || canHtml) && (
+        <div style={CARD_ROW_STYLE}>
+          <span style={ACTION_LABEL_STYLE}>{t('pdf.linksLabel')}</span>
+          <div
+            style={{
+              ...FIELD_BODY_STYLE,
+              marginTop: 0,
+              display: 'flex',
+              flexWrap: 'wrap',
+              columnGap: 12,
+              rowGap: 4,
+              alignItems: 'center',
+            }}
+          >
+            {linkBarPdfs.map((url) => (
+              <a key={url} style={linkStyle} href={url} target="_blank" rel="noreferrer noopener">
+                {t('pdf.openPdfLink')}
+              </a>
+            ))}
+            {paper.doi !== '' && (
+              <a
+                style={linkStyle}
+                href={`https://doi.org/${paper.doi}`}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {t('pdf.openLanding')}
+              </a>
+            )}
+            {canHtml && (
+              <button type="button" style={linkButtonStyle} onClick={() => setShowHtml(true)}>
+                {t('pdf.webFullText')}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {entities && (
         <EntityPanel t={t} taskId={taskId} paperId={paper.paperId} pmid={paper.ids.pmid} />

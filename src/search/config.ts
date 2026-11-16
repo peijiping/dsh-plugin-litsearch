@@ -67,6 +67,16 @@ export const DEFAULT_PDF_MAX_MB = 30
 export const DEFAULT_PDF_CACHE_MAX_MB = 512
 export const DEFAULT_AUTO_DOWNLOAD_PDF = false
 export const DEFAULT_ENABLE_EPMC_FULLTEXT = true
+/** 单个 PDF 候选的抓取总预算（与检索超时解耦）。 */
+export const DEFAULT_PDF_TIMEOUT_MS = 60_000
+/** 5xx / 网络错误的单候选重试次数。 */
+export const DEFAULT_PDF_RETRY_COUNT = 1
+/** 同一域名同时在途的下载数上限。 */
+export const DEFAULT_PDF_PER_HOST_CONCURRENCY = 2
+/** 下载时是否反查 OpenAlex / Europe PMC / OpenAIRE 的 OA 位置。 */
+export const DEFAULT_ENABLE_OA_LOOKUP = true
+/** 是否启用 arXiv HTML 作为第二条全文通道。 */
+export const DEFAULT_ENABLE_ARXIV_HTML = true
 
 /** Zotero connector 默认设置。 */
 export const DEFAULT_ZOTERO_ENABLED = true
@@ -123,6 +133,16 @@ export interface LitsearchSettings {
   pdfCacheMaxMb: number
   autoDownloadPdf: boolean
   enableEpmcFulltext: boolean
+  /** 单个 PDF 候选的抓取总预算（毫秒）。 */
+  pdfTimeoutMs: number
+  /** 5xx / 网络错误的重试次数（0 表示不重试）。 */
+  pdfRetryCount: number
+  /** 同域名并发下载上限。 */
+  pdfPerHostConcurrency: number
+  /** 下载时反查 OA 位置（OpenAlex / Europe PMC / OpenAIRE / Unpaywall）。 */
+  enableOaLookup: boolean
+  /** 是否启用 arXiv HTML 全文通道。 */
+  enableArxivHtml: boolean
   zoteroEnabled: boolean
   zoteroBaseUrl: string
   zoteroAttachPdf: boolean
@@ -153,6 +173,11 @@ let readSettings = (): LitsearchSettings => ({
   pdfCacheMaxMb: DEFAULT_PDF_CACHE_MAX_MB,
   autoDownloadPdf: DEFAULT_AUTO_DOWNLOAD_PDF,
   enableEpmcFulltext: DEFAULT_ENABLE_EPMC_FULLTEXT,
+  pdfTimeoutMs: DEFAULT_PDF_TIMEOUT_MS,
+  pdfRetryCount: DEFAULT_PDF_RETRY_COUNT,
+  pdfPerHostConcurrency: DEFAULT_PDF_PER_HOST_CONCURRENCY,
+  enableOaLookup: DEFAULT_ENABLE_OA_LOOKUP,
+  enableArxivHtml: DEFAULT_ENABLE_ARXIV_HTML,
   zoteroEnabled: DEFAULT_ZOTERO_ENABLED,
   zoteroBaseUrl: DEFAULT_ZOTERO_BASE_URL,
   zoteroAttachPdf: DEFAULT_ZOTERO_ATTACH_PDF,

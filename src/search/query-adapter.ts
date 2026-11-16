@@ -19,10 +19,15 @@ export function adaptQuery(source: SourceId, block: Pick<QueryBlock, 'text' | 'p
     case 'openalex':
     case 'crossref':
     case 'semanticscholar':
+    case 'doaj':
+    case 'openaire':
       return stripFieldTags(text)
     case 'arxiv':
       return toArxivQuery(text)
     case 'pubtator':
+      return toPlainText(text)
+    case 'openreview':
+      // Elasticsearch 全文匹配，布尔运算符会被当成普通词，去掉更稳。
       return toPlainText(text)
     case 'googlescholar':
       // 支持引号短语与 author:/source:，但不认 PubMed 字段标签与布尔式。

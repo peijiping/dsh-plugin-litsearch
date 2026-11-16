@@ -10,7 +10,7 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 
 不用注册账号、不用申请密钥、不用另起服务。**搜索、下载全文、存入 Zotero，对话里说和界面上点走的是同一套流程**：模型把范围算准，右侧栏弹出结果、清单和逐篇进度；面板的当前任务、当前页、筛选与勾选，模型也读得到。两边共用同一份任务现场，不用复制 id、不用猜对方看到哪一页。
 
-> 当前版本 **v0.4.0** · 七个免费来源（PubMed / Europe PMC / OpenAlex / Crossref / Semantic Scholar / arXiv / PubTator）+ 可选谷歌学术（需自备 SerpAPI Key，默认关闭）。
+> 当前版本 **v0.4.1** · 十个免费来源（PubMed / Europe PMC / OpenAlex / Crossref / Semantic Scholar / arXiv / PubTator / DOAJ / OpenReview / OpenAIRE）+ 可选谷歌学术（需自备 SerpAPI Key，默认关闭）。
 
 ## 为什么做这个
 
@@ -46,7 +46,7 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 | 任务 | 一主题一任务，改条件重跑并记下每轮时间、条件、发起方、命中数；筛读状态跨轮保留；「加入对话」带任务进新会话续接 |
 | 结果 | 概览环形图 / 折线 / 双色条可点选筛选；多条件过滤、每页 20 条；独立论文页含摘要与全文链接，有 PMID 的可看 PubTator 实体；「全文」页列整批台账 |
 | 筛读与批量 | 没读 / 读过 / 纳入 / 排除、研究分组与分组阅读清单、与旧任务对比整批纳入「新增」、本页全选跨页累加、批量改状态 / 分组 / 下载 / 存 Zotero / 导出；下载与同步 5 并发、逐篇进度 |
-| 全文 | PDF 预览下载到工作目录 `dsh-litsearch/`；候选按「自带直链 → OA 副本 → 全文渲染页」尝试；PMC 编号用 Europe PMC HTML 兜底；导出 CSV / RIS / BibTeX / Markdown |
+| 全文 | PDF 预览下载到工作目录 `dsh-litsearch/`；候选按「OA 直链 → 未确认直链 → 仓储渲染页」排序，缺直链时并发反查 OpenAlex / Europe PMC / OpenAIRE；抓取按域限并发、429 冷却、`%PDF-` + `%%EOF` 双校验、`.part` 原子落盘；PMC 用 Europe PMC HTML 兜底，arXiv 用 HTML 全文兜底；导出 CSV / RIS / BibTeX / Markdown |
 | 对话 | 加入对话胶囊、任务续接、一句话批量下载 / 存 Zotero（含按页取数与只读预演） |
 
 **能力边界**：PDF 由 Host 后台直连抓取，没有浏览器会话和机构授权，订阅 / 登录 / 人机验证页拿不到，403 / 限流 / HTML 页 / 无候选分别给原因，浏览器打开卡片上的 PDF / DOI 手动另存即可；填联系邮箱启用 Unpaywall 补 OA 候选，但补出的出版商直链仍可能被拒。

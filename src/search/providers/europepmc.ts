@@ -6,6 +6,8 @@
  */
 
 import { asArray, asNumber, asRecord, asString, normalizeDoi } from '../normalize.js'
+import { epmcFullTextLocations } from '../oa.js'
+import { bestPdfUrl } from '../oa.js'
 import { limitedJson } from '../rate-limit.js'
 import type { PaperRecord, Provider, ProviderSearchOptions } from '../types.js'
 
@@ -70,7 +72,8 @@ function mapResult(raw: unknown): PaperRecord {
   const authors = asArray(asRecord(result['authorList'])['author'])
     .map((entry) => asString(asRecord(entry)['fullName']))
     .filter((name) => name !== '')
-  const pdfUrl = pickPdfUrl(result['fullTextUrlList'])
+  const oaLocations = epmcFullTextLocations(result['fullTextUrlList'])
+  const pdfUrl = bestPdfUrl(oaLocations)
   const journal = asRecord(asRecord(result['journalInfo'])['journal'])
 
   return {
@@ -88,19 +91,9 @@ function mapResult(raw: unknown): PaperRecord {
     citedBy: asNumber(result['citedByCount']),
     openAccess: asString(result['isOpenAccess']).toUpperCase() === 'Y',
     pdfUrl,
+    ...(oaLocations.length === 0 ? {} : { oaLocations }),
     type: asArray(asRecord(result['pubTypeList'])['pubType']).map(asString)[0] ?? '',
   }
-}
-
-function pickPdfUrl(value: unknown): string {
-  const urls = asArray(asRecord(value)['fullTextUrl']).map(asRecord)
-  const pdf = urls.find((entry) => {
-    const style = asString(entry['documentStyle']).toLowerCase()
-    const url = asString(entry['url']).toLowerCase()
-    const availability = asString(entry['availabilityCode']).toUpperCase()
-    return (style === 'pdf' || url.endsWith('.pdf')) && (availability === 'OA' || availability === 'F')
-  })
-  return pdf === undefined ? '' : asString(pdf['url'])
 }
 
 function normalizePmcid(value: string): string {

@@ -8,7 +8,7 @@
 
 import { asArray, asNumber, asRecord, asString, doiUrl, normalizeDoi } from '../normalize.js'
 import { limitedJson } from '../rate-limit.js'
-import type { PaperRecord, Provider, ProviderSearchOptions } from '../types.js'
+import type { OaLocation, PaperRecord, Provider, ProviderSearchOptions } from '../types.js'
 
 const ENDPOINT = 'https://api.semanticscholar.org/graph/v1/paper/search'
 
@@ -80,6 +80,20 @@ function mapPaper(raw: unknown): PaperRecord {
   const oaPdf = asRecord(paper['openAccessPdf'])
   const journal = asRecord(paper['journal'])
   const url = asString(paper['url'])
+  const pdfUrl = asString(oaPdf['url'])
+  const status = asString(oaPdf['status']).toUpperCase()
+  const oaLocations: OaLocation[] =
+    pdfUrl === ''
+      ? []
+      : [
+          {
+            url: pdfUrl,
+            kind: 'pdf',
+            source: 'metadata',
+            // `CLOSED` 表示上游确认非开放获取，其余状态视为 OA。
+            oa: status !== 'CLOSED',
+          },
+        ]
 
   return {
     source: 'semanticscholar',
@@ -95,8 +109,9 @@ function mapPaper(raw: unknown): PaperRecord {
     url: url !== '' ? url : doiUrl(doi),
     abstract: asString(paper['abstract']),
     citedBy: asNumber(paper['citationCount']),
-    openAccess: paper['isOpenAccess'] === true || asString(oaPdf['url']) !== '',
-    pdfUrl: asString(oaPdf['url']),
+    openAccess: paper['isOpenAccess'] === true || pdfUrl !== '',
+    pdfUrl,
+    ...(oaLocations.length === 0 ? {} : { oaLocations }),
     type: asString(asArray(paper['publicationTypes'])[0]),
   }
 }

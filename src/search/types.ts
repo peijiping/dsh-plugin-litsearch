@@ -8,7 +8,7 @@
  * 已接入的数据源 id；顺序即聚合展示顺序。
  *
  * 除 `googlescholar` 外均为免费公开 API；`googlescholar` 依赖用户自备的
- * SerpAPI Key，未配置时默认不参与检索。
+ * SerpAPI Key，未配置时默认不参与检索。其余 10 个默认全部参与检索。
  */
 export const SOURCE_IDS = [
   'pubmed',
@@ -18,6 +18,9 @@ export const SOURCE_IDS = [
   'semanticscholar',
   'arxiv',
   'pubtator',
+  'doaj',
+  'openreview',
+  'openaire',
   'googlescholar',
 ] as const
 
@@ -63,6 +66,48 @@ export interface PaperIds {
   arxivId: string
 }
 
+/** OA 位置的来源，用于候选合并时的 `alsoIn` 与界面说明。 */
+export type OaSource =
+  | 'metadata'
+  | 'publisher-rule'
+  | 'unpaywall'
+  | 'openalex'
+  | 'europepmc'
+  | 'openaire'
+  | 'arxiv'
+  | 'doi'
+
+/**
+ * 一条可点击/可尝试的全文位置。
+ *
+ * `oa` 只表示「确认开放获取」，订阅落地页与 DOI 页恒为 false——
+ * 这样界面上永远不会把订阅链接误读成可下载。
+ */
+export interface OaLocation {
+  url: string
+  /** `pdf` 可尝试下载；`html` 是网页全文；`landing` 是落地页。 */
+  kind: 'pdf' | 'landing' | 'html'
+  source: OaSource
+  oa: boolean
+  /** 上游标记的最佳 OA 位置。 */
+  best?: boolean
+  license?: string
+  /** 仅 text-mining 许可的链接，不作为自动下载候选。 */
+  textMining?: boolean
+  /** 同一 URL 被其它源命中的来源。 */
+  alsoIn?: OaSource[]
+}
+
+/** 单个候选的抓取结果，供失败时逐条解释。 */
+export interface PdfAttempt {
+  url: string
+  host: string
+  kind: 'paywalled' | 'blocked' | 'not_pdf' | 'too_large' | 'unsafe' | 'failed'
+  detail: string
+  status?: number
+  ms: number
+}
+
 /** provider 归一化后的论文记录（尚无跨源身份）。 */
 export interface PaperRecord {
   source: SourceId
@@ -83,6 +128,8 @@ export interface PaperRecord {
   openAccess: boolean
   /** 开放获取全文/PDF 直链，无则为空串。 */
   pdfUrl: string
+  /** 多源 OA 位置（含直链、网页全文、落地页）；缺省表示上游只给了 `pdfUrl`。 */
+  oaLocations?: OaLocation[]
   type: string
 }
 
@@ -502,6 +549,10 @@ export interface PdfDownloadResult {
   error?: string
   /** 失败根因；成功时缺省。 */
   reason?: PdfFailureReason
+  /** 可点击的全文位置（成功与失败都返回），客户端据此渲染动作条。 */
+  links?: OaLocation[]
+  /** 逐候选的失败记录，便于解释「为什么下不到」。 */
+  attempts?: PdfAttempt[]
 }
 
 /** Zotero connector 探测结果。 */
@@ -835,6 +886,13 @@ export interface HealthInfo {
     pdfMaxMb: number
     autoDownload: boolean
     epmcFulltext: boolean
+    /** 下载时是否反查 OA 位置（OpenAlex / Europe PMC / OpenAIRE / Unpaywall）。 */
+    oaLookup: boolean
+    /** 是否启用 arXiv HTML 全文通道。 */
+    arxivHtml: boolean
+    pdfTimeoutMs: number
+    pdfRetryCount: number
+    pdfPerHostConcurrency: number
   }
   zotero: {
     enabled: boolean

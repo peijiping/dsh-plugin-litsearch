@@ -11,6 +11,7 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type {
   AnnotationInput,
+  OaLocation,
   Paper,
   PaperDetail,
   PdfStatus,
@@ -116,6 +117,7 @@ export function PaperPane({
   const [busy, setBusy] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [nonce, setNonce] = useState(0)
+  const [failedLinks, setFailedLinks] = useState<OaLocation[]>([])
   const [toast, setToastState] = useState('')
   const [toastTone, setToastTone] = useState<'info' | 'error'>('info')
   const notify = (text: string, tone: 'info' | 'error' = 'info'): void => {
@@ -215,11 +217,15 @@ export function PaperPane({
     void downloadPaperPdf(taskId, paper.paperId)
       .then((result) => {
         if (result.status === 'downloaded') {
+          setFailedLinks([])
           notify(tpl(t('pdf.downloaded'), { name: result.filename ?? '' }))
-        } else if (result.status === 'html-only') {
-          notify(tpl(t('pdf.htmlFallback'), { message: result.error ?? '' }), 'error')
         } else {
-          notify(tpl(t('pdf.error'), { message: result.error ?? result.status }), 'error')
+          setFailedLinks(result.links ?? [])
+          if (result.status === 'html-only') {
+            notify(tpl(t('pdf.htmlFallback'), { message: result.error ?? '' }), 'error')
+          } else {
+            notify(tpl(t('pdf.error'), { message: result.error ?? result.status }), 'error')
+          }
         }
       })
       .catch((err: unknown) =>
@@ -240,7 +246,22 @@ export function PaperPane({
     state?.pdfStatus ?? (paper.pdfUrl === '' ? 'unknown' : 'available')
   const canPdf =
     paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '' || paper.doi !== ''
-  const canHtml = paper.ids.pmcid !== ''
+  const canHtml = paper.ids.pmcid !== '' || paper.ids.arxivId !== ''
+  const pdfLocations = (paper.oaLocations ?? []).filter(
+    (location) => location.kind === 'pdf' && location.textMining !== true,
+  )
+  const directPdfUrl = paper.pdfUrl !== '' ? paper.pdfUrl : pdfLocations[0]?.url ?? ''
+  const linkBarPdfs = [
+    ...new Set([
+      ...failedLinks.filter((location) => location.kind === 'pdf').map((location) => location.url),
+      ...pdfLocations.map((location) => location.url),
+    ]),
+  ].slice(0, 3)
+  const showLinkBar =
+    linkBarPdfs.length > 0 ||
+    state?.pdfStatus === 'blocked' ||
+    state?.pdfStatus === 'paywalled' ||
+    state?.pdfStatus === 'failed'
   const downloaded = !downloading && state?.pdfStatus === 'downloaded'
   const downloadedPath = downloaded ? state?.pdfFile : undefined
   const pdfMissing = !downloading && state?.pdfStatus === 'missing'
@@ -530,12 +551,32 @@ export function PaperPane({
               ? t('pdf.zoteroRetry')
               : t('pdf.zotero')}
         </button>
-        {paper.pdfUrl !== '' && (
-          <a style={linkStyle} href={paper.pdfUrl} target="_blank" rel="noreferrer noopener">
+        {directPdfUrl !== '' && (
+          <a style={linkStyle} href={directPdfUrl} target="_blank" rel="noreferrer noopener">
             {t('result.pdf')}
           </a>
         )}
       </div>
+
+      {showLinkBar && (
+        <div style={{ ...ACTION_STYLE, marginTop: 0, flexWrap: 'wrap', rowGap: 6 }}>
+          {linkBarPdfs.map((url) => (
+            <a key={url} style={linkStyle} href={url} target="_blank" rel="noreferrer noopener">
+              {t('pdf.openPdfLink')}
+            </a>
+          ))}
+          {paper.doi !== '' && (
+            <a
+              style={linkStyle}
+              href={`https://doi.org/${paper.doi}`}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {t('pdf.openLanding')}
+            </a>
+          )}
+        </div>
+      )}
     </div>
   )
 }

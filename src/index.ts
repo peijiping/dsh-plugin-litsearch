@@ -26,12 +26,17 @@ import {
   DEFAULT_ARXIV_INTERVAL_MS,
   DEFAULT_AUTO_DOWNLOAD_PDF,
   DEFAULT_AUTO_OPEN,
+  DEFAULT_ENABLE_ARXIV_HTML,
   DEFAULT_ENABLE_EPMC_FULLTEXT,
+  DEFAULT_ENABLE_OA_LOOKUP,
   DEFAULT_LANGUAGE,
   DEFAULT_MAX_TASK_TABS,
   DEFAULT_PAGE_SIZE,
   DEFAULT_PDF_CACHE_MAX_MB,
   DEFAULT_PDF_MAX_MB,
+  DEFAULT_PDF_PER_HOST_CONCURRENCY,
+  DEFAULT_PDF_RETRY_COUNT,
+  DEFAULT_PDF_TIMEOUT_MS,
   DEFAULT_PUBMED_INTERVAL_MS,
   DEFAULT_RETENTION_COUNT,
   DEFAULT_RETENTION_DAYS,
@@ -81,16 +86,7 @@ export const Config = Schema.object({
   requestTimeoutMs: Schema.number().default(REQUEST_TIMEOUT_MS).volatile(),
   /** 默认数据源。 */
   defaultSources: Schema.array(
-    Schema.union([
-      Schema.const('pubmed'),
-      Schema.const('europepmc'),
-      Schema.const('openalex'),
-      Schema.const('crossref'),
-      Schema.const('semanticscholar'),
-      Schema.const('arxiv'),
-      Schema.const('pubtator'),
-      Schema.const('googlescholar'),
-    ]),
+    Schema.union(SOURCE_IDS.map((id) => Schema.const(id))),
   )
     .default([...DEFAULT_SOURCE_IDS])
     .volatile(),
@@ -125,6 +121,19 @@ export const Config = Schema.object({
   autoDownloadPdf: Schema.boolean().default(DEFAULT_AUTO_DOWNLOAD_PDF).volatile(),
   /** 无 PDF 时用 Europe PMC HTML 全文兜底。 */
   enableEpmcFulltext: Schema.boolean().default(DEFAULT_ENABLE_EPMC_FULLTEXT).volatile(),
+  /** 单个 PDF 候选的抓取总预算（毫秒）。 */
+  pdfTimeoutMs: Schema.number().default(DEFAULT_PDF_TIMEOUT_MS).volatile(),
+  /** 5xx / 网络错误的重试次数。 */
+  pdfRetryCount: Schema.number().default(DEFAULT_PDF_RETRY_COUNT).volatile(),
+  /** 同域名并发下载上限。 */
+  pdfPerHostConcurrency: Schema
+    .number()
+    .default(DEFAULT_PDF_PER_HOST_CONCURRENCY)
+    .volatile(),
+  /** 下载时反查 OA 位置（OpenAlex / Europe PMC / OpenAIRE / Unpaywall）。 */
+  enableOaLookup: Schema.boolean().default(DEFAULT_ENABLE_OA_LOOKUP).volatile(),
+  /** 是否启用 arXiv HTML 全文通道。 */
+  enableArxivHtml: Schema.boolean().default(DEFAULT_ENABLE_ARXIV_HTML).volatile(),
   /** Zotero 入口开关。 */
   zoteroEnabled: Schema.boolean().default(DEFAULT_ZOTERO_ENABLED).volatile(),
   zoteroBaseUrl: Schema.string().default(DEFAULT_ZOTERO_BASE_URL).volatile(),
@@ -179,6 +188,16 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     ),
     autoDownloadPdf: config.autoDownloadPdf.get(),
     enableEpmcFulltext: config.enableEpmcFulltext.get(),
+    pdfTimeoutMs: clampInt(config.pdfTimeoutMs.get(), 5_000, 180_000, DEFAULT_PDF_TIMEOUT_MS),
+    pdfRetryCount: clampInt(config.pdfRetryCount.get(), 0, 3, DEFAULT_PDF_RETRY_COUNT),
+    pdfPerHostConcurrency: clampInt(
+      config.pdfPerHostConcurrency.get(),
+      1,
+      8,
+      DEFAULT_PDF_PER_HOST_CONCURRENCY,
+    ),
+    enableOaLookup: config.enableOaLookup.get(),
+    enableArxivHtml: config.enableArxivHtml.get(),
     zoteroEnabled: config.zoteroEnabled.get(),
     zoteroBaseUrl: normalizeBaseUrl(config.zoteroBaseUrl.get()),
     zoteroAttachPdf: config.zoteroAttachPdf.get(),
@@ -227,9 +246,32 @@ function clampInt(value: number, min: number, max: number, fallback: number): nu
   return Math.min(Math.max(Math.floor(value), min), max)
 }
 
+/**
+ * 旧版「默认数据源」集合（新增 DOAJ / OpenReview / OpenAIRE 之前）。
+ *
+ * 存量配置若恰好等于这份清单，说明用户从未改过默认勾选，升级时应自动并入
+ * 新增源；用户自定义过的选择保持原样。
+ */
+const LEGACY_DEFAULT_SOURCES: readonly SourceId[] = [
+  'pubmed',
+  'europepmc',
+  'openalex',
+  'crossref',
+  'semanticscholar',
+  'arxiv',
+  'pubtator',
+]
+
 function normalizeSources(value: readonly string[]): SourceId[] {
+  if (value.length === 0) return [...DEFAULT_SOURCE_IDS]
+  if (isLegacyDefaultSources(value)) return [...DEFAULT_SOURCE_IDS]
   const valid = SOURCE_IDS.filter((id) => value.includes(id))
   return valid.length === 0 ? [...DEFAULT_SOURCE_IDS] : valid
+}
+
+function isLegacyDefaultSources(value: readonly string[]): boolean {
+  if (value.length !== LEGACY_DEFAULT_SOURCES.length) return false
+  return LEGACY_DEFAULT_SOURCES.every((id) => value.includes(id))
 }
 
 function normalizeSort(value: string): SortMode {

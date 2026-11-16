@@ -41,7 +41,7 @@ export async function fetchText(url: string, request: HttpRequest): Promise<stri
   try {
     const response = await fetch(url, { headers: request.headers, signal: controller.signal })
     if (!response.ok) {
-      const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'))
+      const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
       const detail =
         response.status === 429
           ? `${host} 触发限流（HTTP 429）`
@@ -69,7 +69,7 @@ export async function fetchText(url: string, request: HttpRequest): Promise<stri
 }
 
 /** `Retry-After` 支持秒数与 HTTP 日期两种写法。 */
-function parseRetryAfter(value: string | null): number | undefined {
+export function parseRetryAfterMs(value: string | null): number | undefined {
   if (value === null || value.trim() === '') return undefined
   const seconds = Number(value)
   if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)

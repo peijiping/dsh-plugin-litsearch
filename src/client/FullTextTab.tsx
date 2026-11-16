@@ -378,6 +378,16 @@ function FullTextRow({
         <button type="button" style={LINK_STYLE} onClick={() => onZotero(paper)}>
           {t('pdf.zotero')}
         </button>
+        {(paper.pdfUrl !== '' || paper.doi !== '') && (
+          <a
+            style={LINK_STYLE}
+            href={paper.pdfUrl !== '' ? paper.pdfUrl : `https://doi.org/${paper.doi}`}
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            {t('pdf.openInBrowser')}
+          </a>
+        )}
       </div>
     </li>
   )

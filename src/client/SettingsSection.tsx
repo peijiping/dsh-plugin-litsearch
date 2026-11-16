@@ -18,12 +18,14 @@ import { cleanupSettings, probeSource, probeStorage, probeZotero } from './api'
 import { getHealth, refreshHealth, useHealth } from './health'
 import { tpl, type Translate } from './locales'
 import {
+  ARXIV_HTML_FIELD,
   AUTO_DOWNLOAD_FIELD,
   AUTO_OPEN_FIELD,
   EPMC_FULLTEXT_FIELD,
   LANGUAGE_FIELD,
   LANGUAGES,
   NCBI_KEY_FIELD,
+  OA_LOOKUP_FIELD,
   PDF_ROOT_FIELD,
   S2_KEY_FIELD,
   SERP_KEY_FIELD,
@@ -55,6 +57,9 @@ const NUMBER_FIELD_NAMES = [
   'taskMaxPapers',
   'pdfMaxMb',
   'pdfCacheMaxMb',
+  'pdfTimeoutMs',
+  'pdfRetryCount',
+  'pdfPerHostConcurrency',
 ] as const
 
 type NumberFieldName = (typeof NUMBER_FIELD_NAMES)[number]
@@ -105,6 +110,11 @@ export function SettingsSection(props: Props): ReactElement {
     state.pdfCacheMaxMb.text,
     state.autoDownloadPdf.text,
     state.enableEpmcFulltext.text,
+    state.enableOaLookup.text,
+    state.enableArxivHtml.text,
+    state.pdfTimeoutMs.text,
+    state.pdfRetryCount.text,
+    state.pdfPerHostConcurrency.text,
     state.zoteroEnabled.text,
     state.zoteroBaseUrl.text,
     state.zoteroAttachPdf.text,
@@ -379,7 +389,10 @@ export function SettingsSection(props: Props): ReactElement {
             name !== 's2IntervalMs' &&
             name !== 'arxivIntervalMs' &&
             name !== 'pdfMaxMb' &&
-            name !== 'pdfCacheMaxMb',
+            name !== 'pdfCacheMaxMb' &&
+            name !== 'pdfTimeoutMs' &&
+            name !== 'pdfRetryCount' &&
+            name !== 'pdfPerHostConcurrency',
         ).map(renderNumberField)}
 
         <div style={STORAGE_ROW_STYLE}>
@@ -398,6 +411,11 @@ export function SettingsSection(props: Props): ReactElement {
         {renderNumberField('pdfMaxMb')}
         {renderNumberField('pdfCacheMaxMb')}
         {renderToggle(AUTO_DOWNLOAD_FIELD)}
+        {renderToggle(OA_LOOKUP_FIELD)}
+        {renderToggle(ARXIV_HTML_FIELD)}
+        {renderNumberField('pdfTimeoutMs')}
+        {renderNumberField('pdfRetryCount')}
+        {renderNumberField('pdfPerHostConcurrency')}
         <StorageProbeRow t={t} disabled={locked} />
         <CleanupRow
           t={t}

@@ -2,28 +2,48 @@
  * PDF 获取与落地。
  *
  * 安全约束：只允许 http/https、拒绝回环/私网/链路本地地址、最多 5 次重定向、
- * 20 秒超时、体积上限可配；只有以 `%PDF-` 开头的内容才会被当成 PDF。
+ * 单候选总预算可配（默认 60s）、体积上限可配；只有以 `%PDF-` 开头且尾部带
+ * `%%EOF` 的内容才会被当成 PDF。同域限并发、429 按 `Retry-After` 冷却。
  */
 
 import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { join } from 'node:path'
 
 import { getSettings } from '../../search/config.js'
+import { parseRetryAfterMs } from '../../search/http.js'
 import {
   epmcXmlUrl,
-  isPdfRenderUrl,
-  pdfCandidates,
-  unpaywallPdfCandidates,
+  landingLinks,
+  mergeOaLocations,
+  metadataLocations,
+  pdfLinksOf,
+  rankOaLocations,
 } from '../../search/oa.js'
-import type { Paper, PdfFailureReason, PdfStatus } from '../../search/types.js'
+import { lookupOaLocations } from '../../search/oa-lookup.js'
+import type { OaLocation, Paper, PdfAttempt, PdfFailureReason, PdfStatus } from '../../search/types.js'
+import {
+  classifyHtmlInterstitial,
+  hasPdfTrailer,
+  isLoginRedirect,
+  looksLikePdf,
+} from './guard.js'
 import { resolvePdfRootPath } from './root.js'
+import {
+  defaultCooldownMs,
+  hostCoolingMs,
+  hostOf,
+  recordHostCooldown,
+  withHostSlot,
+} from './throttle.js'
 
 const MAX_REDIRECTS = 5
 const FETCH_TIMEOUT_MS = 20_000
 const MAX_PDF_BYTES_DEFAULT = 30 * 1024 * 1024
+/** 重试退避（仅 5xx / 网络错误）。 */
+const RETRY_DELAY_MS = 500
 
 export type PdfFailure = 'paywalled' | 'blocked' | 'failed' | 'not_pdf' | 'too_large' | 'unsafe'
 
@@ -48,6 +68,10 @@ export interface PdfResolution {
   error?: string
   /** 失败根因；成功时缺省。 */
   reason?: PdfFailureReason
+  /** 可点击的全文位置（成功与失败都返回）。 */
+  links: OaLocation[]
+  /** 逐候选的失败记录。 */
+  attempts: PdfAttempt[]
 }
 
 /** 分类对应的下一步指引：后台拿不到时明确告诉用户去浏览器手动保存。 */
@@ -78,37 +102,47 @@ export function pdfCacheDir(storageRoot: string): string {
   return join(storageRoot, 'pdfs')
 }
 
-/** 尝试所有候选并返回第一个合法 PDF；失败时给出可展示的状态与原因。 */
+/** 尝试所有候选并返回第一个合法 PDF；失败时给出可展示的状态、链接与逐条原因。 */
 export async function resolvePdf(
   paper: Paper,
   signal?: AbortSignal,
 ): Promise<PdfResolution> {
   const settings = getSettings()
   const maxBytes = settings.pdfMaxMb * 1024 * 1024
-  const fromMetadata = pdfCandidates(paper)
-  const extra = await unpaywallPdfCandidates(
-    paper.doi,
-    settings.contactEmail,
-    Math.min(settings.requestTimeoutMs, 8_000),
-    signal,
+  let locations = metadataLocations(paper)
+
+  // 只有「已确认开放获取的直链」才值得省掉反查；出版商规则只是猜测
+  // （订阅文章也有 .pdf 地址），不能据此跳过 OpenAlex / EPMC / OpenAIRE。
+  const hasDirectPdf = locations.some(
+    (location) => location.kind === 'pdf' && location.oa && location.source !== 'publisher-rule',
   )
-  // 静态直链优先、Unpaywall 补出的 OA 直链次之，渲染页放最后兜底：
-  // Europe PMC / PMC 的渲染页对后台请求几乎必然返回 403 或 HTML，
-  // 让它们排在优质候选前面只会拖慢下载并掩盖真正的失败原因。
-  const candidates = [
-    ...fromMetadata.filter((url) => !isPdfRenderUrl(url)),
-    ...extra,
-    ...fromMetadata.filter(isPdfRenderUrl),
-  ]
-  const unique = [...new Set(candidates)]
+  if (settings.enableOaLookup && !hasDirectPdf) {
+    const lookup = await lookupOaLocations(paper, {
+      contactEmail: settings.contactEmail,
+      timeoutMs: Math.min(settings.requestTimeoutMs, 12_000),
+      signal,
+    })
+    locations = mergeOaLocations([locations, lookup.locations])
+  }
+
+  // 链接清单：排序后的 OA 位置（含网页全文）+ DOI/原文落地页，失败时也可点击。
+  const links = mergeOaLocations([rankOaLocations(locations), landingLinks(paper)])
+  const candidates = pdfLinksOf(locations)
+  const attempts: PdfAttempt[] = []
 
   let last: PdfFetchError | null = null
   let sawBlocked = false
   let sawPaywalled = false
-  for (const url of unique) {
+  for (const url of candidates) {
+    const started = Date.now()
     try {
-      const buffer = await fetchPdf(url, { maxBytes, signal })
-      return { ok: true, status: 'available', buffer, url }
+      const buffer = await fetchPdf(url, {
+        maxBytes,
+        signal,
+        timeoutMs: settings.pdfTimeoutMs,
+        retryCount: settings.pdfRetryCount,
+      })
+      return { ok: true, status: 'available', buffer, url, links, attempts }
     } catch (error) {
       if (signal?.aborted === true) throw error
       const failure =
@@ -116,6 +150,14 @@ export async function resolvePdf(
           ? error
           : new PdfFetchError('failed', error instanceof Error ? error.message : String(error))
       last = failure
+      attempts.push({
+        url,
+        host: hostOf(url),
+        kind: failure.kind,
+        detail: failure.message,
+        ...(failure.status === undefined ? {} : { status: failure.status }),
+        ms: Date.now() - started,
+      })
       if (failure.kind === 'blocked') sawBlocked = true
       if (failure.kind === 'paywalled') sawPaywalled = true
     }
@@ -133,22 +175,64 @@ export async function resolvePdf(
             ? 'not-pdf'
             : 'failed'
   const detail = last === null ? '未找到可后台下载的开放获取 PDF' : last.message
-  return { ok: false, status, reason, error: pdfFailureMessage(reason, detail, unique.length) }
+  const resolution: PdfResolution = {
+    ok: false,
+    status,
+    reason,
+    error: pdfFailureMessage(reason, detail, candidates.length),
+    links,
+    attempts,
+  }
+  return resolution
 }
 
 export interface FetchPdfOptions {
   maxBytes?: number
   signal?: AbortSignal
   timeoutMs?: number
+  /** 5xx / 网络错误的重试次数；429、403、4xx 与校验失败不重试。 */
+  retryCount?: number
 }
 
-/** 下载并校验单个 PDF；内部处理重定向，每一步都重新校验目标地址。 */
+/** 下载并校验单个 PDF：同域限并发，失败按需重试一次。 */
 export async function fetchPdf(url: string, options: FetchPdfOptions = {}): Promise<Buffer> {
+  const retries = Math.max(0, Math.round(options.retryCount ?? 0))
+  const host = hostOf(url)
+  for (let attempt = 0; ; attempt += 1) {
+    if (attempt > 0) await sleep(RETRY_DELAY_MS, options.signal)
+    try {
+      return await withHostSlot(host, options.signal, () => fetchPdfOnce(url, options))
+    } catch (error) {
+      if (options.signal?.aborted === true) throw error
+      const failure =
+        error instanceof PdfFetchError
+          ? error
+          : new PdfFetchError('failed', error instanceof Error ? error.message : String(error))
+      if (attempt >= retries || !isRetryable(failure)) throw failure
+    }
+  }
+}
+
+/** 只有程序性失败值得重试；订阅墙、限流与内容校验失败重试也没用。 */
+function isRetryable(error: PdfFetchError): boolean {
+  return error.kind === 'failed' && (error.status === undefined || error.status >= 500)
+}
+
+/** 单次下载：内部处理重定向，每一步都重新校验目标地址。 */
+async function fetchPdfOnce(url: string, options: FetchPdfOptions): Promise<Buffer> {
   const maxBytes = options.maxBytes ?? MAX_PDF_BYTES_DEFAULT
   const deadline = Date.now() + (options.timeoutMs ?? FETCH_TIMEOUT_MS)
   let current = url
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     await assertPublicUrl(current)
+    const currentHost = hostOf(current)
+    const cooling = hostCoolingMs(currentHost)
+    if (cooling > 0) {
+      throw new PdfFetchError(
+        'blocked',
+        `该域名刚被限流（约 ${Math.ceil(cooling / 1000)} 秒后重试）`,
+      )
+    }
     const controller = new AbortController()
     const remaining = Math.max(1_000, deadline - Date.now())
     const timer = setTimeout(() => controller.abort(), remaining)
@@ -168,13 +252,22 @@ export async function fetchPdf(url: string, options: FetchPdfOptions = {}): Prom
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location')
         if (location === null) throw new PdfFetchError('failed', `重定向缺少 Location：${current}`)
-        current = new URL(location, current).toString()
+        const next = new URL(location, current)
+        // 跳到登录/机构认证页：继续跟只会拿到 HTML，直接判订阅受限。
+        if (isLoginRedirect(next)) {
+          throw new PdfFetchError('paywalled', '跳转到登录或机构认证页（需要订阅/机构权限）')
+        }
+        current = next.toString()
         continue
       }
       if (response.status === 401 || response.status === 402) {
         throw new PdfFetchError('paywalled', `需要订阅或登录（HTTP ${response.status}）`, response.status)
       }
       if (response.status === 429) {
+        recordHostCooldown(
+          currentHost,
+          parseRetryAfterMs(response.headers.get('retry-after')) ?? defaultCooldownMs(),
+        )
         throw new PdfFetchError('blocked', '请求过于频繁（HTTP 429），请稍后重试', response.status)
       }
       if (response.status === 403) {
@@ -187,13 +280,18 @@ export async function fetchPdf(url: string, options: FetchPdfOptions = {}): Prom
       if (Number.isFinite(declared) && declared > maxBytes) {
         throw new PdfFetchError('too_large', `文件超过 ${Math.round(maxBytes / 1024 / 1024)} MB`)
       }
+      const contentType = response.headers.get('content-type') ?? ''
+      // 明确声明 HTML 时只读前 8KB 就够分类，省带宽也省等待。
+      if (/text\/html/iu.test(contentType)) {
+        const head = await readHead(response, 8_192)
+        throw htmlFailure(head, contentType, response.headers)
+      }
       const buffer = await readCapped(response, maxBytes)
-      if (buffer.length < 5 || buffer.subarray(0, 5).toString('latin1') !== '%PDF-') {
-        const head = buffer.subarray(0, 2048).toString('latin1')
-        if (/Just a moment|cf-mitigated|Enable JavaScript and cookies/i.test(head)) {
-          throw new PdfFetchError('blocked', '出版商启用了人机验证，后台无法直接下载')
-        }
-        throw new PdfFetchError('not_pdf', '返回内容不是 PDF（可能是 HTML 登录/摘要页）')
+      if (!looksLikePdf(buffer.subarray(0, 1_024))) {
+        throw htmlFailure(buffer.subarray(0, 8_192), contentType, response.headers)
+      }
+      if (!hasPdfTrailer(buffer.subarray(Math.max(0, buffer.length - 2_048)))) {
+        throw new PdfFetchError('not_pdf', 'PDF 文件不完整（缺少 %%EOF，可能被截断）')
       }
       return buffer
     } catch (error) {
@@ -211,25 +309,83 @@ export async function fetchPdf(url: string, options: FetchPdfOptions = {}): Prom
   throw new PdfFetchError('failed', `重定向超过 ${MAX_REDIRECTS} 次`)
 }
 
-/** 写入去重缓存与用户目录；返回两份路径。 */
+/** 把「拿到了 HTML」翻译成可行动的错误类型。 */
+function htmlFailure(head: Buffer, contentType: string, headers: Headers): PdfFetchError {
+  const kind = classifyHtmlInterstitial(head.toString('latin1'), contentType, headers)
+  if (kind === 'blocked') {
+    return new PdfFetchError('blocked', '出版商启用了人机验证或拒绝后台访问')
+  }
+  if (kind === 'paywalled') {
+    return new PdfFetchError('paywalled', '返回登录/订阅页（需要机构权限）')
+  }
+  return new PdfFetchError('not_pdf', '返回内容不是 PDF（可能是 HTML 摘要页）')
+}
+
+function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(new PdfFetchError('failed', '请求已取消'))
+      return
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    function onAbort(): void {
+      clearTimeout(timer)
+      reject(new PdfFetchError('failed', '请求已取消'))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/** 写入去重缓存与用户目录；已存在且校验通过的合法文件不覆盖。 */
 export async function persistPdf(
   buffer: Buffer,
   storageRoot: string,
   paper: Paper,
   workspace?: string,
-): Promise<{ cachePath: string; filePath: string; filename: string }> {
+): Promise<{ cachePath: string; filePath: string; filename: string; reused: boolean; bytes: number }> {
   const hash = createHash('sha256').update(buffer).digest('hex')
   const cacheDir = pdfCacheDir(storageRoot)
   await mkdir(cacheDir, { recursive: true })
   const cachePath = join(cacheDir, `${hash}.pdf`)
-  await writeFile(cachePath, buffer)
+  if (!(await isValidPdfFile(cachePath))) await writePdfAtomic(cachePath, buffer)
 
   const root = resolvePdfRoot(workspace)
   await mkdir(root, { recursive: true })
   const filename = readableFilename(paper)
   const filePath = join(root, filename)
-  await writeFile(filePath, buffer)
-  return { cachePath, filePath, filename }
+  // 同名文件已存在且是合法 PDF 时直接复用：坏文件才会被原子替换。
+  const reused = await isValidPdfFile(filePath)
+  if (!reused) await writePdfAtomic(filePath, buffer)
+  const size = await stat(filePath).then((info) => info.size).catch(() => buffer.length)
+  return { cachePath, filePath, filename, reused, bytes: size }
+}
+
+/** 原子写：同目录 `.part` 临时文件 → rename；任何失败都清理临时文件。 */
+async function writePdfAtomic(path: string, buffer: Buffer): Promise<void> {
+  const tmp = `${path}.part-${process.pid}-${Date.now()}`
+  try {
+    await writeFile(tmp, buffer)
+    await rename(tmp, path)
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+/** 已存在的文件是否是可用的 PDF（magic + 尾部完整）。 */
+async function isValidPdfFile(path: string): Promise<boolean> {
+  try {
+    const info = await stat(path)
+    if (!info.isFile() || info.size < 10) return false
+    const buffer = await readFile(path)
+    const tail = buffer.subarray(Math.max(0, buffer.length - 2_048))
+    return looksLikePdf(buffer.subarray(0, 1_024)) && hasPdfTrailer(tail)
+  } catch {
+    return false
+  }
 }
 
 /** 已下载文件仍存在时直接读取，避免重复下载。 */
@@ -354,6 +510,26 @@ export async function probePdfRoot(
 /** 供路由/服务判断是否有 EPMC HTML 全文。 */
 export function epmcFullTextAvailable(paper: Paper): boolean {
   return epmcXmlUrl(paper) !== null
+}
+
+/** 只读前 N 字节就取消，用于给 HTML 拦截页分类，避免白下载整页。 */
+async function readHead(response: Response, limit: number): Promise<Buffer> {
+  if (response.body === null) return Buffer.alloc(0)
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      total += value.byteLength
+      if (total >= limit) break
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).subarray(0, limit)
 }
 
 async function readCapped(response: Response, maxBytes: number): Promise<Buffer> {

@@ -9,9 +9,12 @@ import type { Provider, ProviderInfo, SourceId } from '../types.js'
 import { SOURCE_IDS } from '../types.js'
 import { arxiv } from './arxiv.js'
 import { crossref } from './crossref.js'
+import { doaj } from './doaj.js'
 import { europepmc } from './europepmc.js'
 import { googlescholar } from './googlescholar.js'
+import { openaire } from './openaire.js'
 import { openalex } from './openalex.js'
+import { openreview } from './openreview.js'
 import { pubmed } from './pubmed.js'
 import { pubtator } from './pubtator.js'
 import { semanticscholar } from './semanticscholar.js'
@@ -24,6 +27,9 @@ export const PROVIDERS: Record<SourceId, Provider> = {
   semanticscholar,
   arxiv,
   pubtator,
+  doaj,
+  openreview,
+  openaire,
   googlescholar,
 }
 

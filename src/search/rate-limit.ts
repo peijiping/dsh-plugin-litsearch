@@ -45,6 +45,9 @@ const BASE_INTERVALS: Record<SourceId, number> = {
   semanticscholar: DEFAULT_S2_INTERVAL_MS,
   arxiv: DEFAULT_ARXIV_INTERVAL_MS,
   pubtator: 350,
+  doaj: 1000,
+  openreview: 1000,
+  openaire: 700,
   googlescholar: DEFAULT_SERPAPI_INTERVAL_MS,
 }
 

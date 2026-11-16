@@ -332,6 +332,7 @@ export function TaskPane({
               state: 'failed',
               error: result.error ?? result.status,
               ...(result.reason === undefined ? {} : { reason: result.reason }),
+              ...(result.links === undefined ? {} : { links: result.links }),
             },
           }))
           notify(

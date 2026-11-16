@@ -35,3 +35,10 @@ test('arxiv gets field prefixes while existing prefixes are preserved', () => {
 test('pubtator drops boolean operators', () => {
   assert.equal(toPlainText('crispr AND (gene OR editing) NOT cancer'), 'crispr (gene editing) cancer')
 })
+
+test('new sources strip field tags; OpenReview also drops boolean operators', () => {
+  const block = { text: 'diffusion model [tiab] AND "image synthesis"' }
+  assert.equal(adaptQuery('doaj', block), 'diffusion model AND "image synthesis"')
+  assert.equal(adaptQuery('openaire', block), 'diffusion model AND "image synthesis"')
+  assert.equal(adaptQuery('openreview', block), 'diffusion model "image synthesis"')
+})

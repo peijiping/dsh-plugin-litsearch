@@ -14,7 +14,7 @@ import { SearchError } from '../../search/errors.js'
 import { cooldownUntil, sourceHealthList } from '../../search/health.js'
 import { PROVIDER_INFOS } from '../../search/providers/index.js'
 import { searchSources } from '../../search/aggregate.js'
-import { fullTextHtml, jatsToHtml, epmcXmlUrl } from '../../search/oa.js'
+import { arxivHtmlUrl, epmcXmlUrl, fullTextHtml, htmlToFragment, jatsToHtml } from '../../search/oa.js'
 import { fetchPubtatorEntities } from '../../search/pubtator-entities.js'
 import type {
   AnnotationInput,
@@ -328,6 +328,11 @@ export class TaskService {
         pdfMaxMb: settings.pdfMaxMb,
         autoDownload: settings.autoDownloadPdf,
         epmcFulltext: settings.enableEpmcFulltext,
+        oaLookup: settings.enableOaLookup,
+        arxivHtml: settings.enableArxivHtml,
+        pdfTimeoutMs: settings.pdfTimeoutMs,
+        pdfRetryCount: settings.pdfRetryCount,
+        pdfPerHostConcurrency: settings.pdfPerHostConcurrency,
       },
       zotero: {
         enabled: settings.zoteroEnabled,
@@ -825,6 +830,8 @@ export class TaskService {
         bytes: 0,
         error: resolution.error ?? '下载失败',
         ...(resolution.reason === undefined ? {} : { reason: resolution.reason }),
+        ...(resolution.links.length === 0 ? {} : { links: resolution.links }),
+        ...(resolution.attempts.length === 0 ? {} : { attempts: resolution.attempts }),
       }
       return result
     }
@@ -837,27 +844,56 @@ export class TaskService {
     const result: PdfDownloadResult = {
       paperId,
       status: 'downloaded',
-      bytes: resolution.buffer.length,
+      bytes: saved.bytes,
       filename: saved.filename,
       path: saved.filePath,
     }
     if (resolution.url !== undefined) result.url = resolution.url
+    if (resolution.links.length > 0) result.links = resolution.links
+    if (resolution.attempts.length > 0) result.attempts = resolution.attempts
     return result
   }
 
-  /** Europe PMC 全文（JATS → 只含安全标签的 HTML）。 */
+  /** 网页全文：Europe PMC JATS 优先，arXiv HTML 兜底（两条通道最终都转成安全 HTML）。 */
   async fullText(id: string, paperId: string): Promise<string> {
     const task = await this.get(id)
     const paper = findPaper(task, paperId)
     const settings = getSettings()
-    if (!settings.enableEpmcFulltext) {
-      throw new SearchError('not_found', 'Europe PMC 全文兜底已在设置中关闭')
+    const epmcUrl = settings.enableEpmcFulltext ? epmcXmlUrl(paper) : null
+    const arxivUrl = settings.enableArxivHtml ? arxivHtmlUrl(paper) : null
+    if (epmcUrl === null && arxivUrl === null) {
+      const message =
+        !settings.enableEpmcFulltext && !settings.enableArxivHtml
+          ? '网页全文兜底已在设置中关闭'
+          : '这篇文献没有可用的网页全文（Europe PMC / arXiv）'
+      throw new SearchError('not_found', message)
     }
-    const url = epmcXmlUrl(paper)
-    if (url === null) throw new SearchError('not_found', '这篇文献没有 Europe PMC 全文')
-    // EPMC 的 JATS 全文经常 10s+，通用搜索超时对单篇阅读过紧。
-    const xml = await fetchEpmcXml(url, Math.max(settings.requestTimeoutMs, 30_000))
-    const html = fullTextHtml(paper, jatsToHtml(xml), 'Europe PMC')
+
+    let html: string | undefined
+    let failure: unknown
+    if (epmcUrl !== null) {
+      try {
+        // EPMC 的 JATS 全文经常 10s+，通用搜索超时对单篇阅读过紧。
+        const xml = await fetchEpmcXml(epmcUrl, Math.max(settings.requestTimeoutMs, 30_000))
+        html = fullTextHtml(paper, jatsToHtml(xml), 'Europe PMC')
+      } catch (error) {
+        failure = error
+      }
+    }
+    if (html === undefined && arxivUrl !== null) {
+      try {
+        const page = await fetchHtmlPage(arxivUrl, Math.max(settings.requestTimeoutMs, 20_000))
+        html = fullTextHtml(paper, htmlToFragment(page), 'arXiv')
+      } catch (error) {
+        failure = failure ?? error
+      }
+    }
+    if (html === undefined) {
+      throw failure instanceof Error
+        ? failure
+        : new SearchError('not_found', '网页全文获取失败')
+    }
+
     const recorded = task.states[paperId]?.pdfStatus
     if (paper.pdfUrl === '' && (recorded === undefined || recorded === 'unknown' || recorded === 'failed')) {
       await this.setPdfState(task, paperId, { pdfStatus: 'html-only' }).catch(() => undefined)
@@ -1412,6 +1448,50 @@ function findPaper(task: SearchTask, paperId: string): Paper {
   const paper = task.result.papers.find((entry) => entry.paperId === paperId)
   if (paper === undefined) throw new SearchError('not_found', `任务里没有这篇文献：${paperId}`)
   return paper
+}
+
+/** 抓取 arXiv HTML 全文页（体积与超时都设上限，返回纯文本交给转义层）。 */
+async function fetchHtmlPage(url: string, timeoutMs: number): Promise<string> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), Math.max(5_000, timeoutMs))
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'user-agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+      },
+    })
+    if (!response.ok) {
+      const code = response.status === 404 ? 'not_found' : 'upstream_error'
+      throw new SearchError(code, `arXiv 全文返回 HTTP ${response.status}`)
+    }
+    const declared = Number(response.headers.get('content-length') ?? '0')
+    if (Number.isFinite(declared) && declared > 6 * 1024 * 1024) {
+      throw new SearchError('bad_request', 'arXiv 全文超过 6 MB，已跳过')
+    }
+    const text = await response.text()
+    if (text.length > 6 * 1024 * 1024) {
+      throw new SearchError('bad_request', 'arXiv 全文超过 6 MB，已跳过')
+    }
+    if (!/<body/iu.test(text)) {
+      throw new SearchError('not_found', 'arXiv 没有可用的 HTML 全文')
+    }
+    return text
+  } catch (error) {
+    if (error instanceof SearchError) throw error
+    if (controller.signal.aborted) {
+      throw new SearchError('timeout', 'arXiv 全文请求超时')
+    }
+    throw new SearchError(
+      'network_error',
+      error instanceof Error ? error.message : String(error),
+    )
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function fetchEpmcXml(url: string, timeoutMs: number): Promise<string> {

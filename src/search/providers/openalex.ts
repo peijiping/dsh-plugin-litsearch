@@ -7,7 +7,8 @@
 
 import { limitedJson } from '../rate-limit.js'
 import { asArray, asNumber, asRecord, asString, doiUrl, normalizeDoi } from '../normalize.js'
-import type { PaperRecord, Provider } from '../types.js'
+import { mergeOaLocations } from '../oa.js'
+import type { OaLocation, PaperRecord, Provider } from '../types.js'
 
 const ENDPOINT = 'https://api.openalex.org/works'
 
@@ -68,6 +69,8 @@ function mapWork(raw: unknown): PaperRecord {
   const openAlexId = asString(work['id'])
   const landing = asString(primary['landing_page_url'])
   const language = asString(work['language'])
+  const oaLocations = readOaLocations(work)
+  const pdfUrl = oaLocations.find((location) => location.kind === 'pdf')?.url ?? asString(bestOa['pdf_url'])
 
   return {
     source: 'openalex',
@@ -90,9 +93,36 @@ function mapWork(raw: unknown): PaperRecord {
     ...(language === '' ? {} : { language }),
     citedBy: asNumber(work['cited_by_count']),
     openAccess: asRecord(work['open_access'])['is_oa'] === true,
-    pdfUrl: asString(bestOa['pdf_url']),
+    pdfUrl,
+    ...(oaLocations.length === 0 ? {} : { oaLocations }),
     type: asString(work['type']),
   }
+}
+
+/** `best_oa_location` + `locations[]`：PDF 直链与落地页分开标记。 */
+function readOaLocations(work: Record<string, unknown>): OaLocation[] {
+  const best = asRecord(work['best_oa_location'])
+  const entries = [best, ...asArray(work['locations']).map(asRecord)]
+  const locations: OaLocation[] = []
+  for (const location of entries) {
+    if (Object.keys(location).length === 0) continue
+    const isOa = location['is_oa'] === true
+    const license = asString(location['license'])
+    const shared = {
+      source: 'openalex' as const,
+      oa: isOa,
+      ...(license === '' ? {} : { license }),
+      ...(location === best ? { best: true } : {}),
+    }
+    const pdf = asString(location['pdf_url'])
+    if (pdf !== '') {
+      locations.push({ url: pdf, kind: 'pdf', ...shared })
+      continue
+    }
+    const landing = asString(location['landing_page_url'])
+    if (landing !== '') locations.push({ url: landing, kind: 'landing', ...shared, oa: false })
+  }
+  return mergeOaLocations([locations])
 }
 
 /** OpenAlex 的 ids 是完整 URL，取末段作为裸 id。 */
