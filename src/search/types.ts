@@ -553,6 +553,24 @@ export interface ZoteroSyncResult {
   items: ZoteroSyncItemResult[]
 }
 
+/** 同步前查重命中的依据：本插件条目 id → DOI → PMID → arXiv → 标题+年份。 */
+export type ZoteroDuplicateMatch = 'id' | 'doi' | 'pmid' | 'arxiv' | 'title'
+
+/** 目标目录里已存在的文献。 */
+export interface ZoteroDuplicate {
+  paperId: string
+  matchedBy: ZoteroDuplicateMatch
+}
+
+/** 同步前查重结果；查不了时 `ok=false`，调用方按正常流程同步。 */
+export interface ZoteroDuplicateCheckResult {
+  /** true = 完成查重；false = 未查重（未开启本机 API、目录无法定位等），不阻塞同步。 */
+  ok: boolean
+  duplicates: ZoteroDuplicate[]
+  /** 未查重原因或补充说明，直接展示给用户。 */
+  note?: string
+}
+
 /** 下载目录可写性测试结果。 */
 export interface StorageProbeResult {
   ok: boolean

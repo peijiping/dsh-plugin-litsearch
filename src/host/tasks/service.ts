@@ -50,6 +50,7 @@ import type {
   TaskSummary,
   ViewSnapshot,
   ZoteroCommand,
+  ZoteroDuplicateCheckResult,
   ZoteroProbeResult,
   ZoteroSyncResult,
   ZoteroSyncStatus,
@@ -70,6 +71,7 @@ import {
   resolvePdfRoot,
 } from '../pdf/store.js'
 import { ZoteroConnector } from '../zotero/connector.js'
+import { fetchExistingIndex, localApiBase, matchExisting, resolveTarget } from '../zotero/local.js'
 import { normalizeWorkspace } from '../workspace.js'
 import { compareTasks } from './compare.js'
 import { filterPapers, sortPapers, type PaperFilter } from './filter.js'
@@ -917,6 +919,61 @@ export class TaskService {
       return await new ZoteroConnector(settings.zoteroBaseUrl).listTargets()
     } catch (error) {
       return { ok: false, targets: [], error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * 查目标 Zotero 目录里是否已有这些文献，供同步弹窗默认跳过。
+   *
+   * 走 Zotero Local API（只读）。Local API 未开启、目录无法唯一定位等任何
+   * 失败都 fail-open：返回 `ok=false` 与原因，调用方照常同步，绝不阻塞。
+   */
+  async zoteroDuplicates(
+    id: string,
+    paperIds?: readonly string[],
+    target?: { id: string; name?: string },
+  ): Promise<ZoteroDuplicateCheckResult> {
+    const settings = getSettings()
+    if (!settings.zoteroEnabled) throw new SearchError('bad_request', 'Zotero 同步已在设置中关闭')
+    const task = await this.get(id)
+    const wanted =
+      paperIds === undefined || paperIds.length === 0
+        ? task.result.papers.slice(0, 50)
+        : paperIds.map((paperId) => findPaper(task, paperId))
+    if (wanted.length === 0) throw new SearchError('bad_request', '没有可同步的文献')
+    if (target === undefined || target.id === '') {
+      return { ok: false, duplicates: [], note: '未选择目标目录，已跳过重复检查' }
+    }
+
+    const label = target.name === undefined ? '目标目录' : `「${target.name}」`
+    try {
+      const listed = await new ZoteroConnector(settings.zoteroBaseUrl).listTargets()
+      if (!listed.ok) {
+        return {
+          ok: false,
+          duplicates: [],
+          note: `无法读取 Zotero 目录（${listed.error ?? '未知错误'}），已跳过重复检查`,
+        }
+      }
+      const apiBase = localApiBase(settings.zoteroBaseUrl)
+      const resolved = await resolveTarget(apiBase, listed.targets, target.id)
+      if (!resolved.ok) {
+        return { ok: false, duplicates: [], note: `${resolved.error}，已跳过重复检查` }
+      }
+      const index = await fetchExistingIndex(apiBase, resolved.prefix, resolved.collectionKey)
+      const duplicates = wanted.flatMap((paper) => {
+        const matchedBy = matchExisting(paper, index)
+        return matchedBy === undefined ? [] : [{ paperId: paper.paperId, matchedBy }]
+      })
+      if (duplicates.length === 0) return { ok: true, duplicates }
+      return {
+        ok: true,
+        duplicates,
+        note: `${label}里已有 ${duplicates.length} 篇本次要同步的文献，默认不再重复存入`,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { ok: false, duplicates: [], note: `重复检查失败（${message}），本次按正常流程同步` }
     }
   }
 

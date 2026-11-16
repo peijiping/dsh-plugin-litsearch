@@ -782,22 +782,43 @@ async function handleTasks(
     const ids = readStringArray(body['paperIds'], 'paperIds', 50, 80)
     const targetId = readString(body['target'], 'target', 40)
     const targetName = readString(body['targetName'], 'targetName', 200)
-    const targetFilesEditable = body['targetFilesEditable']
     const target =
       targetId === undefined || targetId === ''
         ? undefined
         : {
             id: targetId,
             ...(targetName === undefined || targetName === '' ? {} : { name: targetName }),
-            ...(typeof targetFilesEditable === 'boolean' ? { filesEditable: targetFilesEditable } : {}),
           }
+    if (seg[3] === 'check') {
+      ok(
+        res,
+        await service.zoteroDuplicates(
+          id,
+          ids === undefined || ids === null ? undefined : ids,
+          target,
+        ),
+      )
+      return
+    }
+    if (seg[3] !== undefined) {
+      fail(res, 404, 'not_found', `未知 Zotero 操作 ${seg[3]}`)
+      return
+    }
+    const targetFilesEditable = body['targetFilesEditable']
     ok(
       res,
       await service.zoteroSync(
         id,
         ids === undefined || ids === null ? undefined : ids,
         await resolveSessionWorkspace(sessionId),
-        target,
+        target === undefined
+          ? undefined
+          : {
+              ...target,
+              ...(typeof targetFilesEditable === 'boolean'
+                ? { filesEditable: targetFilesEditable }
+                : {}),
+            },
       ),
     )
     return

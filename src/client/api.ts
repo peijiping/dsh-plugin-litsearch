@@ -32,6 +32,7 @@ import type {
   TaskSummary,
   ViewSnapshot,
   ZoteroProbeResult,
+  ZoteroDuplicateCheckResult,
   ZoteroSyncResult,
   ZoteroTargetsResult,
 } from '../search/types'
@@ -358,6 +359,22 @@ export function downloadPaperPdf(
   return request<PdfDownloadResult>(
     taskPath(taskId, `/papers/${encodeURIComponent(paperId)}/download`),
     { ...writeInit('POST', {}), signal },
+  )
+}
+
+/** 同步前查目标目录里的重复文献（Host 查不了时返回 ok=false，不阻塞同步）。 */
+export function checkZoteroDuplicates(
+  taskId: string,
+  paperIds: readonly string[],
+  target: { id: string; name?: string },
+): Promise<ZoteroDuplicateCheckResult> {
+  return request<ZoteroDuplicateCheckResult>(
+    taskPath(taskId, '/zotero/check'),
+    writeInit('POST', {
+      paperIds,
+      target: target.id,
+      ...(target.name === undefined ? {} : { targetName: target.name }),
+    }),
   )
 }
 
