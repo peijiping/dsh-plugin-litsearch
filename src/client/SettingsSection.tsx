@@ -17,6 +17,7 @@ import { SOURCE_IDS, type ProbeResult, type SourceId } from '../search/types'
 import { cleanupSettings, probeSource, probeStorage, probeZotero } from './api'
 import { getHealth, refreshHealth, useHealth } from './health'
 import { tpl, type Translate } from './locales'
+import { linkStyle } from './styles'
 import {
   ARXIV_HTML_FIELD,
   AUTO_DOWNLOAD_FIELD,
@@ -274,6 +275,16 @@ export function SettingsSection(props: Props): ReactElement {
                       onClear={() => props.edit(NCBI_KEY_FIELD, '')}
                     />
                     {renderNumberField('pubmedIntervalMs')}
+                    <div style={CHOICE_HINT_STYLE}>
+                      <a
+                        style={linkStyle}
+                        href="https://www.ncbi.nlm.nih.gov/About/disclaimer.html"
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        {t('source.pubmed.disclaimer')}
+                      </a>
+                    </div>
                   </>
                 )}
                 {id === 'europepmc' && renderToggle(EPMC_FULLTEXT_FIELD)}

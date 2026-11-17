@@ -61,6 +61,12 @@ export const DEFAULT_ARXIV_INTERVAL_MS = 3000
 /** SerpAPI 按次计费，保守限制为 1 次/秒。 */
 export const DEFAULT_SERPAPI_INTERVAL_MS = 1000
 
+/**
+ * NCBI 要求 E-utilities 请求携带开发者邮箱（tool/email 需注册到 NCBI）。
+ * 用户未填写 contactEmail 时回落到维护者邮箱。
+ */
+export const NCBI_CONTACT_EMAIL = '43408883+peijiping@users.noreply.github.com'
+
 /** 全文下载默认设置。 */
 export const DEFAULT_PDF_MAX_MB = 30
 /** PDF 去重缓存总量上限（MB）；0 表示关闭自动清理。 */
