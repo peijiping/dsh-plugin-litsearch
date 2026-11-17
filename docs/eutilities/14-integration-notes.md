@@ -171,7 +171,7 @@ ecitmatch.cgi?db=pubmed&retmode=xml&bdata=<journal>|<year>|<volume>|<first_page>
 
 ## 11. 合规清单
 
-- [ ] 请求带 `tool` 与维护者 `email`，并向 NCBI 注册
+- [ ] 请求带 `tool` 与维护者 `email`（官方未要求单独注册）
 - [ ] 默认限流 3 req/s（有 Key 时 10 req/s）
 - [ ] 大批量任务放在周末或美东 21:00–05:00
 - [ ] UI 中提供 NCBI 免责与版权声明链接

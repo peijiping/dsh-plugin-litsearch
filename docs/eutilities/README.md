@@ -29,7 +29,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [01-overview.md](01-overview.md) | 概述、基础 URL、URL 编码规则、九个工具速查、Entrez 体系与 UID |
-| [02-usage-policy.md](02-usage-policy.md) | 使用规范：频率限制、API Key、tool/email 注册、批量与时间窗口、版权 |
+| [02-usage-policy.md](02-usage-policy.md) | 使用规范：频率限制、API Key、tool/email 约定、批量与时间窗口、版权 |
 | [03-esearch.md](03-esearch.md) | ESearch：文本检索，返回 UID 列表 |
 | [04-epost.md](04-epost.md) | EPost：上传 UID 列表到 History Server |
 | [05-esummary.md](05-esummary.md) | ESummary：批量获取文献摘要（DocSum） |

@@ -40,10 +40,9 @@ esummary.fcgi?db=pubmed&id=123456&api_key=ABCDE12345
 作用与后果：
 
 - NCBI 发现违规请求时会先尝试用该邮箱联系开发者，再考虑封禁。
-- 仅仅在请求里带 `tool`/`email` **不算合规**：被封锁后，需要把这两个值**注册**到 NCBI 才会解封。
-- 注册方式：发邮件到 `vog.hin.mln.ibcn@seitilitue`（即 `eutils@ncbi.nlm.nih.gov` 的反写），附上 `tool`、`email` 以及开发者或组织名称。
-- 注册后可要求加入 E-utilities 邮件列表，接收更新、已知 bug 与政策变更通知。
-- 注册后，该软件的所有请求都应继续携带这两个值。
+- 当前官方文档只要求请求携带这两个参数（见 [NLM 参数指南](https://www.nlm.nih.gov/dataguide/eutilities/utilities.html) 与 [NCBI 使用政策](https://www.ncbi.nlm.nih.gov/home/about/policies/)），**没有提供单独的邮件注册流程**，也不存在 `eutils@ncbi.nlm.nih.gov` 这个注册邮箱；发往该地址会被邮件服务器退信。
+- 该软件的所有请求都应继续携带这两个值；`tool` 保持稳定，不要随版本改名。
+- 如需与 NCBI 确认登记方式或报告接入问题，走 [NLM Support Center](https://support.ncbi.nlm.nih.gov/)，不要给 API 主机名对应的地址发邮件。
 
 > 对插件类项目：把 `tool` 设为稳定的包名/产品名，`email` 用维护者邮箱，并在文档中说明；这既符合规范，也能在出问题时被及时联系。
 
@@ -64,7 +63,7 @@ esummary.fcgi?db=pubmed&id=123456&api_key=ABCDE12345
 ## 7. 合规检查清单
 
 - [ ] 所有请求走 `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/`
-- [ ] 带 `tool` 与 `email`，且已向 NCBI 注册
+- [ ] 带 `tool` 与 `email`（官方未要求单独注册），且 `tool` 保持稳定
 - [ ] 客户端限流 ≤ 3 req/s（或无 Key 时），有 Key 时 ≤ 10 req/s
 - [ ] 大批量任务安排在非高峰时段
 - [ ] ID 列表 > 200 或查询很长时改用 POST
