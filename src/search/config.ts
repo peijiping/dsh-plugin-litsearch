@@ -73,6 +73,8 @@ export const DEFAULT_PDF_MAX_MB = 30
 export const DEFAULT_PDF_CACHE_MAX_MB = 512
 export const DEFAULT_AUTO_DOWNLOAD_PDF = false
 export const DEFAULT_ENABLE_EPMC_FULLTEXT = true
+/** 是否启用 PubMed Central 全文通道（按 PMID 反查 PMCID 后取 JATS XML）。 */
+export const DEFAULT_ENABLE_PMC_FULLTEXT = true
 /** 单个 PDF 候选的抓取总预算（与检索超时解耦）。 */
 export const DEFAULT_PDF_TIMEOUT_MS = 60_000
 /** 5xx / 网络错误的单候选重试次数。 */
@@ -139,6 +141,8 @@ export interface LitsearchSettings {
   pdfCacheMaxMb: number
   autoDownloadPdf: boolean
   enableEpmcFulltext: boolean
+  /** 是否启用 PubMed Central 全文通道。 */
+  enablePmcFulltext: boolean
   /** 单个 PDF 候选的抓取总预算（毫秒）。 */
   pdfTimeoutMs: number
   /** 5xx / 网络错误的重试次数（0 表示不重试）。 */
@@ -179,6 +183,7 @@ let readSettings = (): LitsearchSettings => ({
   pdfCacheMaxMb: DEFAULT_PDF_CACHE_MAX_MB,
   autoDownloadPdf: DEFAULT_AUTO_DOWNLOAD_PDF,
   enableEpmcFulltext: DEFAULT_ENABLE_EPMC_FULLTEXT,
+  enablePmcFulltext: DEFAULT_ENABLE_PMC_FULLTEXT,
   pdfTimeoutMs: DEFAULT_PDF_TIMEOUT_MS,
   pdfRetryCount: DEFAULT_PDF_RETRY_COUNT,
   pdfPerHostConcurrency: DEFAULT_PDF_PER_HOST_CONCURRENCY,

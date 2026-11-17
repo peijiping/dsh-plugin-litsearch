@@ -45,6 +45,7 @@ export type FieldName =
   | 'pdfCacheMaxMb'
   | 'autoDownloadPdf'
   | 'enableEpmcFulltext'
+  | 'enablePmcFulltext'
   | 'pdfTimeoutMs'
   | 'pdfRetryCount'
   | 'pdfPerHostConcurrency'
@@ -66,6 +67,7 @@ export const AUTO_OPEN_FIELD: FieldName = 'autoOpenTaskTab'
 export const PDF_ROOT_FIELD: FieldName = 'pdfRoot'
 export const AUTO_DOWNLOAD_FIELD: FieldName = 'autoDownloadPdf'
 export const EPMC_FULLTEXT_FIELD: FieldName = 'enableEpmcFulltext'
+export const PMC_FULLTEXT_FIELD: FieldName = 'enablePmcFulltext'
 export const OA_LOOKUP_FIELD: FieldName = 'enableOaLookup'
 export const ARXIV_HTML_FIELD: FieldName = 'enableArxivHtml'
 export const ZOTERO_ENABLED_FIELD: FieldName = 'zoteroEnabled'
@@ -101,6 +103,7 @@ const BOOLEAN_FIELDS: readonly FieldName[] = [
   AUTO_OPEN_FIELD,
   AUTO_DOWNLOAD_FIELD,
   EPMC_FULLTEXT_FIELD,
+  PMC_FULLTEXT_FIELD,
   OA_LOOKUP_FIELD,
   ARXIV_HTML_FIELD,
   ZOTERO_ENABLED_FIELD,
@@ -201,6 +204,7 @@ export interface SettingsState extends SettingsFormState {
   pdfCacheMaxMb: SettingsFieldState
   autoDownloadPdf: SettingsFieldState
   enableEpmcFulltext: SettingsFieldState
+  enablePmcFulltext: SettingsFieldState
   pdfTimeoutMs: SettingsFieldState
   pdfRetryCount: SettingsFieldState
   pdfPerHostConcurrency: SettingsFieldState
@@ -262,6 +266,7 @@ export class LitsearchSettingsController {
       pdfCacheMaxMb: this.form.field('pdfCacheMaxMb'),
       autoDownloadPdf: this.form.field(AUTO_DOWNLOAD_FIELD),
       enableEpmcFulltext: this.form.field(EPMC_FULLTEXT_FIELD),
+      enablePmcFulltext: this.form.field(PMC_FULLTEXT_FIELD),
       pdfTimeoutMs: this.form.field('pdfTimeoutMs'),
       pdfRetryCount: this.form.field('pdfRetryCount'),
       pdfPerHostConcurrency: this.form.field('pdfPerHostConcurrency'),

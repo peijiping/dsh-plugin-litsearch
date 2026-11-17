@@ -28,6 +28,7 @@ import {
   NCBI_KEY_FIELD,
   OA_LOOKUP_FIELD,
   PDF_ROOT_FIELD,
+  PMC_FULLTEXT_FIELD,
   S2_KEY_FIELD,
   SERP_KEY_FIELD,
   SOURCES_FIELD,
@@ -275,6 +276,7 @@ export function SettingsSection(props: Props): ReactElement {
                       onClear={() => props.edit(NCBI_KEY_FIELD, '')}
                     />
                     {renderNumberField('pubmedIntervalMs')}
+                    {renderToggle(PMC_FULLTEXT_FIELD)}
                     <div style={CHOICE_HINT_STYLE}>
                       <a
                         style={linkStyle}

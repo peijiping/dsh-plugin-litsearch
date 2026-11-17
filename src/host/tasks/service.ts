@@ -14,7 +14,8 @@ import { SearchError } from '../../search/errors.js'
 import { cooldownUntil, sourceHealthList } from '../../search/health.js'
 import { PROVIDER_INFOS } from '../../search/providers/index.js'
 import { searchSources } from '../../search/aggregate.js'
-import { arxivHtmlUrl, epmcXmlUrl, fullTextHtml, htmlToFragment, jatsToHtml } from '../../search/oa.js'
+import { arxivHtmlUrl, epmcXmlUrlByPmcid, fullTextHtml, htmlToFragment, jatsToHtml } from '../../search/oa.js'
+import { fetchPmcXml, resolvePmcid } from '../../search/pmc.js'
 import { fetchPubtatorEntities } from '../../search/pubtator-entities.js'
 import type {
   AnnotationInput,
@@ -328,6 +329,7 @@ export class TaskService {
         pdfMaxMb: settings.pdfMaxMb,
         autoDownload: settings.autoDownloadPdf,
         epmcFulltext: settings.enableEpmcFulltext,
+        pmcFulltext: settings.enablePmcFulltext,
         oaLookup: settings.enableOaLookup,
         arxivHtml: settings.enableArxivHtml,
         pdfTimeoutMs: settings.pdfTimeoutMs,
@@ -818,8 +820,11 @@ export class TaskService {
     const settings = getSettings()
     const resolution = await resolvePdf(paper)
     if (!resolution.ok || resolution.buffer === undefined) {
-      const fallback =
-        settings.enableEpmcFulltext && epmcFullTextAvailable(paper) ? 'html-only' : resolution.status
+      const pmcid = await this.ensureFullTextPmcid(paper, settings)
+      const webFullText =
+        (settings.enableEpmcFulltext && epmcFullTextAvailable(paper)) ||
+        (settings.enablePmcFulltext && pmcid !== '')
+      const fallback = webFullText ? 'html-only' : resolution.status
       await this.setPdfState(task, paperId, {
         pdfStatus: fallback,
         pdfError: resolution.error ?? '下载失败',
@@ -854,18 +859,21 @@ export class TaskService {
     return result
   }
 
-  /** 网页全文：Europe PMC JATS 优先，arXiv HTML 兜底（两条通道最终都转成安全 HTML）。 */
+  /** 网页全文：Europe PMC → PubMed Central → arXiv，最终都转成安全 HTML。 */
   async fullText(id: string, paperId: string): Promise<string> {
     const task = await this.get(id)
     const paper = findPaper(task, paperId)
     const settings = getSettings()
-    const epmcUrl = settings.enableEpmcFulltext ? epmcXmlUrl(paper) : null
+    // EPMC 与 PMC 都需要 PMCID；缺 PMCID 时用一次 ELink 按 PMID 反查。
+    const pmcid = await this.ensureFullTextPmcid(paper, settings)
+    const epmcUrl = settings.enableEpmcFulltext ? epmcXmlUrlByPmcid(pmcid) : null
+    const pmcAvailable = settings.enablePmcFulltext && pmcid !== ''
     const arxivUrl = settings.enableArxivHtml ? arxivHtmlUrl(paper) : null
-    if (epmcUrl === null && arxivUrl === null) {
+    if (epmcUrl === null && !pmcAvailable && arxivUrl === null) {
       const message =
-        !settings.enableEpmcFulltext && !settings.enableArxivHtml
+        !settings.enableEpmcFulltext && !settings.enablePmcFulltext && !settings.enableArxivHtml
           ? '网页全文兜底已在设置中关闭'
-          : '这篇文献没有可用的网页全文（Europe PMC / arXiv）'
+          : '这篇文献没有可用的网页全文（Europe PMC / PMC / arXiv）'
       throw new SearchError('not_found', message)
     }
 
@@ -878,6 +886,18 @@ export class TaskService {
         html = fullTextHtml(paper, jatsToHtml(xml), 'Europe PMC')
       } catch (error) {
         failure = error
+      }
+    }
+    if (html === undefined && pmcAvailable) {
+      try {
+        const xml = await fetchPmcXml(pmcid, {
+          contactEmail: settings.contactEmail,
+          ncbiApiKey: settings.ncbiApiKey,
+          timeoutMs: Math.max(settings.requestTimeoutMs, 30_000),
+        })
+        html = fullTextHtml(paper, jatsToHtml(xml), 'PubMed Central')
+      } catch (error) {
+        failure = failure ?? error
       }
     }
     if (html === undefined && arxivUrl !== null) {
@@ -1148,6 +1168,29 @@ export class TaskService {
     return saved.filePath
   }
 
+  /**
+   * 取 PMCID；论文自带时直接返回，否则按 PMID 用 ELink 反查。
+   *
+   * 查到后写回 `paper.ids.pmcid`：调用方随后的 `setPdfState` 会把任务一并落盘，
+   * 卡片与论文页也能立即显示 PMC 入口。
+   */
+  private async ensureFullTextPmcid(
+    paper: Paper,
+    settings: ReturnType<typeof getSettings>,
+  ): Promise<string> {
+    const known = paper.ids.pmcid.trim()
+    if (known !== '') return known
+    if (!settings.enableEpmcFulltext && !settings.enablePmcFulltext) return ''
+    if (paper.ids.pmid.trim() === '') return ''
+    const pmcid = await resolvePmcid(paper, {
+      contactEmail: settings.contactEmail,
+      ncbiApiKey: settings.ncbiApiKey,
+      timeoutMs: Math.min(settings.requestTimeoutMs, 12_000),
+    }).catch(() => '')
+    if (pmcid !== '') paper.ids.pmcid = pmcid
+    return pmcid
+  }
+
   private async setPdfState(
     task: SearchTask,
     paperId: string,
@@ -1304,10 +1347,12 @@ export class TaskService {
       const resolution = await resolvePdf(paper).catch(() => null)
       if (resolution === null || !resolution.ok || resolution.buffer === undefined) {
         if (resolution !== null) {
-          const fallback =
-            getSettings().enableEpmcFulltext && epmcFullTextAvailable(paper)
-              ? 'html-only'
-              : resolution.status
+          const settings = getSettings()
+          const pmcid = await this.ensureFullTextPmcid(paper, settings)
+          const webFullText =
+            (settings.enableEpmcFulltext && epmcFullTextAvailable(paper)) ||
+            (settings.enablePmcFulltext && pmcid !== '')
+          const fallback = webFullText ? 'html-only' : resolution.status
           await this.setPdfState(task, paper.paperId, {
             pdfStatus: fallback,
             pdfError: resolution.error ?? '下载失败',

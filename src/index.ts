@@ -29,6 +29,7 @@ import {
   DEFAULT_ENABLE_ARXIV_HTML,
   DEFAULT_ENABLE_EPMC_FULLTEXT,
   DEFAULT_ENABLE_OA_LOOKUP,
+  DEFAULT_ENABLE_PMC_FULLTEXT,
   DEFAULT_LANGUAGE,
   DEFAULT_MAX_TASK_TABS,
   DEFAULT_PAGE_SIZE,
@@ -121,6 +122,8 @@ export const Config = Schema.object({
   autoDownloadPdf: Schema.boolean().default(DEFAULT_AUTO_DOWNLOAD_PDF).volatile(),
   /** 无 PDF 时用 Europe PMC HTML 全文兜底。 */
   enableEpmcFulltext: Schema.boolean().default(DEFAULT_ENABLE_EPMC_FULLTEXT).volatile(),
+  /** 无 PDF 时用 PubMed Central JATS XML 兜底全文。 */
+  enablePmcFulltext: Schema.boolean().default(DEFAULT_ENABLE_PMC_FULLTEXT).volatile(),
   /** 单个 PDF 候选的抓取总预算（毫秒）。 */
   pdfTimeoutMs: Schema.number().default(DEFAULT_PDF_TIMEOUT_MS).volatile(),
   /** 5xx / 网络错误的重试次数。 */
@@ -188,6 +191,7 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     ),
     autoDownloadPdf: config.autoDownloadPdf.get(),
     enableEpmcFulltext: config.enableEpmcFulltext.get(),
+    enablePmcFulltext: config.enablePmcFulltext.get(),
     pdfTimeoutMs: clampInt(config.pdfTimeoutMs.get(), 5_000, 180_000, DEFAULT_PDF_TIMEOUT_MS),
     pdfRetryCount: clampInt(config.pdfRetryCount.get(), 0, 3, DEFAULT_PDF_RETRY_COUNT),
     pdfPerHostConcurrency: clampInt(

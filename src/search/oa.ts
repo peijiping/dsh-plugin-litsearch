@@ -219,7 +219,12 @@ function publisherPdfUrl(doi: string): string | null {
 
 /** Europe PMC 的全文 XML 地址；没有 PMCID 时返回 null。 */
 export function epmcXmlUrl(paper: Paper): string | null {
-  const pmcid = normalizePmcid(paper.ids.pmcid)
+  return epmcXmlUrlByPmcid(paper.ids.pmcid)
+}
+
+/** 同上，但直接接收裸 PMCID（`123` / `PMC123` 均可）。 */
+export function epmcXmlUrlByPmcid(value: string): string | null {
+  const pmcid = normalizePmcid(value)
   return pmcid === '' ? null : `${EPMC_REST}/${pmcid}/fullTextXML`
 }
 

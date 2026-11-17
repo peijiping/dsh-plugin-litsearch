@@ -933,6 +933,8 @@ export interface HealthInfo {
     pdfMaxMb: number
     autoDownload: boolean
     epmcFulltext: boolean
+    /** 是否启用 PubMed Central JATS XML 全文通道。 */
+    pmcFulltext: boolean
     /** 下载时是否反查 OA 位置（OpenAlex / Europe PMC / OpenAIRE / Unpaywall）。 */
     oaLookup: boolean
     /** 是否启用 arXiv HTML 全文通道。 */

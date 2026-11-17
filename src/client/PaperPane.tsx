@@ -246,7 +246,10 @@ export function PaperPane({
     state?.pdfStatus ?? (paper.pdfUrl === '' ? 'unknown' : 'available')
   const canPdf =
     paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '' || paper.doi !== ''
-  const canHtml = paper.ids.pmcid !== '' || paper.ids.arxivId !== ''
+  const canHtml =
+    paper.ids.pmcid !== '' ||
+    paper.ids.arxivId !== '' ||
+    (paper.openAccess && paper.ids.pmid !== '')
   const pdfLocations = (paper.oaLocations ?? []).filter(
     (location) => location.kind === 'pdf' && location.textMining !== true,
   )

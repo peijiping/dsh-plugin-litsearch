@@ -141,14 +141,17 @@ function Mark({ status }: { status: TaskStepStatus }): ReactElement {
 const PANEL_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
-  marginTop: 2,
-  padding: '10px 11px',
-  borderRadius: 8,
+  alignSelf: 'center',
+  width: '100%',
+  maxWidth: 320,
+  marginTop: 0,
+  gap: 5,
+  padding: '8px 10px',
+  borderRadius: 7,
   border: '1px solid rgba(80,140,255,0.5)',
   background: 'rgba(80,140,255,0.10)',
-  fontSize: 12.5,
-  lineHeight: 1.45,
+  fontSize: 12,
+  lineHeight: 1.4,
 }
 
 const HEAD_STYLE: CSSProperties = {
@@ -157,11 +160,12 @@ const HEAD_STYLE: CSSProperties = {
   justifyContent: 'space-between',
   gap: 8,
   fontWeight: 600,
+  fontSize: 11.5,
   color: ACCENT,
 }
 
 const BAR_TRACK_STYLE: CSSProperties = {
-  height: 4,
+  height: 3,
   borderRadius: 2,
   background: 'rgba(80,140,255,0.18)',
   overflow: 'hidden',
@@ -177,16 +181,17 @@ const BAR_FILL_STYLE: CSSProperties = {
 const GROUP_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 3,
-  paddingLeft: 8,
+  gap: 2,
+  paddingLeft: 7,
   borderLeft: '2px solid rgba(80,140,255,0.35)',
 }
 
 const GROUP_TITLE_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 5,
   fontWeight: 600,
+  fontSize: 11.5,
   color: 'inherit',
 }
 
@@ -200,8 +205,8 @@ const GROUP_LABEL_STYLE: CSSProperties = {
 const ROW_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
-  paddingLeft: 10,
+  gap: 5,
+  paddingLeft: 8,
 }
 
 const ROW_LABEL_STYLE: CSSProperties = {
@@ -215,6 +220,6 @@ const ROW_LABEL_STYLE: CSSProperties = {
 
 const ROW_VALUE_STYLE: CSSProperties = {
   flexShrink: 0,
-  fontSize: 12,
+  fontSize: 11,
   textAlign: 'right',
 }

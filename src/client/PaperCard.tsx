@@ -136,8 +136,11 @@ export function PaperCard({
   const canPdf =
     !NO_PDF_STATUSES.has(pdfStatus) &&
     (paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '' || paper.doi !== '')
-  // arXiv 预印本没有 PMCID，但有网页全文；条件不能只看 PMCID。
-  const canHtml = paper.ids.pmcid !== '' || paper.ids.arxivId !== ''
+  // PMC 通道可用 PMID 反查 PMCID；只对标注开放的记录展示，减少无谓请求。
+  const canHtml =
+    paper.ids.pmcid !== '' ||
+    paper.ids.arxivId !== '' ||
+    (paper.openAccess && paper.ids.pmid !== '')
   const pdfLocations = (paper.oaLocations ?? []).filter(
     (location) => location.kind === 'pdf' && location.textMining !== true,
   )

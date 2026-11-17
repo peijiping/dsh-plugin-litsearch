@@ -534,6 +534,9 @@ const zh: Record<string, string> = {
   'field.autoDownloadPdfHint': '默认关闭；开启后新任务完成时会尝试下载有开放获取地址的 PDF',
   'field.enableEpmcFulltext': 'Europe PMC 全文兜底',
   'field.enableEpmcFulltextHint': '没有 PDF 但有 PMCID 时，用 Europe PMC JATS 全文渲染可读 HTML',
+  'field.enablePmcFulltext': 'PubMed Central 全文兜底',
+  'field.enablePmcFulltextHint':
+    'Europe PMC 取不到时，按 PMID 反查 PMCID，再取 PMC JATS 全文；共享 NCBI 配额',
   'field.enableOaLookup': '下载时反查 OA 位置',
   'field.enableOaLookupHint': '没有直链时并发查询 OpenAlex / Europe PMC / OpenAIRE / Unpaywall，补出可下载地址',
   'field.enableArxivHtml': 'arXiv 网页全文',
@@ -1233,6 +1236,9 @@ const en: Record<string, string> = {
   'field.enableEpmcFulltext': 'Europe PMC fallback',
   'field.enableEpmcFulltextHint':
     'Render Europe PMC JATS as readable HTML when a paper has a PMCID but no PDF',
+  'field.enablePmcFulltext': 'PubMed Central fallback',
+  'field.enablePmcFulltextHint':
+    'Resolve the PMCID from the PMID and fetch PMC JATS when Europe PMC misses; shares the NCBI quota',
   'field.enableOaLookup': 'Resolve OA locations on download',
   'field.enableOaLookupHint':
     'When no direct link exists, query OpenAlex / Europe PMC / OpenAIRE / Unpaywall concurrently',

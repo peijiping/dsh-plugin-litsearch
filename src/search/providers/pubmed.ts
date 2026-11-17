@@ -7,8 +7,12 @@
  * 文档：docs/eutilities（使用规范、ESearch、EFetch）
  */
 
-import { NCBI_CONTACT_EMAIL } from '../config.js'
-import { SearchError } from '../errors.js'
+import {
+  NCBI_EUTILS,
+  eutilsParams,
+  parseJsonObject,
+  throwIfUpstreamError,
+} from '../eutils.js'
 import { asArray, asNumber, asRecord, asString, normalizeDoi } from '../normalize.js'
 import { limitedJson, limitedText } from '../rate-limit.js'
 import type { PaperRecord, Provider, ProviderSearchOptions } from '../types.js'
@@ -20,10 +24,8 @@ import {
   xmlTexts,
 } from '../xml.js'
 
-const ESEARCH = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi'
-const EFETCH = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi'
-
-const TOOL = 'dsh-plugin-litsearch'
+const ESEARCH = `${NCBI_EUTILS}/esearch.fcgi`
+const EFETCH = `${NCBI_EUTILS}/efetch.fcgi`
 
 /** ESearch 最多一次取多少 PMID（远小于上限，避免 EFetch 响应过大）。 */
 const MAX_PMIDS = 100
@@ -56,11 +58,8 @@ function buildTerm(query: string, options: ProviderSearchOptions): string {
 }
 
 function baseParams(options: ProviderSearchOptions): URLSearchParams {
-  const params = new URLSearchParams({ tool: TOOL, db: 'pubmed' })
-  params.set('email', options.contactEmail !== '' ? options.contactEmail : NCBI_CONTACT_EMAIL)
-  if (options.ncbiApiKey !== undefined && options.ncbiApiKey !== '') {
-    params.set('api_key', options.ncbiApiKey)
-  }
+  const params = eutilsParams(options)
+  params.set('db', 'pubmed')
   return params
 }
 
@@ -96,32 +95,6 @@ async function fetchArticles(ids: string[], options: ProviderSearchOptions): Pro
   })
   throwIfUpstreamError(parseJsonObject(text))
   return text
-}
-
-/**
- * E-utilities 超限时可能返回 HTTP 200 + `{"error":"API rate limit exceeded"}`。
- * 必须识别成 429，交给限流队列冷却与退避，避免被当成「0 条结果」。
- */
-function throwIfUpstreamError(payload: unknown): void {
-  const message = asString(asRecord(payload)['error'])
-  if (message === '') return
-  if (/rate limit/iu.test(message)) {
-    throw new SearchError('upstream_error', `PubMed 触发 E-utilities 限流：${message}`, {
-      status: 429,
-    })
-  }
-  throw new SearchError('upstream_error', `PubMed 返回错误：${message}`)
-}
-
-/** EFetch 正常返回 XML；只有错误响应才会是 JSON 对象。 */
-function parseJsonObject(text: string): unknown {
-  const trimmed = text.trim()
-  if (!trimmed.startsWith('{')) return undefined
-  try {
-    return JSON.parse(trimmed) as unknown
-  } catch {
-    return undefined
-  }
 }
 
 function mapArticle(block: string): PaperRecord {
