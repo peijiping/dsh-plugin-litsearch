@@ -208,3 +208,34 @@ export function ZoteroIcon(): ReactElement {
     </svg>
   )
 }
+
+/** 条件分区 · 数据源：圆柱数据库。 */
+export function DatabaseIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <ellipse cx="12" cy="5.5" rx="7.5" ry="2.8" />
+      <path d="M4.5 5.5v13c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-13" />
+      <path d="M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8" />
+    </svg>
+  )
+}
+
+/** 条件分区 · 每源数量：三张叠放的卡片。 */
+export function StackIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <rect x="5" y="3.5" width="13" height="9" rx="1.6" />
+      <path d="M3.5 8.5v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2" />
+    </svg>
+  )
+}
+
+/** 条件分区 · 排序：自上而下的递减横条。 */
+export function SortIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M4 6.5h13M4 12h9M4 17.5h5" />
+      <path d="M17 15.5l2.5 2.5 2.5-2.5M19.5 6.5v11.5" />
+    </svg>
+  )
+}

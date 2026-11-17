@@ -31,6 +31,7 @@ import {
 import { rememberTaskTitle } from './autoOpen'
 import { CompareTab } from './CompareTab'
 import { ConditionEditor } from './ConditionEditor'
+import { ConditionSummary } from './ConditionSummary'
 import { paperSummary, paperText, papersSummary, papersText, taskSummary, taskText } from './compose'
 import { markConsumed, usePendingDownloadCommands } from './downloadCommandStore'
 import { DownloadDialog, type BatchDownloadItem } from './DownloadDialog'
@@ -703,28 +704,6 @@ export function TaskPane({
       ? 0
       : Math.round((overviewAvailable / overview.loaded) * 100)
 
-  // 左栏：任务当前生效的检索条件（纯文本回显，改条件走弹窗）。
-  const conditionMeta: string[] = [tpl(t('task.pageSize'), { n: detail.conditions.pageSize })]
-  if (detail.conditions.yearFrom !== undefined || detail.conditions.yearTo !== undefined) {
-    conditionMeta.push(
-      tpl(t('task.conditionYear'), {
-        value: `${detail.conditions.yearFrom ?? ''}–${detail.conditions.yearTo ?? ''}`,
-      }),
-    )
-  }
-  if (detail.conditions.language !== 'any') {
-    conditionMeta.push(
-      tpl(t('filter.languageChip'), { value: t(`lang.${detail.conditions.language}`) }),
-    )
-  }
-  if (detail.conditions.openAccessOnly) conditionMeta.push(t('condition.openAccess'))
-  if ((detail.conditions.types ?? []).length > 0) {
-    conditionMeta.push(
-      tpl(t('filter.typeChip'), { value: (detail.conditions.types ?? []).join(', ') }),
-    )
-  }
-  conditionMeta.push(tpl(t('filter.sortChip'), { value: t(`sort.${detail.conditions.sort}`) }))
-
   // 右栏：当前轮次的进度 / 结果与提醒。
   const rounds = detail.rounds ?? []
   const currentRound = rounds.length === 0 ? undefined : rounds[rounds.length - 1]
@@ -841,29 +820,11 @@ export function TaskPane({
                 {t('condition.edit')}
               </button>
             </div>
-            <div style={CONDITION_BODY_STYLE}>
-              {detail.conditions.queries
-                .filter((query) => query.enabled)
-                .map((query) => (
-                  <div key={query.id} style={CONDITION_QUERY_STYLE} title={query.text}>
-                    {query.name !== '' && (
-                      <span style={CONDITION_QUERY_NAME_STYLE}>{query.name}</span>
-                    )}
-                    <span>{query.text}</span>
-                  </div>
-                ))}
-              <div style={CONDITION_META_STYLE}>
-                {tpl(t('task.conditionSources'), {
-                  sources: detail.conditions.sources.map((id) => t(`source.${id}`)).join(' / '),
-                })}
-              </div>
-              <div style={CONDITION_META_STYLE}>{conditionMeta.join(' · ')}</div>
-              {detail.fromTaskId !== undefined && (
-                <div style={CONDITION_META_STYLE} title={detail.fromTaskId}>
-                  {tpl(t('ledger.fromTask'), { id: detail.fromTaskId })}
-                </div>
-              )}
-            </div>
+            <ConditionSummary
+              t={t}
+              conditions={detail.conditions}
+              {...(detail.fromTaskId === undefined ? {} : { fromTaskId: detail.fromTaskId })}
+            />
           </section>
 
           <section style={active ? ROUND_BOX_ACTIVE_STYLE : ROUND_BOX_STYLE}>
@@ -1403,35 +1364,6 @@ const BOX_HEAD_TITLE_STYLE: CSSProperties = {
   ...linkButtonStyle,
   fontSize: 12.5,
   fontWeight: 650,
-}
-
-const CONDITION_BODY_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  minWidth: 0,
-  maxHeight: 132,
-  overflowY: 'auto',
-}
-
-const CONDITION_QUERY_STYLE: CSSProperties = {
-  fontSize: 12,
-  lineHeight: 1.5,
-  wordBreak: 'break-word',
-}
-
-const CONDITION_QUERY_NAME_STYLE: CSSProperties = {
-  marginRight: 4,
-  fontSize: 11.5,
-  fontWeight: 600,
-  opacity: 0.55,
-}
-
-const CONDITION_META_STYLE: CSSProperties = {
-  fontSize: 11.5,
-  lineHeight: 1.5,
-  opacity: 0.7,
-  wordBreak: 'break-word',
 }
 
 const ROUND_BOX_STYLE: CSSProperties = {
