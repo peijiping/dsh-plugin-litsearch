@@ -55,6 +55,7 @@ import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
 import { NotesTab } from './NotesTab'
 import { OverviewTab } from './OverviewTab'
+import { RunProgressPanel } from './RunProgressPanel'
 import { PaperCard, type PdfDownloadUi } from './PaperCard'
 import { RoundsDialog } from './RoundsDialog'
 import { TaskFilters, activeFilterCount } from './TaskFilters'
@@ -1156,7 +1157,23 @@ export function TaskPane({
                 : { downloadDir: detail.downloadDir, onRevealDir: onRevealLocal })}
             />
           )}
-          {page !== null && page.papers.length > 0 ? (
+          {active ? (
+            detail.steps !== undefined && detail.steps.length > 0 ? (
+              <RunProgressPanel t={t} steps={detail.steps} />
+            ) : (
+              // 旧任务兜底：没有步骤数据时保留原单行提示。
+              <div style={ROUND_RESULTS_HINT_STYLE} role="status" aria-live="polite">
+                <span style={ROUND_RESULTS_ICON_STYLE} aria-hidden>
+                  <SpinnerIcon />
+                </span>
+                <span>
+                  {roundCount > 0
+                    ? tpl(t('task.roundRunningResults'), { round: roundCount })
+                    : t('task.running')}
+                </span>
+              </div>
+            )
+          ) : page !== null && page.papers.length > 0 ? (
             <>
               <ul style={listStyle}>
                 {page.papers.map((paper) => (
@@ -1203,17 +1220,6 @@ export function TaskPane({
                 onChange={view.goToPage}
               />
             </>
-          ) : active ? (
-            <div style={ROUND_RESULTS_HINT_STYLE} role="status" aria-live="polite">
-              <span style={ROUND_RESULTS_ICON_STYLE} aria-hidden>
-                <SpinnerIcon />
-              </span>
-              <span>
-                {roundCount > 0
-                  ? tpl(t('task.roundRunningResults'), { round: roundCount })
-                  : t('task.running')}
-              </span>
-            </div>
           ) : (
             !view.loading && (
               <div style={statusStyle}>

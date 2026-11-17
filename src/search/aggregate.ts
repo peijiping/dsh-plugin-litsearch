@@ -42,21 +42,45 @@ export async function searchSources(options: SearchOptions): Promise<SourceRunRe
 
   const settled = await Promise.allSettled(
     sources.map((id) => {
+      // 开始埋点：调用 provider 前同步触发，让上层能立即标记该源「查询中」。
+      options.onSourceStart?.(id)
       const adapted = adaptQuery(id, { text: query, perSource: options.perSource })
-      if (adapted === '') return Promise.resolve<PaperRecord[]>([])
-      return PROVIDERS[id].search(adapted, {
-        limit,
-        yearFrom: options.yearFrom,
-        yearTo: options.yearTo,
-        openAccessOnly: options.openAccessOnly,
-        contactEmail,
-        timeoutMs,
-        signal: options.signal,
-        bypassCooldown: options.bypassCooldown === true,
-        ncbiApiKey: settings.ncbiApiKey,
-        s2ApiKey: settings.s2ApiKey,
-        serpApiKey: settings.serpApiKey,
-      })
+      const pending: Promise<PaperRecord[]> =
+        adapted === ''
+          ? Promise.resolve<PaperRecord[]>([])
+          : PROVIDERS[id].search(adapted, {
+              limit,
+              yearFrom: options.yearFrom,
+              yearTo: options.yearTo,
+              openAccessOnly: options.openAccessOnly,
+              contactEmail,
+              timeoutMs,
+              signal: options.signal,
+              bypassCooldown: options.bypassCooldown === true,
+              ncbiApiKey: settings.ncbiApiKey,
+              s2ApiKey: settings.s2ApiKey,
+              serpApiKey: settings.serpApiKey,
+            })
+
+      // 每个源单独挂 then，完成事件早于 allSettled 整体返回；
+      // reject 时仍原样抛出，保持 allSettled 的单源隔离语义。
+      return pending.then(
+        (records) => {
+          options.onSourceDone?.({ source: id, ok: true, count: records.length })
+          return records
+        },
+        (reason: unknown) => {
+          const skipped = reason instanceof SourceSkipped
+          options.onSourceDone?.({
+            source: id,
+            ok: false,
+            count: 0,
+            ...(skipped ? { skipped: true } : {}),
+            error: reason instanceof Error ? reason.message : String(reason),
+          })
+          throw reason
+        },
+      )
     }),
   )
 

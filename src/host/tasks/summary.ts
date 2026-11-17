@@ -38,6 +38,7 @@ export function toDetail(task: SearchTask): TaskDetail {
   return {
     ...toSummary(task),
     conditions: cloneConditions(task.conditions),
+    ...(task.steps === undefined ? {} : { steps: task.steps.map((step) => ({ ...step })) }),
     notes: task.notes,
     groups: task.groups.map((group) => ({ ...group })),
     rounds: roundsOf(task).map(cloneRound),

@@ -9,16 +9,21 @@
 import { DEFAULT_TASK_MAX_ROUNDS, MAX_LIMIT, getSettings } from '../../search/config.js'
 import { searchSources } from '../../search/aggregate.js'
 import { mergeHits, type RankedHit } from '../../search/identity.js'
+import { resolveSources } from '../../search/providers/index.js'
 import type {
   PaperRecord,
   SearchTask,
   SourceId,
+  SourceOutcome,
   SourceStatus,
-  TaskConditions,
   TaskOrigin,
+  TaskStep,
+  TaskStepStatus,
+  TaskConditions,
 } from '../../search/types.js'
 import { matchesLanguage } from './filter.js'
 import { finishRound, startRound } from './rounds.js'
+import { buildSteps, finalizeSteps } from './steps.js'
 import { countScreening } from './states.js'
 
 export interface RunnerHooks {
@@ -86,6 +91,19 @@ export class TaskRunner {
     )
     if (queries.length === 0) throw new Error('没有启用的检索式')
 
+    // 预生成当前轮的步骤清单：分母固定，执行中只改状态，不追加条目。
+    // 数据源口径与 aggregate.searchSources 内部一致（resolveSources 为纯函数）。
+    const sources = resolveSources(task.conditions.sources)
+    const steps = buildSteps(queries, sources)
+    task.steps = steps
+    const stepById = new Map(steps.map((step) => [step.id, step]))
+    const setStep = (id: string, patch: Partial<TaskStep>): void => {
+      const step = stepById.get(id)
+      if (step === undefined) return
+      Object.assign(step, patch)
+      touch(task, hooks) // 只推进 rev + 发布，不写盘
+    }
+
     // 开跑前先落一条轮次快照：条件是深拷贝，之后改条件不会影响历史。
     const round = startRound(task, origin, DEFAULT_TASK_MAX_ROUNDS)
 
@@ -110,14 +128,15 @@ export class TaskRunner {
 
     try {
       for (const [index, query] of queries.entries()) {
-        task.progress = { queryIndex: index + 1, queryTotal: queries.length }
-        touch(task, hooks)
+        const queryNo = index + 1
+        task.progress = { queryIndex: queryNo, queryTotal: queries.length }
+        setStep(`q${queryNo}`, { status: 'running' })
         await hooks.persist(task)
 
         const results = await searchSources({
           query: query.text,
           perSource: query.perSource,
-          sources: task.conditions.sources,
+          sources,
           limit: perSourceLimit,
           yearFrom: task.conditions.yearFrom,
           yearTo: task.conditions.yearTo,
@@ -125,13 +144,35 @@ export class TaskRunner {
           contactEmail: '',
           timeoutMs: 0,
           signal: controller.signal,
+          onSourceStart: (source) => {
+            setStep(`q${queryNo}:${source}`, { status: 'running' })
+          },
+          onSourceDone: (outcome: SourceOutcome) => {
+            const status: TaskStepStatus = controller.signal.aborted
+              ? 'skipped'
+              : outcome.skipped === true
+                ? 'skipped'
+                : outcome.ok
+                  ? 'done'
+                  : 'failed'
+            setStep(`q${queryNo}:${outcome.source}`, {
+              status,
+              count: outcome.count,
+              ...(outcome.error === undefined ? {} : { error: outcome.error }),
+            })
+          },
         })
         if (controller.signal.aborted) throw new RunCanceled()
 
+        let queryCount = 0
         for (const result of results) {
           const records = result.records.filter((record) =>
             matchesConditions(record, task.conditions),
           )
+          queryCount += records.length
+          // 与 stats.perQuery 同口径：直接改，稍后检索式 done 时统一 touch。
+          const sourceStep = stepById.get(`q${queryNo}:${result.source}`)
+          if (sourceStep !== undefined) sourceStep.count = records.length
           const status = statusById.get(result.source) ?? {
             id: result.source,
             ok: true,
@@ -160,9 +201,14 @@ export class TaskRunner {
             })
           })
         }
+        setStep(`q${queryNo}`, { status: 'done', count: queryCount })
       }
 
+      // 去重：让出一轮事件循环，让 1.5s 轮询有机会读到「去重中」。
+      setStep('dedup', { status: 'running' })
+      await new Promise<void>((resolve) => setImmediate(resolve))
       const merged = mergeHits(hits)
+      setStep('dedup', { status: 'done', count: merged.length })
       const papers = merged
         .filter((paper) => matchesConditions(paper, task.conditions))
         .slice(0, getSettings().taskMaxPapers)
@@ -198,6 +244,7 @@ export class TaskRunner {
       task.progress = undefined
     } finally {
       // 无论成功 / 取消 / 异常都回填本轮元数据，时间轴不会留下「永远运行中」的轮次。
+      finalizeSteps(steps, task.status, task.error)
       finishRound(round, task)
       touch(task, hooks)
       await hooks.persist(task)
@@ -210,6 +257,7 @@ function touch(task: SearchTask, hooks: RunnerHooks): void {
   task.updatedAt = new Date().toISOString()
   hooks.publish(task)
 }
+
 
 /** 每个源多取一些给跨源/跨式去重留余量，但不放大到打爆上游。 */
 function clampRequestLimit(pageSize: number): number {

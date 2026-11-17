@@ -184,6 +184,10 @@ export interface SearchOptions {
   signal?: AbortSignal | undefined
   /** 诊断测试用：忽略限流冷却，仍走队列与最小间隔。 */
   bypassCooldown?: boolean
+  /** 源查询开始（在调用 provider.search 前同步触发）。 */
+  onSourceStart?: (source: SourceId) => void
+  /** 源查询结束（fulfilled / rejected 均触发，早于 allSettled 整体返回）。 */
+  onSourceDone?: (outcome: SourceOutcome) => void
 }
 
 /** provider 实现拿到的已解析参数。 */
@@ -311,6 +315,42 @@ export interface TaskProgress {
   source?: SourceId
 }
 
+/** 步骤类别：检索式分组 / 单源查询 / 跨源去重。 */
+export type TaskStepKind = 'query' | 'source' | 'dedup'
+
+/** 步骤状态。跳过（限流/取消）与失败分开，UI 用不同颜色。 */
+export type TaskStepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed'
+
+/**
+ * 一轮检索中一个可观察的步骤。
+ * 轮首按固定数量预生成，执行中按 id 原地更新，不追加、不删除。
+ */
+export interface TaskStep {
+  /** 稳定 id：检索式 `q{i}`；源 `q{i}:{sourceId}`；去重 `dedup`。 */
+  id: string
+  kind: TaskStepKind
+  /** 用户可见短标签：检索式取 name（无则 text），源取 sourceId，去重取固定值。 */
+  label: string
+  /** 1-based；仅 query/source 步骤有。 */
+  queryIndex?: number
+  /** 仅 source 步骤有，用于 `source.<id>` 中文名映射。 */
+  source?: SourceId
+  status: TaskStepStatus
+  /** 该步条数：源=过滤后条数；检索式=其下各源之和；去重=merged.length。 */
+  count?: number
+  /** failed 的报错 / skipped 的中性原因。 */
+  error?: string
+}
+
+/** `searchSources` 的单源结束回调载荷。 */
+export interface SourceOutcome {
+  source: SourceId
+  ok: boolean
+  count: number
+  error?: string
+  skipped?: boolean
+}
+
 export interface TaskStats {
   /** queryId → 该检索式原始命中数。 */
   perQuery: Record<string, number>
@@ -380,6 +420,11 @@ export interface SearchTask {
   /** 关联的会话工作目录；PDF 默认下载到其下的 dsh-litsearch/。 */
   workspace?: string
   progress?: TaskProgress
+  /**
+   * 当前轮步骤进度。轮首重建、下一轮覆盖，轮末保留最后状态。
+   * 旧任务无此字段，读取路径统一按 undefined 兼容。
+   */
+  steps?: TaskStep[]
   stats: TaskStats
   result: TaskResult
   /** paperId → 筛选状态。 */
@@ -411,6 +456,8 @@ export interface TaskSummary {
 /** 任务详情（不含结果正文，结果走分页端点）。 */
 export interface TaskDetail extends TaskSummary {
   conditions: TaskConditions
+  /** 当前轮步骤进度（详情轮询透传，摘要/事件不带）。 */
+  steps?: TaskStep[]
   notes: string
   groups: TaskGroup[]
   /** 轮次元数据，供时间轴展示与条件回填；按时间升序。 */
