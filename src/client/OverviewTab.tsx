@@ -193,8 +193,9 @@ export function OverviewTab({
     label: t(`pdf.status.${entry.status}`),
     value: report.fullText[entry.key],
     color: entry.color,
-    // 「只看缺全文」与精确状态互斥，点状态时要清掉前者，否则两个条件相与后可能为空。
-    onClick: () => onPick({ pdfStatus: entry.status, missingFullText: undefined }),
+    // 「只看缺全文」「只看有全文」与精确状态互斥，点状态时要清掉两者，否则条件相与后可能为空。
+    onClick: () =>
+      onPick({ pdfStatus: entry.status, missingFullText: undefined, hasFullText: undefined }),
   }))
 
   /* ---- 来源：命中数比较 + 独有占比（重叠来源不可相加，故用双色条） ---- */
@@ -339,7 +340,9 @@ export function OverviewTab({
         <button
           type="button"
           style={{ ...QUICK_FILTER_STYLE, marginTop: 6 }}
-          onClick={() => onPick({ missingFullText: true, pdfStatus: undefined })}
+          onClick={() =>
+            onPick({ missingFullText: true, pdfStatus: undefined, hasFullText: undefined })
+          }
         >
           {t('overview.missingFullText')}
         </button>

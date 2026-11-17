@@ -29,6 +29,8 @@ export interface PaperFilter {
   hasPdf?: boolean
   /** 只保留尚无可用全文（PDF 或 EPMC HTML）的论文。 */
   missingFullText?: boolean
+  /** 只保留可获取全文（PDF 直链、已下载或仅 HTML）的论文，与 missingFullText 互补。 */
+  hasFullText?: boolean
   /** 只保留有效全文状态恰为该值的论文（与覆盖率的 pdfStatusOf 同一口径）。 */
   pdfStatus?: PdfStatus
   /** 只保留归入该分组的论文。 */
@@ -67,9 +69,11 @@ export function filterPapers(task: SearchTask, filter: PaperFilter = {}): Paper[
     if (filter.hasPdf === true && pdfStatusOf(task, paper) !== 'downloaded' && paper.pdfUrl === '') {
       return false
     }
-    if (filter.missingFullText === true) {
+    if (filter.missingFullText === true || filter.hasFullText === true) {
       const status = pdfStatusOf(task, paper)
-      if (status === 'downloaded' || status === 'available' || status === 'html-only') return false
+      const reachable = isFullTextReachable(status)
+      if (filter.missingFullText === true && reachable) return false
+      if (filter.hasFullText === true && !reachable) return false
     }
     if (filter.pdfStatus !== undefined && pdfStatusOf(task, paper) !== filter.pdfStatus) {
       return false
@@ -106,6 +110,11 @@ export function sortPapers(papers: Paper[], sort: SortMode | undefined): void {
   } else if (sort === 'year') {
     papers.sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
   }
+}
+
+/** 有效全文状态里，可获取全文的三个状态；其余状态都算作缺全文。 */
+export function isFullTextReachable(status: PdfStatus): boolean {
+  return status === 'available' || status === 'downloaded' || status === 'html-only'
 }
 
 /** 有效全文状态：没有人工/下载记录时，上游给的 PDF 直链视为可用。 */
@@ -179,6 +188,7 @@ export function filterKey(filter: PaperFilter): string {
     filter.language ?? '',
     filter.hasPdf === true ? '1' : '',
     filter.missingFullText === true ? '1' : '',
+    filter.hasFullText === true ? '1' : '',
     filter.pdfStatus ?? '',
     filter.groupId ?? '',
     filter.venue ?? '',

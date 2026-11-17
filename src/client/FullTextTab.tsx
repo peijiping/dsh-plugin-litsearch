@@ -18,19 +18,14 @@ import { fetchResults, type ResultsQuery } from './api'
 import { DownloadButton } from './DownloadButton'
 import { tpl, type Translate } from './locales'
 
-const STATUSES: readonly PdfStatus[] = [
-  'unknown',
-  'available',
-  'downloaded',
-  'html-only',
-  'paywalled',
-  'blocked',
-  'failed',
-]
+/** 可获取全文的状态，chip 排在最前。 */
+const REACHABLE_STATUSES: readonly PdfStatus[] = ['available', 'downloaded', 'html-only']
+/** 缺全文的状态，chip 排在「缺全文」合集之后。 */
+const MISSING_STATUSES: readonly PdfStatus[] = ['unknown', 'paywalled', 'blocked', 'failed']
 const PAGE_SIZE = 100
 
-/** `missing` 为缺全文合集，其余为按有效全文状态精确过滤。 */
-export type FullTextView = 'missing' | PdfStatus
+/** `reachable` 为可获取全文合集，`missing` 为缺全文合集，其余为按有效状态精确过滤。 */
+export type FullTextView = 'reachable' | 'missing' | PdfStatus
 
 interface Props {
   t: Translate
@@ -68,7 +63,9 @@ const EMPTY_LIST: ListState = {
 }
 
 function viewQuery(view: FullTextView): ResultsQuery {
-  return view === 'missing' ? { missingFullText: true } : { pdfStatus: view }
+  if (view === 'missing') return { missingFullText: true }
+  if (view === 'reachable') return { hasFullText: true }
+  return { pdfStatus: view }
 }
 
 export function FullTextTab({
@@ -85,7 +82,7 @@ export function FullTextTab({
   onBatchZotero,
   onShowInResults,
 }: Props): ReactElement {
-  const [view, setView] = useState<FullTextView>('missing')
+  const [view, setView] = useState<FullTextView>('reachable')
   const [list, setList] = useState<ListState>(EMPTY_LIST)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const seqRef = useRef(0)
@@ -167,7 +164,12 @@ export function FullTextTab({
         coverage.blocked +
         coverage.failed
   const selectedPapers = list.papers.filter((paper) => selected.has(paper.paperId))
-  const viewLabel = view === 'missing' ? t('fulltext.missing') : t(`pdf.status.${view}`)
+  const viewLabel =
+    view === 'missing'
+      ? t('fulltext.missing')
+      : view === 'reachable'
+        ? t('fulltext.reachable')
+        : t(`pdf.status.${view}`)
 
   return (
     <div style={WRAP_STYLE}>
@@ -182,12 +184,29 @@ export function FullTextTab({
           <div style={CHIP_ROW_STYLE}>
             <button
               type="button"
+              style={view === 'reachable' ? CHIP_ACTIVE_STYLE : CHIP_BUTTON_STYLE}
+              onClick={() => setView('reachable')}
+            >
+              {t('fulltext.reachable')} {availableCount}
+            </button>
+            {REACHABLE_STATUSES.map((status) => (
+              <button
+                key={status}
+                type="button"
+                style={view === status ? CHIP_ACTIVE_STYLE : CHIP_BUTTON_STYLE}
+                onClick={() => setView(status)}
+              >
+                {t(`pdf.status.${status}`)} {coverage[statusKey(status)]}
+              </button>
+            ))}
+            <button
+              type="button"
               style={view === 'missing' ? CHIP_ACTIVE_STYLE : CHIP_BUTTON_STYLE}
               onClick={() => setView('missing')}
             >
               {t('fulltext.missing')} {missingCount}
             </button>
-            {STATUSES.map((status) => (
+            {MISSING_STATUSES.map((status) => (
               <button
                 key={status}
                 type="button"

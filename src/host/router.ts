@@ -596,6 +596,8 @@ function readResultsFilter(params: URLSearchParams): ResultsFilter {
   if (hasPdf === '1' || hasPdf === 'true') filter.hasPdf = true
   const missingFullText = params.get('missingFullText')
   if (missingFullText === '1' || missingFullText === 'true') filter.missingFullText = true
+  const hasFullText = params.get('hasFullText')
+  if (hasFullText === '1' || hasFullText === 'true') filter.hasFullText = true
   const pdfStatus = readEnum(params.get('pdfStatus') ?? undefined, 'pdfStatus', PDF_STATUSES)
   if (pdfStatus !== undefined) filter.pdfStatus = pdfStatus
   const groupId = params.get('groupId')?.trim() ?? ''

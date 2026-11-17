@@ -171,6 +171,9 @@ function collectActiveFilters(
   if (value.missingFullText === true) {
     add('missingFullText', t('filter.missingFullText'), { missingFullText: undefined })
   }
+  if (value.hasFullText === true) {
+    add('hasFullText', t('filter.hasFullText'), { hasFullText: undefined })
+  }
   if (value.pdfStatus !== undefined) {
     add(
       'pdfStatus',
@@ -505,10 +508,27 @@ export function TaskFilters({
               type="checkbox"
               checked={value.missingFullText === true}
               onChange={(event) =>
-                patch({ missingFullText: event.target.checked ? true : undefined })
+                patch({
+                  missingFullText: event.target.checked ? true : undefined,
+                  hasFullText: undefined,
+                })
               }
             />
             {t('filter.missingFullText')}
+          </label>
+
+          <label style={CHECK_STYLE}>
+            <input
+              type="checkbox"
+              checked={value.hasFullText === true}
+              onChange={(event) =>
+                patch({
+                  hasFullText: event.target.checked ? true : undefined,
+                  missingFullText: undefined,
+                })
+              }
+            />
+            {t('filter.hasFullText')}
           </label>
 
           <label style={FIELD_STYLE}>

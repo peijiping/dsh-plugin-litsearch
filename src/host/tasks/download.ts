@@ -93,6 +93,7 @@ export function toPaperFilter(raw: ViewSnapshot['filters']): PaperFilter {
     openAccessOnly: flag('openAccessOnly'),
     hasPdf: flag('hasPdf'),
     missingFullText: flag('missingFullText'),
+    hasFullText: flag('hasFullText'),
     newOnly: flag('newOnly'),
     screening: oneOf('screening', SCREENING_VALUES),
     language: oneOf('language', LANGUAGE_VALUES),

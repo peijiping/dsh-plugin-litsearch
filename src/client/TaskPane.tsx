@@ -995,6 +995,7 @@ export function TaskPane({
                     setFilters((previous) => ({
                       ...previous,
                       missingFullText: previous.missingFullText === true ? undefined : true,
+                      hasFullText: undefined,
                     }))
                   }
                 >
@@ -1221,7 +1222,11 @@ export function TaskPane({
           onShowInResults={(viewKey: FullTextView) => {
             // 清空其他筛选，保证按钮上写的篇数就是跳过去能看到的篇数。
             setFilters(
-              viewKey === 'missing' ? { missingFullText: true } : { pdfStatus: viewKey },
+              viewKey === 'missing'
+                ? { missingFullText: true }
+                : viewKey === 'reachable'
+                  ? { hasFullText: true }
+                  : { pdfStatus: viewKey },
             )
             setTab('results')
           }}

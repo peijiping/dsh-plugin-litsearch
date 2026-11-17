@@ -260,6 +260,10 @@ const TASK_PARAMETERS = {
       description: 'get 时只看有 PDF 直链或已下载的文献；引用「有 PDF 的那批」前先用它核对。',
     },
     missingFullText: { type: 'boolean', description: 'get 时只看尚无可用全文的文献。' },
+    hasFullText: {
+      type: 'boolean',
+      description: 'get 时只看可获取全文的文献（含 PDF 直链、已下载与 HTML 全文）。',
+    },
     pdfStatus: { type: 'string', enum: [...PDF_STATUSES], description: '按全文状态精确过滤。' },
     yearFrom: { type: 'integer', minimum: 1, maximum: 3000, description: '起始年份。' },
     yearTo: { type: 'integer', minimum: 1, maximum: 3000, description: '截止年份。' },
@@ -416,6 +420,10 @@ const DOWNLOAD_PARAMETERS = {
         '仅有 PDF 直链或已下载的文献。「下载当前页的所有 pdf 文献」用这个；付费墙文献会被跳过。',
     },
     missingFullText: { type: 'boolean', description: '只下尚无可用全文的文献。' },
+    hasFullText: {
+      type: 'boolean',
+      description: '只下可获取全文的文献（含 PDF 直链、已下载与 HTML 全文）。',
+    },
     pdfStatus: {
       type: 'string',
       enum: [...PDF_STATUSES],
@@ -484,6 +492,10 @@ const ZOTERO_PARAMETERS = {
       description: '仅有 PDF 直链或已下载的文献（这类才会带 PDF 附件）。',
     },
     missingFullText: { type: 'boolean', description: '只同步尚无可用全文的文献。' },
+    hasFullText: {
+      type: 'boolean',
+      description: '只同步可获取全文的文献（含 PDF 直链、已下载与 HTML 全文）。',
+    },
   },
   required: ['scope', 'reason'],
   additionalProperties: false,
@@ -518,6 +530,7 @@ interface TaskArgs {
   q?: string
   hasPdf?: boolean
   missingFullText?: boolean
+  hasFullText?: boolean
   pdfStatus?: PdfStatus
   yearFrom?: number
   yearTo?: number
@@ -953,6 +966,7 @@ function readTaskArgs(args: unknown): TaskArgs {
   const filter = readScopeFilter(record)
   if (filter.hasPdf === true) input.hasPdf = true
   if (filter.missingFullText === true) input.missingFullText = true
+  if (filter.hasFullText === true) input.hasFullText = true
   if (filter.pdfStatus !== undefined) input.pdfStatus = filter.pdfStatus
   if (filter.yearFrom !== undefined) input.yearFrom = filter.yearFrom
   if (filter.yearTo !== undefined) input.yearTo = filter.yearTo
@@ -1227,7 +1241,7 @@ function readScopeFilter(record: Record<string, unknown>): PaperFilter {
     throw new Error('yearFrom 不能大于 yearTo')
   }
 
-  for (const key of ['openAccessOnly', 'hasPdf', 'missingFullText', 'newOnly'] as const) {
+  for (const key of ['openAccessOnly', 'hasPdf', 'missingFullText', 'hasFullText', 'newOnly'] as const) {
     const value = record[key]
     if (value === undefined) continue
     if (typeof value !== 'boolean') throw new Error(`${key} 必须是布尔值`)
@@ -1534,6 +1548,7 @@ const SNAPSHOT_FILTER_LABELS: Record<string, string> = {
   openAccessOnly: '仅开放获取',
   hasPdf: '仅含 PDF',
   missingFullText: '缺全文',
+  hasFullText: '有全文',
   newOnly: '仅新增',
   screening: '筛读',
   language: '语言',
@@ -1801,6 +1816,7 @@ function readFilterArgs(args: TaskArgs): PaperFilter {
   if (args.q !== undefined && args.q.trim() !== '') filter.q = args.q.trim()
   if (args.hasPdf === true) filter.hasPdf = true
   if (args.missingFullText === true) filter.missingFullText = true
+  if (args.hasFullText === true) filter.hasFullText = true
   if (args.pdfStatus !== undefined) filter.pdfStatus = args.pdfStatus
   if (args.yearFrom !== undefined) filter.yearFrom = args.yearFrom
   if (args.yearTo !== undefined) filter.yearTo = args.yearTo
