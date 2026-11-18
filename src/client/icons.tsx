@@ -169,6 +169,15 @@ export function FilterIcon(): ReactElement {
   )
 }
 
+/** 下拉展开：16px 粗描边下箭头，比 ▾ 字形更醒目。 */
+export function ChevronDownIcon(): ReactElement {
+  return (
+    <svg {...svgProps} strokeWidth={2.2}>
+      <path d="m5 8.5 7 7 7-7" />
+    </svg>
+  )
+}
+
 /** 发起时间：时钟。 */
 export function ClockIcon(): ReactElement {
   return (

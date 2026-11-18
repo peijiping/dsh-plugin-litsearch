@@ -1,15 +1,18 @@
 /**
  * 任务结果的筛选条。
  *
- * 除关键词（本质是检索词）外，所有条件都是下拉选择：
+ * 除关键词（本质是检索词）与筛读状态外，所有条件都是下拉选择：
+ * - 关键词使用文本框；
+ * - 筛读状态为带计数的胶囊按钮，点击生效、再点取消；
  * - 年份用预设区间（不限 / 近 1 年 / 近 5 年 / 近 10 年 / 自定义范围）；
  * - 类型、出处、作者候选取自当前结果的统计口径（`/stats`），避免手输完整值对不上；
- * - 来源、状态、分组、语言、排序沿用固定枚举。
+ * - 来源、分组、语言、排序沿用固定枚举。
  *
  * 关键词本地暂存 300ms 再上抛，避免每敲一个字都打一次 Host；下拉类条件立即生效。
  *
- * 「筛选（N）」按钮与顶部标签共用 collectActiveFilters：新增筛选维度时
- * 只在那里加一项，不要另外单写 chip，否则两处会再次不同步。
+ * 「筛选（N）」入口由调用方放在覆盖率行（FilterToggleButton）；已生效条件与
+ * 重置由 ActiveFilterChips 渲染在同一行。所有生效条件共用 collectActiveFilters：
+ * 新增筛选维度时只在那里加一项，不要另外单写 chip，否则两处会再次不同步。
  */
 
 import {
@@ -18,7 +21,6 @@ import {
   useState,
   type CSSProperties,
   type ReactElement,
-  type ReactNode,
 } from 'react'
 
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -63,9 +65,69 @@ interface Props {
   groups?: readonly TaskGroup[]
   /** 任务级统计（不含当前筛选），用于生成类型/出处/作者候选值。 */
   stats?: TaskStatsReport | null
-  /** 显示在「筛选」按钮之前的同排内容（如筛读计数），由调用方决定。 */
-  leading?: ReactNode
+  /** 筛读各状态的篇数；传入后状态在弹窗内显示为带计数的胶囊按钮。 */
+  screeningCounts?: Readonly<Record<Screening, number>>
+  /** 弹窗开关由调用方持有，入口按钮（FilterToggleButton）可放在筛选条之外。 */
+  open: boolean
+  onOpenChange(open: boolean): void
   onChange(next: ResultsQuery): void
+}
+
+/** 「筛选（N）」入口按钮；与结果页覆盖率行同排，点击打开筛选弹窗。 */
+export function FilterToggleButton({
+  t,
+  count,
+  onClick,
+}: {
+  t: Translate
+  count: number
+  onClick(): void
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      style={count > 0 ? TOGGLE_ACTIVE_STYLE : TOGGLE_STYLE}
+      onClick={onClick}
+    >
+      <FilterIcon />
+      <span>
+        {t('filter.show')}
+        {count === 0 ? '' : `（${count}）`}
+      </span>
+    </button>
+  )
+}
+
+/** 已生效条件和「重置」：由调用方紧跟在筛选入口之后渲染。 */
+export function ActiveFilterChips({
+  t,
+  value,
+  queries,
+  groups,
+  onChange,
+}: {
+  t: Translate
+  value: ResultsQuery
+  queries: readonly QueryBlock[]
+  groups: readonly TaskGroup[]
+  onChange(next: ResultsQuery): void
+}): ReactElement | null {
+  const chips = collectActiveFilters(value, t, queries, groups)
+  if (chips.length === 0) return null
+  return (
+    <>
+      <button type="button" style={RESET_STYLE} onClick={() => onChange({})}>
+        {t('filter.reset')}
+      </button>
+      {chips.map((chip) => (
+        <ActiveChip
+          key={chip.key}
+          label={chip.label}
+          onRemove={() => onChange({ ...value, ...chip.clear })}
+        />
+      ))}
+    </>
+  )
 }
 
 /** 由当前年份区间反推预设；非预设区间时归入「自定义范围」。 */
@@ -208,10 +270,11 @@ export function TaskFilters({
   queries,
   groups = [],
   stats = null,
-  leading,
+  screeningCounts,
+  open,
+  onOpenChange,
   onChange,
 }: Props): ReactElement {
-  const [open, setOpen] = useState(false)
   const [keyword, setKeyword] = useState(value.q ?? '')
   // 「自定义」在没有年份区间时无法从 value 反推出来，需要单独记住用户的选择。
   const [customYear, setCustomYear] = useState(false)
@@ -225,10 +288,9 @@ export function TaskFilters({
     setKeyword(value.q ?? '')
   }, [valueKey])
 
-  // 外部写入了固定的年份预设时退出「自定义」入口。
+  // 外部写入了固定的年份预设时退出「自定义」入口；重置为空也回到「不限」。
   useEffect(() => {
-    const derived = yearPresetOf(value)
-    if (derived !== 'any' && derived !== 'custom') setCustomYear(false)
+    if (yearPresetOf(value) !== 'custom') setCustomYear(false)
   }, [valueKey])
 
   useEffect(() => {
@@ -251,8 +313,6 @@ export function TaskFilters({
     onChange({})
   }
 
-  const chips = collectActiveFilters(value, t, queries, groups)
-  const count = chips.length
   const preset = customYear ? 'custom' : yearPresetOf(value)
 
   const setPreset = (next: YearPreset): void => {
@@ -270,33 +330,9 @@ export function TaskFilters({
   const authorOptions = facetOptions(stats?.topAuthors, value.author)
 
   return (
-    <div style={WRAP_STYLE}>
-      <div style={HEAD_ROW_STYLE}>
-        {leading}
-        <button
-          type="button"
-          style={count > 0 ? TOGGLE_ACTIVE_STYLE : TOGGLE_STYLE}
-          onClick={() => setOpen(true)}
-        >
-          <FilterIcon />
-          <span>
-            {t('filter.show')}
-            {count === 0 ? '' : `（${count}）`}
-          </span>
-        </button>
-        {count > 0 && (
-          <button type="button" style={RESET_STYLE} onClick={resetAll}>
-            {t('filter.reset')}
-          </button>
-        )}
-        {chips.map((chip) => (
-          <ActiveChip key={chip.key} label={chip.label} onRemove={() => patch(chip.clear)} />
-        ))}
-      </div>
-
-      <Modal
+    <Modal
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => onOpenChange(false)}
         title={t('filter.title')}
         contentClassName={FILTER_CONTENT_CLASS}
         footer={
@@ -304,7 +340,7 @@ export function TaskFilters({
             <button type="button" style={RESET_STYLE} onClick={resetAll}>
               {t('filter.reset')}
             </button>
-            <Button variant="outline" size="sm" type="button" onClick={() => setOpen(false)}>
+            <Button variant="outline" size="sm" type="button" onClick={() => onOpenChange(false)}>
               {t('filter.done')}
             </Button>
           </div>
@@ -312,6 +348,25 @@ export function TaskFilters({
       >
         <style>{FILTER_CONTENT_CSS}</style>
         <div style={GRID_STYLE}>
+          <div style={SCREENING_FIELD_STYLE}>
+            <span className="litsearch-filter-label">{t('filter.screening')}</span>
+            <div style={PILL_ROW_STYLE}>
+              {SCREENINGS.map((state) => (
+                <button
+                  key={state}
+                  type="button"
+                  style={value.screening === state ? PILL_ACTIVE_STYLE : PILL_STYLE}
+                  onClick={() =>
+                    patch({ screening: value.screening === state ? undefined : state })
+                  }
+                >
+                  {t(`screening.${state}`)}
+                  {screeningCounts === undefined ? '' : ` ${screeningCounts[state]}`}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <label style={FIELD_STYLE}>
             <span>{t('filter.keyword')}</span>
             <input
@@ -403,27 +458,6 @@ export function TaskFilters({
           )}
 
           <label style={FIELD_STYLE}>
-            <span>{t('filter.screening')}</span>
-            <select
-              style={INPUT_STYLE}
-              value={value.screening ?? ''}
-              onChange={(event) =>
-                patch({
-                  screening:
-                    event.target.value === '' ? undefined : (event.target.value as Screening),
-                })
-              }
-            >
-              <option value="">{t('filter.any')}</option>
-              {SCREENINGS.map((state) => (
-                <option key={state} value={state}>
-                  {t(`screening.${state}`)}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label style={FIELD_STYLE}>
             <span>{t('filter.group')}</span>
             <select
               style={INPUT_STYLE}
@@ -485,51 +519,58 @@ export function TaskFilters({
             </select>
           </label>
 
-          <label style={CHECK_STYLE}>
-            <input
-              type="checkbox"
-              checked={value.openAccessOnly === true}
-              onChange={(event) => patch({ openAccessOnly: event.target.checked ? true : undefined })}
-            />
-            {t('filter.openAccess')}
-          </label>
+          <div style={FULLTEXT_FIELD_STYLE}>
+            <span className="litsearch-filter-label">{t('filter.fullText')}</span>
+            <div style={CHECK_ROW_STYLE}>
+              <label style={CHECK_STYLE}>
+                <input
+                  type="checkbox"
+                  checked={value.openAccessOnly === true}
+                  onChange={(event) =>
+                    patch({ openAccessOnly: event.target.checked ? true : undefined })
+                  }
+                />
+                {t('filter.openAccess')}
+              </label>
 
-          <label style={CHECK_STYLE}>
-            <input
-              type="checkbox"
-              checked={value.hasPdf === true}
-              onChange={(event) => patch({ hasPdf: event.target.checked ? true : undefined })}
-            />
-            {t('filter.hasPdf')}
-          </label>
+              <label style={CHECK_STYLE}>
+                <input
+                  type="checkbox"
+                  checked={value.hasPdf === true}
+                  onChange={(event) => patch({ hasPdf: event.target.checked ? true : undefined })}
+                />
+                {t('filter.hasPdf')}
+              </label>
 
-          <label style={CHECK_STYLE}>
-            <input
-              type="checkbox"
-              checked={value.missingFullText === true}
-              onChange={(event) =>
-                patch({
-                  missingFullText: event.target.checked ? true : undefined,
-                  hasFullText: undefined,
-                })
-              }
-            />
-            {t('filter.missingFullText')}
-          </label>
+              <label style={CHECK_STYLE}>
+                <input
+                  type="checkbox"
+                  checked={value.missingFullText === true}
+                  onChange={(event) =>
+                    patch({
+                      missingFullText: event.target.checked ? true : undefined,
+                      hasFullText: undefined,
+                    })
+                  }
+                />
+                {t('filter.missingFullText')}
+              </label>
 
-          <label style={CHECK_STYLE}>
-            <input
-              type="checkbox"
-              checked={value.hasFullText === true}
-              onChange={(event) =>
-                patch({
-                  hasFullText: event.target.checked ? true : undefined,
-                  missingFullText: undefined,
-                })
-              }
-            />
-            {t('filter.hasFullText')}
-          </label>
+              <label style={CHECK_STYLE}>
+                <input
+                  type="checkbox"
+                  checked={value.hasFullText === true}
+                  onChange={(event) =>
+                    patch({
+                      hasFullText: event.target.checked ? true : undefined,
+                      missingFullText: undefined,
+                    })
+                  }
+                />
+                {t('filter.hasFullText')}
+              </label>
+            </div>
+          </div>
 
           <label style={FIELD_STYLE}>
             <span>{t('filter.type')}</span>
@@ -585,8 +626,7 @@ export function TaskFilters({
             </select>
           </label>
         </div>
-      </Modal>
-    </div>
+    </Modal>
   )
 }
 
@@ -601,19 +641,6 @@ function ActiveChip({ label, onRemove }: { label: string; onRemove(): void }): R
   )
 }
 
-const WRAP_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  padding: '4px 0',
-  borderBottom: '1px solid rgba(127,127,127,0.12)',
-}
-const HEAD_ROW_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  flexWrap: 'wrap',
-  gap: 8,
-}
 /** 与筛读计数按钮同款的胶囊按钮，前置漏斗图标；蓝色文字保证入口可发现。 */
 const TOGGLE_STYLE: CSSProperties = {
   display: 'inline-flex',
@@ -657,6 +684,45 @@ const FIELD_STYLE: CSSProperties = {
   fontSize: 12,
   minWidth: 0,
 }
+/** 筛读状态单独占满第一行，四个胶囊横向平铺。 */
+const SCREENING_FIELD_STYLE: CSSProperties = {
+  ...FIELD_STYLE,
+  gridColumn: '1 / -1',
+}
+/** 「全文」勾选项合成一组，整行平铺，组内仍是多选。 */
+const FULLTEXT_FIELD_STYLE: CSSProperties = {
+  ...FIELD_STYLE,
+  gridColumn: '1 / -1',
+}
+const CHECK_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '6px 16px',
+  paddingTop: 1,
+}
+/** 筛读状态的胶囊按钮，与结果页原先的计数按钮同款。 */
+const PILL_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 4,
+  paddingTop: 1,
+}
+const PILL_STYLE: CSSProperties = {
+  fontSize: 11.5,
+  padding: '2px 8px',
+  borderRadius: 10,
+  border: '1px solid rgba(127,127,127,0.3)',
+  background: 'transparent',
+  color: 'inherit',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+const PILL_ACTIVE_STYLE: CSSProperties = {
+  ...PILL_STYLE,
+  borderColor: '#508cff',
+  color: '#508cff',
+  fontWeight: 600,
+}
 const INPUT_STYLE: CSSProperties = {
   fontSize: 12.5,
   padding: '5px 8px',
@@ -673,19 +739,19 @@ const CUSTOM_YEAR_STYLE: CSSProperties = {
   gridColumn: '1 / -1',
 }
 const CHECK_STYLE: CSSProperties = {
-  display: 'flex',
+  display: 'inline-flex',
   alignItems: 'center',
   gap: 5,
   fontSize: 12,
   opacity: 0.92,
-  alignSelf: 'end',
-  paddingBottom: 4,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
 }
 
 /** 分组标题需要比下拉框内容更醒目，样式只能通过 contentClassName 命中内部 label。 */
 const FILTER_CONTENT_CLASS = 'litsearch-filter-content'
 const FILTER_CONTENT_CSS = `
-.${FILTER_CONTENT_CLASS} label>span{font-size:12px;font-weight:650;line-height:1.5}
+.${FILTER_CONTENT_CLASS} label>span,.${FILTER_CONTENT_CLASS} .litsearch-filter-label{font-size:12px;font-weight:650;line-height:1.5}
 `
 
 const CHIP_STYLE: CSSProperties = {

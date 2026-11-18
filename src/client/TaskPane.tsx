@@ -42,6 +42,7 @@ import { GroupsTab } from './GroupsTab'
 import {
   AlertIcon,
   ChatIcon,
+  ChevronDownIcon,
   ClockIcon,
   DownloadIcon,
   HistoryIcon,
@@ -59,7 +60,7 @@ import { OverviewTab } from './OverviewTab'
 import { RunProgressPanel } from './RunProgressPanel'
 import { PaperCard, type PdfDownloadUi } from './PaperCard'
 import { RoundsDialog } from './RoundsDialog'
-import { TaskFilters, activeFilterCount } from './TaskFilters'
+import { TaskFilters, FilterToggleButton, ActiveFilterChips, activeFilterCount } from './TaskFilters'
 import { TaskListDialog } from './TaskListDialog'
 import {
   ACCENT,
@@ -202,9 +203,11 @@ export function TaskPane({
   const [showTaskList, setShowTaskList] = useState(false)
   /** 任务级全文统计：结果页覆盖率横幅与全文页台账共用同一份数据。 */
   const [overview, setOverview] = useState<TaskStatsReport | null>(null)
+  const [filterOpen, setFilterOpen] = useState(false)
 
   const detail = view.detail
-  const filterActive = useMemo(() => activeFilterCount(filters) > 0, [filters])
+  const filterCount = useMemo(() => activeFilterCount(filters), [filters])
+  const filterActive = filterCount > 0
   // 排序只换顺序、不换结果集合，翻页更不该清空已选；只有换任务或改其它筛选条件才重置。
   const selectionScope = JSON.stringify({ ...filters, sort: undefined })
   // 批量下载循环里要判断「当前是否已下载」，用 ref 读取最新状态避免闭包取到旧值。
@@ -691,14 +694,6 @@ export function TaskPane({
   const coverage = overview?.fullText
   const overviewAvailable =
     coverage === undefined ? 0 : coverage.available + coverage.downloaded + coverage.htmlOnly
-  const overviewMissing =
-    coverage === undefined
-      ? 0
-      : coverage.unknown +
-        coverage.missing +
-        coverage.paywalled +
-        coverage.blocked +
-        coverage.failed
   const overviewRate =
     overview === null || overview.loaded === 0
       ? 0
@@ -973,56 +968,35 @@ export function TaskPane({
       <div ref={bodyRef} style={SCROLL_BODY_STYLE}>
         {tab === 'results' ? (
         <>
-          {overview !== null && (
-            <div style={COVERAGE_WRAP_STYLE}>
-              <div style={COVERAGE_ROW_STYLE}>
+          <div style={COVERAGE_WRAP_STYLE}>
+            <div style={COVERAGE_ROW_STYLE}>
+              {overview !== null && (
                 <span>
                   {tpl(t('fulltext.coverageBar'), {
                     available: overviewAvailable,
                     total: overview.loaded,
                     rate: overviewRate,
-                    missing: overviewMissing,
                   })}
                 </span>
-                <button
-                  type="button"
-                  style={
-                    filters.missingFullText === true
-                      ? QUICK_FILTER_ACTIVE_STYLE
-                      : QUICK_FILTER_STYLE
-                  }
-                  onClick={() =>
-                    setFilters((previous) => ({
-                      ...previous,
-                      missingFullText: previous.missingFullText === true ? undefined : true,
-                      hasFullText: undefined,
-                    }))
-                  }
-                >
-                  {t('fulltext.quickFilter')}
-                </button>
-                <button type="button" style={linkButtonStyle} onClick={() => setTab('fulltext')}>
-                  {t('fulltext.openTab')}
-                </button>
-                <div style={EXPORT_ROW_STYLE} title={t('export.hint')}>
-                  <span style={EXPORT_DIVIDER_STYLE} aria-hidden>
-                    |
-                  </span>
-                  <span style={EXPORT_LABEL_STYLE}>{t('ledger.export')}</span>
-                  {EXPORT_FORMATS.map((format) => (
-                    <a
-                      key={format}
-                      style={EXPORT_LINK_STYLE}
-                      href={exportUrl(taskId, format, filters)}
-                      download
-                    >
-                      {t(`export.${format}`)}
-                    </a>
-                  ))}
-                </div>
-              </div>
+              )}
+              {detail.fromTaskId !== undefined && (
+                <NewOnlyPill t={t} filters={filters} onChange={setFilters} />
+              )}
+              <FilterToggleButton
+                t={t}
+                count={filterCount}
+                onClick={() => setFilterOpen(true)}
+              />
+              <ActiveFilterChips
+                t={t}
+                value={filters}
+                queries={detail.conditions.queries}
+                groups={detail.groups}
+                onChange={setFilters}
+              />
+              <ExportMenu t={t} taskId={taskId} filters={filters} />
             </div>
-          )}
+          </div>
           <TaskFilters
             t={t}
             value={filters}
@@ -1030,10 +1004,10 @@ export function TaskPane({
             queries={detail.conditions.queries}
             groups={detail.groups}
             stats={overview}
+            screeningCounts={detail.stats.screening}
+            open={filterOpen}
+            onOpenChange={setFilterOpen}
             onChange={setFilters}
-            leading={
-              <ScreeningPills t={t} detail={detail} filters={filters} onChange={setFilters} />
-            }
           />
 
           {page !== null && page.total > 0 && (
@@ -1447,46 +1421,88 @@ const EXPORT_FORMATS = ['csv', 'ris', 'bibtex', 'md'] as const
 /** 批量下载的并发上限：同时下载 5 篇。 */
 const BATCH_CONCURRENCY = 5
 
-/** 筛读计数（点击筛选）：与「筛选」按钮同排，接在筛选条最前面。 */
-function ScreeningPills({
+/** 「仅看新增」快捷按钮：与「筛选」按钮同排，筛读状态已收进筛选弹窗。 */
+function NewOnlyPill({
   t,
-  detail,
   filters,
   onChange,
 }: {
   t: Translate
-  detail: TaskDetail
   filters: ResultsQuery
   onChange(next: ResultsQuery): void
 }): ReactElement {
-  const counts = detail.stats.screening
-  const toggle = (screening: Screening): void => {
-    onChange({
-      ...filters,
-      screening: filters.screening === screening ? undefined : screening,
-    })
-  }
-
   return (
     <div style={SCREENING_PILLS_STYLE}>
-      {SCREENINGS.map((screening) => (
-        <button
-          key={screening}
-          type="button"
-          style={filters.screening === screening ? SCREENING_PILL_ACTIVE : SCREENING_PILL}
-          onClick={() => toggle(screening)}
-        >
-          {t(`screening.${screening}`)} {counts[screening]}
-        </button>
-      ))}
-      {detail.fromTaskId !== undefined && (
-        <button
-          type="button"
-          style={filters.newOnly === true ? SCREENING_PILL_ACTIVE : SCREENING_PILL}
-          onClick={() => onChange({ ...filters, newOnly: filters.newOnly === true ? undefined : true })}
-        >
-          {t('ledger.newOnly')}
-        </button>
+      <button
+        type="button"
+        style={filters.newOnly === true ? SCREENING_PILL_ACTIVE : SCREENING_PILL}
+        onClick={() => onChange({ ...filters, newOnly: filters.newOnly === true ? undefined : true })}
+      >
+        {t('ledger.newOnly')}
+      </button>
+    </div>
+  )
+}
+
+/** 「导出 ▾」下拉：点开后才展开各格式链接，给筛选条件让出横向空间。 */
+function ExportMenu({
+  t,
+  taskId,
+  filters,
+}: {
+  t: Translate
+  taskId: string
+  filters: ResultsQuery
+}): ReactElement {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const closeOnOutside = (event: MouseEvent): void => {
+      if (ref.current !== null && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  return (
+    <div ref={ref} style={EXPORT_ROW_STYLE} title={t('export.hint')}>
+      <span style={EXPORT_DIVIDER_STYLE} aria-hidden>
+        |
+      </span>
+      <button
+        type="button"
+        style={EXPORT_TOGGLE_STYLE}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {t('ledger.export')}
+        <ChevronDownIcon />
+      </button>
+      {open && (
+        <div role="menu" style={EXPORT_MENU_STYLE}>
+          {EXPORT_FORMATS.map((format) => (
+            <a
+              key={format}
+              role="menuitem"
+              style={EXPORT_MENU_ITEM_STYLE}
+              href={exportUrl(taskId, format, filters)}
+              download
+              onClick={() => setOpen(false)}
+            >
+              {t(`export.${format}`)}
+            </a>
+          ))}
+        </div>
       )}
     </div>
   )
@@ -1895,6 +1911,7 @@ const SCREENING_PILL_ACTIVE: CSSProperties = {
   fontWeight: 600,
 }
 const EXPORT_ROW_STYLE: CSSProperties = {
+  position: 'relative',
   display: 'flex',
   alignItems: 'center',
   flexWrap: 'nowrap',
@@ -1903,7 +1920,43 @@ const EXPORT_ROW_STYLE: CSSProperties = {
   marginLeft: 'auto',
   fontSize: 11,
 }
-const EXPORT_LABEL_STYLE: CSSProperties = { opacity: 0.66 }
+/** 「导出」入口：保留文案，右侧下三角提示可展开。 */
+const EXPORT_TOGGLE_STYLE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 2,
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
+  color: ACCENT,
+  fontSize: 11.5,
+  lineHeight: 1.4,
+  cursor: 'pointer',
+}
+const EXPORT_MENU_STYLE: CSSProperties = {
+  position: 'absolute',
+  top: '100%',
+  right: 0,
+  marginTop: 3,
+  zIndex: 40,
+  display: 'flex',
+  flexDirection: 'column',
+  minWidth: 120,
+  padding: 2,
+  borderRadius: 6,
+  border: '1px solid rgba(127,127,127,0.3)',
+  background: '#fff',
+  boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+}
+const EXPORT_MENU_ITEM_STYLE: CSSProperties = {
+  padding: '5px 8px',
+  borderRadius: 4,
+  color: '#1f2328',
+  fontSize: 12,
+  lineHeight: 1.4,
+  textDecoration: 'none',
+  whiteSpace: 'nowrap',
+}
 /** 导出区与前文之间的竖线分隔。 */
 const EXPORT_DIVIDER_STYLE: CSSProperties = {
   opacity: 0.3,
@@ -2013,22 +2066,6 @@ const COVERAGE_ROW_STYLE: CSSProperties = {
   flexWrap: 'wrap',
   gap: 8,
 }
-const QUICK_FILTER_STYLE: CSSProperties = {
-  padding: '2px 8px',
-  borderRadius: 10,
-  border: '1px solid rgba(127,127,127,0.3)',
-  background: 'transparent',
-  color: 'inherit',
-  fontSize: 11.5,
-  cursor: 'pointer',
-}
-const QUICK_FILTER_ACTIVE_STYLE: CSSProperties = {
-  ...QUICK_FILTER_STYLE,
-  borderColor: '#508cff',
-  color: '#508cff',
-  fontWeight: 600,
-}
-
 // 任务面板占满 tab 高度，正文区自己滚动：宿主只给固定高度，不负责滚动长列表。
 const TASK_PANEL_STYLE: CSSProperties = {
   ...panelStyle,
