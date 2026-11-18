@@ -663,11 +663,11 @@ export function TaskPane({
 
   const zoteroMany = (): void => zoteroIds(ids)
 
-  if (taskId === null) return <div style={panelStyle}>{t('task.notFound')}</div>
+  if (taskId === null) return <div className="ls-root" style={panelStyle}>{t('task.notFound')}</div>
 
   if (detail === null) {
     return (
-      <div style={panelStyle}>
+      <div className="ls-root" style={panelStyle}>
         {view.loading ? (
           <div style={statusStyle}>{t('task.loading')}</div>
         ) : (
@@ -757,19 +757,20 @@ export function TaskPane({
   ]
 
   return (
-    <div style={TASK_PANEL_STYLE}>
+    <div className="ls-root" style={TASK_PANEL_STYLE}>
       <header style={HEADER_STYLE}>
         <div style={HEADER_TOP_STYLE}>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ ...titleStyle, fontSize: 16, fontWeight: 700, lineHeight: 1.4 }}>
+            <div className="ls-page-title">
               {detail.title}
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <div style={HEADER_ACTIONS_STYLE}>
             <Button
               variant="outline"
               size="sm"
               type="button"
+              className="ls-btn ls-btn-ghost ls-btn-compact"
               title={t('task.insertToChatHint')}
               onClick={insertTask}
             >
@@ -779,6 +780,7 @@ export function TaskPane({
               variant="outline"
               size="sm"
               type="button"
+              className="ls-btn ls-btn-ghost ls-btn-compact"
               disabled={active || view.busy}
               onClick={() => {
                 void view.rerun()
@@ -790,14 +792,15 @@ export function TaskPane({
               variant="outline"
               size="sm"
               type="button"
+              className="ls-btn ls-btn-ghost ls-btn-compact"
               onClick={() => view.reload()}
             >
               {t('task.refresh')}
             </Button>
-            <IconButton label={t('rounds.open')} onClick={() => setShowRounds(true)}>
+            <IconButton quiet label={t('rounds.open')} onClick={() => setShowRounds(true)}>
               <HistoryIcon />
             </IconButton>
-            <IconButton label={t('taskList.open')} onClick={() => setShowTaskList(true)}>
+            <IconButton quiet label={t('taskList.open')} onClick={() => setShowTaskList(true)}>
               <TaskListIcon />
             </IconButton>
           </div>
@@ -945,10 +948,13 @@ export function TaskPane({
         <div style={{ ...statusStyle, color: ERROR }}>{view.error}</div>
       )}
 
-      <div style={TAB_ROW_STYLE}>
+      <div className="ls-seg" style={TAB_ROW_STYLE}>
         {tabItems.map((item) => (
           <div
             key={item.key}
+            className="ls-seg-item"
+            role="tab"
+            aria-selected={tab === item.key}
             aria-current={tab === item.key ? 'page' : undefined}
             tabIndex={0}
             style={tab === item.key ? TAB_ACTIVE_STYLE : TAB_STYLE}
@@ -957,6 +963,19 @@ export function TaskPane({
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
                 setTab(item.key)
+                return
+              }
+              // 隐藏了滚动条，方向键是窄面板里唯一可靠的切换方式。
+              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                event.preventDefault()
+                const sibling =
+                  event.key === 'ArrowRight'
+                    ? event.currentTarget.nextElementSibling
+                    : event.currentTarget.previousElementSibling
+                if (sibling instanceof HTMLElement) {
+                  sibling.focus()
+                  sibling.click()
+                }
               }
             }}
           >
@@ -1212,6 +1231,7 @@ export function TaskPane({
           detail={detail}
           onSaved={view.reload}
           onNotify={notify}
+          {...(filters.groupId === undefined ? {} : { activeGroupId: filters.groupId })}
           onPickGroup={(groupId) => {
             setFilters((previous) => ({ ...previous, groupId }))
             setTab('results')
@@ -1303,14 +1323,24 @@ export function TaskPane({
 const HEADER_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
+  gap: 10,
 }
 
 const HEADER_TOP_STYLE: CSSProperties = {
   display: 'flex',
-  alignItems: 'flex-start',
+  alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
+}
+
+/** 头部操作区：窄面板下允许换行，避免按钮被裁掉。 */
+const HEADER_ACTIONS_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  flexWrap: 'wrap',
+  gap: 6,
+  flexShrink: 0,
 }
 
 /** 标题下方左右两栏：左=查询条件，右=本轮结果与提醒。窄面板下自动上下堆叠。 */
@@ -1325,10 +1355,10 @@ const CONDITION_BOX_STYLE: CSSProperties = {
   flexDirection: 'column',
   gap: 5,
   minWidth: 0,
-  padding: '7px 9px',
-  borderRadius: 8,
-  border: '1px solid rgba(127,127,127,0.2)',
-  background: 'rgba(127,127,127,0.05)',
+  padding: '10px 12px',
+  borderRadius: 12,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface-2)',
 }
 
 const BOX_HEAD_STYLE: CSSProperties = {
@@ -1342,7 +1372,7 @@ const BOX_HEAD_STYLE: CSSProperties = {
 const BOX_HEAD_TITLE_STYLE: CSSProperties = {
   ...linkButtonStyle,
   fontSize: 12.5,
-  fontWeight: 650,
+  fontWeight: 500,
 }
 
 const ROUND_BOX_STYLE: CSSProperties = {
@@ -1350,18 +1380,18 @@ const ROUND_BOX_STYLE: CSSProperties = {
   flexDirection: 'column',
   gap: 5,
   minWidth: 0,
-  padding: '7px 9px',
-  borderRadius: 8,
-  border: '1px solid rgba(80,140,255,0.22)',
-  background: 'rgba(80,140,255,0.05)',
+  padding: '10px 12px',
+  borderRadius: 12,
+  border: '1px solid var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
 }
 
 /** 检索进行中：整框加深蓝色底与描边，让「还在跑」一眼可见。 */
 const ROUND_BOX_ACTIVE_STYLE: CSSProperties = {
   ...ROUND_BOX_STYLE,
-  border: '1px solid rgba(80,140,255,0.65)',
-  background: 'rgba(80,140,255,0.12)',
-  boxShadow: '0 0 0 1px rgba(80,140,255,0.18)',
+  border: '1px solid var(--ls-accent-line-strong)',
+  background: 'var(--ls-accent-soft-2)',
+  boxShadow: '0 0 0 3px var(--ls-accent-soft)',
 }
 
 const ROUND_LINE_STYLE: CSSProperties = {
@@ -1377,8 +1407,7 @@ const ROUND_ICON_STYLE: CSSProperties = {
   display: 'inline-flex',
   flexShrink: 0,
   marginTop: 1,
-  color: ACCENT,
-  opacity: 0.8,
+  color: 'var(--ls-ink-3)',
 }
 
 const ROUND_TEXT_STYLE: CSSProperties = {
@@ -1392,9 +1421,9 @@ const ROUND_RUNNING_ROW_STYLE: CSSProperties = {
   alignItems: 'center',
   margin: '0 -3px',
   padding: '4px 6px',
-  borderRadius: 6,
-  border: '1px solid rgba(80,140,255,0.5)',
-  background: 'rgba(80,140,255,0.18)',
+  borderRadius: 8,
+  border: '1px solid var(--ls-accent-line-strong)',
+  background: 'var(--ls-accent-soft-2)',
   fontSize: 12.5,
 }
 
@@ -1406,8 +1435,8 @@ const ROUND_RUNNING_ICON_STYLE: CSSProperties = {
 
 const ROUND_RUNNING_TEXT_STYLE: CSSProperties = {
   ...ROUND_TEXT_STYLE,
-  color: ACCENT,
-  fontWeight: 650,
+  color: 'var(--ls-accent-ink)',
+  fontWeight: 500,
 }
 
 const ROUND_ACTION_STYLE: CSSProperties = {
@@ -1614,7 +1643,7 @@ function BulkBar({
         />
       </div>
       <div style={BULK_ROW_STYLE}>
-        <span style={{ fontSize: 11, opacity: 0.66 }}>{t('bulk.export')}</span>
+        <span style={{ fontSize: 11, color: 'var(--ls-ink-3)' }}>{t('bulk.export')}</span>
         {EXPORT_FORMATS.map((format) => (
           <a
             key={format}
@@ -1654,7 +1683,7 @@ function BulkActionButton({
       style={{
         ...BULK_BUTTON_STYLE,
         ...(highlighted
-          ? { borderColor: 'rgba(80,140,255,0.75)', background: 'rgba(80,140,255,0.16)' }
+          ? { borderColor: 'var(--ls-accent-line-strong)', background: 'var(--ls-accent-soft-2)' }
           : null),
         ...(disabled ? { opacity: 0.45, cursor: 'default' } : null),
       }}
@@ -1825,12 +1854,12 @@ const ROUND_RESULTS_HINT_STYLE: CSSProperties = {
   marginTop: 2,
   padding: '9px 11px',
   borderRadius: 8,
-  border: '1px solid rgba(80,140,255,0.5)',
-  background: 'rgba(80,140,255,0.12)',
+  border: '1px solid var(--ls-accent-line-strong)',
+  background: 'var(--ls-accent-soft-2)',
   fontSize: 12.5,
-  fontWeight: 600,
+  fontWeight: 500,
   lineHeight: 1.45,
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
 }
 
 const ROUND_RESULTS_ICON_STYLE: CSSProperties = {
@@ -1845,49 +1874,54 @@ const RIS_FALLBACK_STYLE: CSSProperties = {
   alignItems: 'center',
   flexWrap: 'wrap',
   gap: 8,
-  borderLeft: '3px solid #b26a00',
+  borderLeft: '3px solid var(--ls-warn)',
 }
 const RIS_FALLBACK_LINK_STYLE: CSSProperties = {
-  color: '#fff',
+  color: 'var(--ls-accent-ink)',
   fontSize: 12,
   textDecoration: 'underline',
+  textUnderlineOffset: 2,
 }
 const RIS_FALLBACK_BUTTON_STYLE: CSSProperties = {
   ...linkButtonStyle,
-  color: '#fff',
-  textDecoration: 'underline',
+  textDecoration: 'none',
 }
 
 // 只有选中项画底部横线；tab 用普通 div 渲染，绕开宿主对 button / tab 元素的
 // 全局下划线样式（原先的 `transparent` 边会被渲染成深色）。用 padding 补偿 2px 边框高度。
 const TAB_ROW_STYLE: CSSProperties = {
   display: 'flex',
-  flexWrap: 'wrap',
-  gap: 6,
+  flexWrap: 'nowrap',
+  gap: 3,
+  padding: 3,
+  borderRadius: 10,
+  background: 'var(--ls-surface-2)',
+  overflowX: 'auto',
+  overflowY: 'hidden',
 }
 const TAB_STYLE: CSSProperties = {
-  padding: '4px 9px 7px',
-  border: 'none',
-  borderBottom: 'none',
+  padding: '5px 9px',
+  borderRadius: 9,
+  border: '1px solid var(--ls-line)',
   boxShadow: 'none',
   outline: 'none',
   textDecoration: 'none',
-  background: 'transparent',
-  color: 'inherit',
-  fontSize: 13,
+  background: 'var(--ls-surface)',
+  color: 'var(--ls-ink-2)',
+  fontSize: 11,
   fontWeight: 500,
-  opacity: 0.75,
+  lineHeight: 1.4,
+  flex: '0 0 auto',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
   userSelect: 'none',
 }
+/** 激活项在深色主题下由 theme.ts 的 !important 规则改写为浅靛蓝底。 */
 const TAB_ACTIVE_STYLE: CSSProperties = {
   ...TAB_STYLE,
-  padding: '4px 9px',
-  borderBottom: `2px solid ${ACCENT}`,
-  color: ACCENT,
-  opacity: 1,
-  fontWeight: 700,
+  border: '1px solid #111318',
+  background: '#111318',
+  color: '#fff',
 }
 const SCREENING_PILLS_STYLE: CSSProperties = {
   display: 'flex',
@@ -1898,7 +1932,7 @@ const SCREENING_PILL: CSSProperties = {
   fontSize: 11.5,
   padding: '2px 8px',
   borderRadius: 10,
-  border: '1px solid rgba(127,127,127,0.3)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
   cursor: 'pointer',
@@ -1907,8 +1941,8 @@ const SCREENING_PILL: CSSProperties = {
 const SCREENING_PILL_ACTIVE: CSSProperties = {
   ...SCREENING_PILL,
   borderColor: ACCENT,
-  color: ACCENT,
-  fontWeight: 600,
+  color: 'var(--ls-accent-ink)',
+  fontWeight: 500,
 }
 const EXPORT_ROW_STYLE: CSSProperties = {
   position: 'relative',
@@ -1928,7 +1962,7 @@ const EXPORT_TOGGLE_STYLE: CSSProperties = {
   padding: 0,
   border: 'none',
   background: 'transparent',
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
   fontSize: 11.5,
   lineHeight: 1.4,
   cursor: 'pointer',
@@ -1943,15 +1977,15 @@ const EXPORT_MENU_STYLE: CSSProperties = {
   flexDirection: 'column',
   minWidth: 120,
   padding: 2,
-  borderRadius: 6,
-  border: '1px solid rgba(127,127,127,0.3)',
-  background: '#fff',
-  boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+  borderRadius: 10,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface)',
+  boxShadow: 'var(--ls-shadow-2)',
 }
 const EXPORT_MENU_ITEM_STYLE: CSSProperties = {
   padding: '5px 8px',
   borderRadius: 4,
-  color: '#1f2328',
+  color: 'var(--ls-ink-1)',
   fontSize: 12,
   lineHeight: 1.4,
   textDecoration: 'none',
@@ -1963,7 +1997,7 @@ const EXPORT_DIVIDER_STYLE: CSSProperties = {
   marginRight: -2,
 }
 const EXPORT_LINK_STYLE: CSSProperties = {
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
   textDecoration: 'none',
   fontSize: 11.5,
 }
@@ -1973,8 +2007,8 @@ const BULK_STYLE: CSSProperties = {
   gap: 4,
   padding: '4px 6px',
   borderRadius: 6,
-  background: 'rgba(80,140,255,0.08)',
-  border: '1px solid rgba(80,140,255,0.25)',
+  background: 'var(--ls-accent-soft)',
+  border: '1px solid var(--ls-accent-line)',
 }
 const BULK_ROW_STYLE: CSSProperties = {
   display: 'flex',
@@ -1986,7 +2020,7 @@ const BULK_SELECT_STYLE: CSSProperties = {
   fontSize: 11,
   padding: '2px 4px',
   borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
   maxWidth: 140,
@@ -1997,9 +2031,9 @@ const BULK_BUTTON_STYLE: CSSProperties = {
   gap: 4,
   padding: '2px 8px',
   borderRadius: 5,
-  border: '1px solid rgba(80,140,255,0.4)',
+  border: '1px solid var(--ls-accent-line-strong)',
   background: 'transparent',
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
   fontSize: 11.5,
   lineHeight: 1.4,
   cursor: 'pointer',
@@ -2015,9 +2049,9 @@ const BULK_DOWNLOAD_GROUP_STYLE: CSSProperties = {
 const BULK_ARROW_STYLE: CSSProperties = {
   padding: '2px 3px',
   borderRadius: 5,
-  border: '1px solid rgba(80,140,255,0.4)',
+  border: '1px solid var(--ls-accent-line-strong)',
   background: 'transparent',
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
   fontSize: 12,
   lineHeight: 1.4,
   cursor: 'pointer',
@@ -2032,17 +2066,17 @@ const BULK_MENU_STYLE: CSSProperties = {
   flexDirection: 'column',
   minWidth: 132,
   padding: 2,
-  borderRadius: 6,
-  border: '1px solid rgba(127,127,127,0.3)',
-  background: '#fff',
-  boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+  borderRadius: 10,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface)',
+  boxShadow: 'var(--ls-shadow-2)',
 }
 const BULK_MENU_ITEM_STYLE: CSSProperties = {
   padding: '5px 8px',
   border: 'none',
   borderRadius: 4,
   background: 'transparent',
-  color: '#1f2328',
+  color: 'var(--ls-ink-1)',
   fontSize: 12,
   lineHeight: 1.4,
   textAlign: 'left',
@@ -2056,8 +2090,8 @@ const COVERAGE_WRAP_STYLE: CSSProperties = {
   gap: 2,
   padding: '5px 8px',
   borderRadius: 6,
-  background: 'rgba(80,140,255,0.08)',
-  border: '1px solid rgba(80,140,255,0.25)',
+  background: 'var(--ls-accent-soft)',
+  border: '1px solid var(--ls-accent-line)',
   fontSize: 12,
 }
 const COVERAGE_ROW_STYLE: CSSProperties = {
@@ -2111,7 +2145,7 @@ const PAGE_TOOLBAR_ACTION_DISABLED_STYLE: CSSProperties = {
 }
 const PAGE_TOOLBAR_COUNT_STYLE: CSSProperties = {
   fontSize: 11.5,
-  opacity: 0.66,
+  color: 'var(--ls-ink-3)',
   whiteSpace: 'nowrap',
 }
 const PAGE_SORT_LABEL_STYLE: CSSProperties = {
@@ -2119,13 +2153,13 @@ const PAGE_SORT_LABEL_STYLE: CSSProperties = {
   alignItems: 'center',
   gap: 4,
   fontSize: 11.5,
-  opacity: 0.8,
+  color: 'var(--ls-ink-2)',
 }
 const PAGE_SORT_SELECT_STYLE: CSSProperties = {
   fontSize: 11.5,
   padding: '2px 4px',
   borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
 }
@@ -2140,7 +2174,7 @@ const PAGER_STYLE: CSSProperties = {
 const PAGER_BUTTON: CSSProperties = {
   padding: '2px 8px',
   borderRadius: 10,
-  border: '1px solid rgba(127,127,127,0.3)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
   fontSize: 11.5,
@@ -2152,4 +2186,4 @@ const PAGER_BUTTON_DISABLED: CSSProperties = {
   opacity: 0.4,
   cursor: 'default',
 }
-const PAGER_STATUS_STYLE: CSSProperties = { opacity: 0.72, whiteSpace: 'nowrap' }
+const PAGER_STATUS_STYLE: CSSProperties = { color: 'var(--ls-ink-2)', whiteSpace: 'nowrap' }

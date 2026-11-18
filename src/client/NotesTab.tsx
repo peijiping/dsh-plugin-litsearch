@@ -53,6 +53,7 @@ export function NotesTab({ t, taskId, detail, onSaved, onNotify }: Props): React
       <section>
         <h4 style={HEAD_STYLE}>{t('notes.title')}</h4>
         <textarea
+          className="ls-input"
           style={TEXTAREA_STYLE}
           rows={6}
           value={notes}
@@ -78,21 +79,17 @@ export function NotesTab({ t, taskId, detail, onSaved, onNotify }: Props): React
 
 const WRAP_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
 const HEAD_STYLE: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 650,
-  opacity: 0.85,
-  margin: '0 0 4px',
+  fontSize: 13.5,
+  fontWeight: 500,
+  color: 'var(--ls-ink-1)',
+  margin: '0 0 6px',
 }
 const TEXTAREA_STYLE: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
-  fontSize: 12,
-  lineHeight: 1.6,
-  padding: '6px 8px',
-  borderRadius: 6,
-  border: '1px solid rgba(127,127,127,0.28)',
-  background: 'transparent',
-  color: 'inherit',
+  fontSize: 12.5,
+  lineHeight: 1.65,
+  padding: '8px 10px',
   resize: 'vertical',
   fontFamily: 'inherit',
 }

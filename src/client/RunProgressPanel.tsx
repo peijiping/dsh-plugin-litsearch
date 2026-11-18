@@ -147,9 +147,9 @@ const PANEL_STYLE: CSSProperties = {
   marginTop: 0,
   gap: 5,
   padding: '8px 10px',
-  borderRadius: 7,
-  border: '1px solid rgba(80,140,255,0.5)',
-  background: 'rgba(80,140,255,0.10)',
+  borderRadius: 12,
+  border: '1px solid var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
   fontSize: 12,
   lineHeight: 1.4,
 }
@@ -159,22 +159,22 @@ const HEAD_STYLE: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
-  fontWeight: 600,
+  fontWeight: 500,
   fontSize: 11.5,
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
 }
 
 const BAR_TRACK_STYLE: CSSProperties = {
   height: 3,
-  borderRadius: 2,
-  background: 'rgba(80,140,255,0.18)',
+  borderRadius: 999,
+  background: 'var(--ls-accent-soft-2)',
   overflow: 'hidden',
 }
 
 const BAR_FILL_STYLE: CSSProperties = {
   height: '100%',
   borderRadius: 2,
-  background: ACCENT,
+  background: 'linear-gradient(90deg, var(--ls-accent), var(--ls-accent-2))',
   transition: 'width 0.3s ease',
 }
 
@@ -183,14 +183,14 @@ const GROUP_STYLE: CSSProperties = {
   flexDirection: 'column',
   gap: 2,
   paddingLeft: 7,
-  borderLeft: '2px solid rgba(80,140,255,0.35)',
+  borderLeft: '2px solid var(--ls-accent-line)',
 }
 
 const GROUP_TITLE_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 5,
-  fontWeight: 600,
+  fontWeight: 500,
   fontSize: 11.5,
   color: 'inherit',
 }

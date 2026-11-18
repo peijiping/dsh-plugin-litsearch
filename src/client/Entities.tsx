@@ -124,7 +124,7 @@ const WRAP_STYLE: CSSProperties = {
   marginTop: 6,
   padding: '6px 8px',
   borderRadius: 6,
-  background: 'rgba(127,127,127,0.07)',
+  background: 'var(--ls-surface-2)',
 }
 const HINT_STYLE: CSSProperties = { fontSize: 11, opacity: 0.68 }
 const GROUP_STYLE: CSSProperties = {
@@ -136,8 +136,8 @@ const GROUP_STYLE: CSSProperties = {
 const TYPE_STYLE: CSSProperties = {
   flex: '0 0 auto',
   minWidth: 48,
-  fontWeight: 600,
-  opacity: 0.72,
+  fontWeight: 500,
+  color: 'var(--ls-ink-2)',
   lineHeight: '18px',
 }
 const CHIPS_STYLE: CSSProperties = {
@@ -149,7 +149,7 @@ const CHIPS_STYLE: CSSProperties = {
 const CHIP_STYLE: CSSProperties = {
   padding: '0 6px',
   borderRadius: 9,
-  border: '1px solid rgba(127,127,127,0.28)',
+  border: '1px solid var(--ls-line-strong)',
   fontSize: 11,
   lineHeight: '16px',
   whiteSpace: 'nowrap',

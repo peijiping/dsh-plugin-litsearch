@@ -28,6 +28,7 @@ import { PAPER_ADDRESS_PREFIX, PaperPane } from './PaperPane'
 import { LitsearchSettingsController, ROW_ID } from './SettingsController'
 import { SettingsSection } from './SettingsSection'
 import { TASK_ADDRESS_PREFIX, TaskPane, taskIdFromAddress } from './TaskPane'
+import { installTheme } from './theme'
 
 /** locale 服务中本插件用到的那部分。 */
 interface LocaleService {
@@ -140,6 +141,8 @@ export const inject = [
 ]
 
 export function apply(ctx: ClientContext): void {
+  // 令牌与工具类必须在任何 slot 渲染之前进 head，否则首帧是无样式闪动。
+  ctx.effect(() => installTheme(), 'dsh-plugin-litsearch: theme')
   // 所有端点都带上当前会话 id，Host 据此把任务关联到会话工作目录。
   setSessionIdProvider(() => ctx.sidebarRight.mounted.getSnapshot())
   ctx.effect(() => ctx.locale.register(NS, dicts), 'dsh-plugin-litsearch: dictionaries')

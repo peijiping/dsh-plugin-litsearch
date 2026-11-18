@@ -132,8 +132,7 @@ const ICON_STYLE: CSSProperties = {
   display: 'inline-flex',
   flexShrink: 0,
   marginTop: 1,
-  color: '#508cff',
-  opacity: 0.85,
+  color: 'var(--ls-accent-ink)',
 }
 
 const SECTION_CONTENT_STYLE: CSSProperties = {
@@ -146,7 +145,7 @@ const SECTION_CONTENT_STYLE: CSSProperties = {
 
 const LABEL_STYLE: CSSProperties = {
   fontSize: 10.5,
-  fontWeight: 600,
+  fontWeight: 500,
   lineHeight: 1.3,
   opacity: 0.55,
 }
@@ -173,7 +172,7 @@ const QUERY_ROW_STYLE: CSSProperties = {
 const QUERY_NAME_STYLE: CSSProperties = {
   marginRight: 5,
   fontSize: 11.5,
-  fontWeight: 600,
+  fontWeight: 500,
   opacity: 0.6,
 }
 
@@ -195,5 +194,5 @@ const FROM_STYLE: CSSProperties = {
   opacity: 0.55,
   wordBreak: 'break-word',
   paddingTop: 2,
-  borderTop: '1px solid rgba(127,127,127,0.18)',
+  borderTop: '1px solid var(--ls-line)',
 }

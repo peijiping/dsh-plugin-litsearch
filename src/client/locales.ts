@@ -23,6 +23,7 @@ const zh: Record<string, string> = {
   'guide.desc': '检索免费开放学术文献，任务自动保存，可随时回来继续查看',
   'taskTab.title': '检索任务',
 
+  'search.newTask': '新建检索',
   'search.placeholder': '输入关键词，如 graph neural networks',
   'search.queryPlaceholder': '检索式 {n}',
   'search.addQuery': '+ 添加检索式',
@@ -310,6 +311,14 @@ const zh: Record<string, string> = {
 
   'groups.title': '研究分组',
   'groups.hint': '分组是任务内概念：把纳入的文献按「为什么读」归类，可导出成分层报告。',
+  'groups.summary': '{n} 个类别 · 已归类 {m} 篇',
+  'groups.new': '新建',
+  'groups.newTitle': '新建分组',
+  'groups.cancel': '取消',
+  'groups.statusSaved': '已保存',
+  'groups.emptyCta': '新建第一个分组',
+  'groups.index': '序号',
+  'groups.filterActive': '正在只看这组',
   'groups.name': '名称',
   'groups.desc': '说明',
   'groups.add': '添加分组',
@@ -723,6 +732,7 @@ const en: Record<string, string> = {
   'guide.desc': 'Search free open scholarly literature; tasks are saved and can be resumed later',
   'taskTab.title': 'Search task',
 
+  'search.newTask': 'New search',
   'search.placeholder': 'Enter keywords, e.g. graph neural networks',
   'search.queryPlaceholder': 'Query {n}',
   'search.addQuery': '+ Add query',
@@ -1010,6 +1020,14 @@ const en: Record<string, string> = {
   'paperTab.landing': 'Landing page',
 
   'groups.title': 'Research groups',
+  'groups.summary': '{n} categories · {m} papers filed',
+  'groups.new': 'New',
+  'groups.newTitle': 'New group',
+  'groups.cancel': 'Cancel',
+  'groups.statusSaved': 'Saved',
+  'groups.emptyCta': 'Create the first group',
+  'groups.index': 'Order',
+  'groups.filterActive': 'Showing only this group',
   'groups.hint':
     'Groups live inside a task: classify included papers by why you read them, then export a layered report.',
   'groups.name': 'Name',

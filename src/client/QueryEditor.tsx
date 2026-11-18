@@ -187,7 +187,7 @@ const queryCardStyle: CSSProperties = {
   flexDirection: 'column',
   gap: 5,
   padding: '7px 8px',
-  border: '1px solid rgba(127,127,127,0.22)',
+  border: '1px solid var(--ls-line)',
   borderRadius: 7,
   minWidth: 0,
 }
@@ -215,7 +215,7 @@ const enableButtonStyle: CSSProperties = {
 const nameLabelStyle: CSSProperties = {
   flex: '0 0 auto',
   fontSize: 11,
-  opacity: 0.7,
+  color: 'var(--ls-ink-2)',
   whiteSpace: 'nowrap',
 }
 
@@ -230,7 +230,7 @@ const overridePanelStyle: CSSProperties = {
   flexDirection: 'column',
   gap: 5,
   paddingTop: 6,
-  borderTop: '1px dashed rgba(127,127,127,0.25)',
+  borderTop: '1px dashed var(--ls-line-strong)',
 }
 
 const overrideRowStyle: CSSProperties = {
@@ -242,7 +242,7 @@ const overrideRowStyle: CSSProperties = {
 const overrideLabelStyle: CSSProperties = {
   flex: '0 0 72px',
   fontSize: 11,
-  opacity: 0.7,
+  color: 'var(--ls-ink-2)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',

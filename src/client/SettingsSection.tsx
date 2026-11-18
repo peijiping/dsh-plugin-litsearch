@@ -805,23 +805,23 @@ const NOTICE_STYLE: CSSProperties = {
   lineHeight: 1.5,
   color: 'var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 0.9))',
 }
-const HINT_STYLE: CSSProperties = { fontSize: 12, opacity: 0.72, marginBottom: 10 }
+const HINT_STYLE: CSSProperties = { fontSize: 12, color: 'var(--ls-ink-2)', marginBottom: 10 }
 const SAVE_STATUS_STYLE: CSSProperties = {
   margin: '0 0 8px',
   fontSize: 12,
   lineHeight: 1.5,
-  opacity: 0.72,
+  color: 'var(--ls-ink-2)',
 }
 const SAVE_FAILED_STYLE: CSSProperties = {
   ...SAVE_STATUS_STYLE,
   opacity: 1,
-  color: 'var(--dsw-alias-state-error-primary, var(--dsw-alias-label-error, #b3261e))',
+  color: 'var(--dsw-alias-state-error-primary, var(--dsw-alias-label-error, var(--ls-error)))',
 }
 const GROUP_STYLE: CSSProperties = { marginTop: 4 }
 const GROUP_HEAD_STYLE: CSSProperties = {
   fontSize: 13,
-  fontWeight: 650,
-  opacity: 0.85,
+  fontWeight: 500,
+  color: 'var(--ls-ink-1)',
   margin: '0 0 6px',
 }
 /** 某个来源的分组框：开关、密钥、参数与探活都在框内。 */
@@ -832,7 +832,7 @@ const SOURCE_BOX_STYLE: CSSProperties = {
   marginBottom: 8,
   padding: '8px 10px',
   borderRadius: 8,
-  border: '1px solid rgba(127,127,127,0.22)',
+  border: '1px solid var(--ls-line)',
 }
 const SOURCE_HEAD_STYLE: CSSProperties = {
   display: 'flex',
@@ -851,7 +851,7 @@ const SOURCE_PROBE_ROW_STYLE: CSSProperties = {
 const SOURCE_PROBE_TEXT_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.5,
-  opacity: 0.66,
+  color: 'var(--ls-ink-3)',
   minWidth: 0,
 }
 const CHOICE_ROW_STYLE: CSSProperties = {
@@ -859,10 +859,10 @@ const CHOICE_ROW_STYLE: CSSProperties = {
   flexDirection: 'column',
   gap: 4,
   padding: '6px 0',
-  borderBottom: '1px solid rgba(127,127,127,0.12)',
+  borderBottom: '1px solid var(--ls-line)',
 }
-const CHOICE_LABEL_STYLE: CSSProperties = { fontSize: 12, fontWeight: 600 }
-const CHOICE_HINT_STYLE: CSSProperties = { fontSize: 11, opacity: 0.66, lineHeight: 1.5 }
+const CHOICE_LABEL_STYLE: CSSProperties = { fontSize: 12, fontWeight: 500 }
+const CHOICE_HINT_STYLE: CSSProperties = { fontSize: 11, color: 'var(--ls-ink-3)', lineHeight: 1.5 }
 const PILL_ROW_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 2 }
 const TOGGLE_INFO_STYLE: CSSProperties = {
   display: 'flex',
@@ -874,8 +874,8 @@ const STORAGE_ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'colu
 const STORAGE_PATH_STYLE: CSSProperties = {
   fontSize: 11,
   wordBreak: 'break-all',
-  opacity: 0.8,
-  background: 'rgba(127,127,127,0.1)',
+  color: 'var(--ls-ink-2)',
+  background: 'var(--ls-line)',
   padding: '4px 6px',
   borderRadius: 4,
 }
@@ -884,7 +884,7 @@ const SECRET_INPUT_STYLE: CSSProperties = {
   fontSize: 12,
   padding: '4px 6px',
   borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
   minWidth: 0,
@@ -893,7 +893,7 @@ const SMALL_BUTTON_STYLE: CSSProperties = {
   fontSize: 11,
   padding: '3px 8px',
   borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.3)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
   cursor: 'pointer',
@@ -902,9 +902,9 @@ const SMALL_BUTTON_STYLE: CSSProperties = {
 const RESULT_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.5,
-  color: '#508cff',
+  color: 'var(--ls-accent-ink)',
 }
 const RESULT_ERROR_STYLE: CSSProperties = {
   ...RESULT_STYLE,
-  color: 'var(--dsw-alias-state-error-primary, var(--dsw-alias-label-error, #b3261e))',
+  color: 'var(--dsw-alias-state-error-primary, var(--dsw-alias-label-error, var(--ls-error)))',
 }

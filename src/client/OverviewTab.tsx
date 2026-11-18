@@ -19,17 +19,16 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactElement, typ
 import type { CountEntry, TaskStatsReport, YearStat } from '../search/types'
 import { fetchStats, type ResultsQuery } from './api'
 import { tpl, type Translate } from './locales'
-import { ACCENT } from './styles'
 
 /** 概览配色：浅色 / 深色主题下都可读的中饱和色。 */
 const C = {
-  blue: ACCENT,
-  teal: '#129c9c',
-  violet: '#8a63e8',
-  amber: '#e08a2e',
-  green: '#2f9e68',
-  rose: '#d2588a',
-  slate: '#8793a8',
+  blue: 'var(--ls-chart-1)',
+  teal: 'var(--ls-chart-2)',
+  violet: 'var(--ls-chart-3)',
+  amber: 'var(--ls-chart-4)',
+  green: 'var(--ls-chart-5)',
+  rose: 'var(--ls-chart-6)',
+  slate: 'var(--ls-chart-7)',
 } as const
 
 /** 环形图 / 堆叠条的取色顺序。 */
@@ -39,11 +38,11 @@ const PALETTE = [C.blue, C.teal, C.violet, C.amber, C.green, C.rose, C.slate] as
 const FULLTEXT_STATUSES = [
   { status: 'available', key: 'available', color: C.blue },
   { status: 'downloaded', key: 'downloaded', color: C.green },
-  { status: 'missing', key: 'missing', color: '#d97706' },
+  { status: 'missing', key: 'missing', color: 'var(--ls-warn)' },
   { status: 'html-only', key: 'htmlOnly', color: C.teal },
   { status: 'paywalled', key: 'paywalled', color: C.amber },
   { status: 'blocked', key: 'blocked', color: C.rose },
-  { status: 'failed', key: 'failed', color: '#d64545' },
+  { status: 'failed', key: 'failed', color: 'var(--ls-error)' },
   { status: 'unknown', key: 'unknown', color: C.slate },
 ] as const
 
@@ -490,8 +489,12 @@ function foldLongTail(
 }
 
 /** #rrggbb → rgba(..., alpha)，用于淡色底 / 轨道。 */
-function tint(hex: string, alpha: number): string {
-  const value = Number.parseInt(hex.slice(1), 16)
+/** 把取色值转成半透明版：令牌（`var(...)`）走 color-mix，十六进制走位移。 */
+function tint(color: string, alpha: number): string {
+  if (color.startsWith('var(')) {
+    return `color-mix(in srgb, ${color} ${Math.round(alpha * 100)}%, transparent)`
+  }
+  const value = Number.parseInt(color.slice(1), 16)
   return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${alpha})`
 }
 
@@ -1186,14 +1189,14 @@ const SUMMARY_STYLE: CSSProperties = {
 }
 const SECTION_STYLE: CSSProperties = {
   padding: '8px 0',
-  borderBottom: '1px solid rgba(127,127,127,0.12)',
+  borderBottom: '1px solid var(--ls-line)',
 }
 const SECTION_HEAD_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
   fontSize: 12.5,
-  fontWeight: 650,
+  fontWeight: 500,
   opacity: 0.9,
   margin: '0 0 6px',
 }
@@ -1248,14 +1251,14 @@ const NAME_STYLE: CSSProperties = {
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
-  fontWeight: 600,
+  fontWeight: 500,
 }
 const TRACK_STYLE: CSSProperties = {
   flex: '1 1 auto',
   minWidth: 20,
   height: 8,
   borderRadius: 4,
-  background: 'rgba(127,127,127,0.13)',
+  background: 'var(--ls-line)',
   overflow: 'hidden',
 }
 const BAR_FILL_STYLE: CSSProperties = { display: 'block', height: '100%', borderRadius: 4 }
@@ -1263,7 +1266,7 @@ const NUM_STYLE: CSSProperties = {
   flex: '0 0 32px',
   textAlign: 'right',
   fontVariantNumeric: 'tabular-nums',
-  fontWeight: 600,
+  fontWeight: 500,
 }
 const DROP_STYLE: CSSProperties = {
   flex: '0 0 34px',
@@ -1279,7 +1282,7 @@ const STACK_TRACK_STYLE: CSSProperties = {
   width: '100%',
   height: 11,
   borderRadius: 5,
-  background: 'rgba(127,127,127,0.10)',
+  background: 'var(--ls-line)',
   overflow: 'hidden',
 }
 const SEGMENT_STYLE: CSSProperties = {
@@ -1353,7 +1356,7 @@ const METRIC_DIVIDER_STYLE: CSSProperties = {
   width: 1,
   alignSelf: 'stretch',
   margin: '2px 2px',
-  background: 'rgba(127,127,127,0.16)',
+  background: 'var(--ls-line)',
 }
 const METRIC_FACTS_STYLE: CSSProperties = {
   display: 'flex',
@@ -1386,7 +1389,7 @@ const KPI_LABEL_STYLE: CSSProperties = {
 }
 const KPI_VALUE_STYLE: CSSProperties = {
   fontSize: 17,
-  fontWeight: 600,
+  fontWeight: 500,
   lineHeight: 1.2,
   fontVariantNumeric: 'tabular-nums',
 }
@@ -1405,7 +1408,7 @@ const SHARE_CELL_STYLE: CSSProperties = {
   textAlign: 'right',
   fontSize: 10.5,
   fontVariantNumeric: 'tabular-nums',
-  fontWeight: 600,
+  fontWeight: 500,
 }
 
 const TREND_WRAP_STYLE: CSSProperties = { width: '100%' }

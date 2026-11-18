@@ -52,9 +52,9 @@ export interface ZoteroCommandMeta {
 const SYNC_CONCURRENCY = 5
 
 const PHASE_COLOR: Record<RowPhase, string> = {
-  pending: 'rgba(127,127,127,0.9)',
+  pending: 'var(--ls-ink-2)',
   syncing: ACCENT,
-  synced: '#2e9e5b',
+  synced: 'var(--ls-success)',
   failed: ERROR,
   skipped: '#b8860b',
 }
@@ -560,7 +560,7 @@ export function ZoteroSyncDialog({
           </span>
         </div>
         {summary !== undefined && (
-          <div style={{ ...SUMMARY_STYLE, color: failed > 0 ? ERROR : '#2e9e5b' }}>
+          <div style={{ ...SUMMARY_STYLE, color: failed > 0 ? ERROR : 'var(--ls-success)' }}>
             {running && <SpinnerIcon />}
             {summary}
           </div>
@@ -661,14 +661,14 @@ const TARGET_BOX_STYLE: CSSProperties = {
   marginBottom: 10,
   padding: '8px 10px',
   borderRadius: 8,
-  border: '1px solid rgba(80,140,255,0.25)',
-  background: 'rgba(80,140,255,0.06)',
+  border: '1px solid var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
 }
 
 const TARGET_LABEL_STYLE: CSSProperties = {
   fontSize: 11,
-  fontWeight: 650,
-  opacity: 0.7,
+  fontWeight: 500,
+  color: 'var(--ls-ink-2)',
 }
 
 const SELECT_STYLE: CSSProperties = {
@@ -676,7 +676,7 @@ const SELECT_STYLE: CSSProperties = {
   padding: '4px 6px',
   fontSize: 12.5,
   borderRadius: 6,
-  border: '1px solid rgba(127,127,127,0.35)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
 }
@@ -684,7 +684,7 @@ const SELECT_STYLE: CSSProperties = {
 const HINT_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.5,
-  opacity: 0.7,
+  color: 'var(--ls-ink-2)',
 }
 
 const CHECKING_STYLE: CSSProperties = {
@@ -693,7 +693,7 @@ const CHECKING_STYLE: CSSProperties = {
   gap: 5,
   fontSize: 11.5,
   lineHeight: 1.5,
-  opacity: 0.75,
+  color: 'var(--ls-ink-2)',
 }
 
 const LINK_BUTTON_STYLE: CSSProperties = {
@@ -701,7 +701,7 @@ const LINK_BUTTON_STYLE: CSSProperties = {
   padding: 0,
   border: 'none',
   background: 'none',
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
   font: 'inherit',
   fontSize: 11,
   lineHeight: 1.5,
@@ -716,8 +716,8 @@ const OVERVIEW_STYLE: CSSProperties = {
   marginBottom: 8,
   padding: '8px 10px',
   borderRadius: 8,
-  border: '1px solid rgba(80,140,255,0.25)',
-  background: 'rgba(80,140,255,0.08)',
+  border: '1px solid var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
 }
 
 const COUNTS_STYLE: CSSProperties = {
@@ -733,12 +733,12 @@ const SUMMARY_STYLE: CSSProperties = {
   alignItems: 'center',
   gap: 4,
   fontSize: 12,
-  fontWeight: 650,
+  fontWeight: 500,
 }
 
 const MUTED_STYLE: CSSProperties = {
   fontSize: 12,
-  opacity: 0.7,
+  color: 'var(--ls-ink-2)',
 }
 
 const ERROR_TEXT_STYLE: CSSProperties = {
@@ -765,7 +765,7 @@ const ROW_STYLE: CSSProperties = {
   alignItems: 'flex-start',
   gap: 8,
   padding: '7px 0',
-  borderTop: '1px solid rgba(127,127,127,0.18)',
+  borderTop: '1px solid var(--ls-line)',
 }
 
 const INDEX_STYLE: CSSProperties = {
@@ -788,7 +788,7 @@ const ROW_MAIN_STYLE: CSSProperties = {
 const ROW_TITLE_STYLE: CSSProperties = {
   fontSize: 12.5,
   lineHeight: 1.45,
-  fontWeight: 600,
+  fontWeight: 500,
   overflow: 'hidden',
   display: '-webkit-box',
   WebkitLineClamp: 2,
@@ -800,7 +800,6 @@ const ROW_ERROR_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.4,
   color: ERROR,
-  opacity: 0.85,
   overflow: 'hidden',
   display: '-webkit-box',
   WebkitLineClamp: 2,
@@ -811,7 +810,7 @@ const ROW_ERROR_STYLE: CSSProperties = {
 const ROW_NOTE_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.4,
-  opacity: 0.65,
+  color: 'var(--ls-ink-3)',
   overflow: 'hidden',
   display: '-webkit-box',
   WebkitLineClamp: 1,
@@ -827,7 +826,7 @@ const MODEL_BADGE_STYLE: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.5,
   paddingBottom: 4,
-  borderBottom: '1px solid rgba(127,127,127,0.18)',
+  borderBottom: '1px solid var(--ls-line)',
 }
 
 const MODEL_TAG_STYLE: CSSProperties = {
@@ -835,13 +834,13 @@ const MODEL_TAG_STYLE: CSSProperties = {
   padding: '1px 6px',
   borderRadius: 4,
   border: `1px solid ${ACCENT}`,
-  color: ACCENT,
-  fontWeight: 650,
+  color: 'var(--ls-accent-ink)',
+  fontWeight: 500,
   fontSize: 11,
 }
 
 const REASON_STYLE: CSSProperties = {
-  opacity: 0.75,
+  color: 'var(--ls-ink-2)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -851,7 +850,7 @@ const REASON_STYLE: CSSProperties = {
 const ROW_META_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.4,
-  opacity: 0.65,
+  color: 'var(--ls-ink-3)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',

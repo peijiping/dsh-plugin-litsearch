@@ -319,7 +319,7 @@ const FIELD_STYLE: CSSProperties = {
 
 const FIELD_LABEL_STYLE: CSSProperties = {
   fontSize: 11,
-  opacity: 0.68,
+  color: 'var(--ls-ink-3)',
   whiteSpace: 'nowrap',
 }
 
@@ -332,7 +332,7 @@ const SELECT_STYLE: CSSProperties = {
   fontSize: 11.5,
   padding: '2px 4px',
   borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
 }

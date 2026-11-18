@@ -178,14 +178,18 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
   const pageSize = health?.settings.defaultPageSize ?? DEFAULT_PAGE_SIZE
 
   return (
-    <div style={{ ...panelStyle, position: 'relative' }}>
+    <div className="ls-root" style={{ ...panelStyle, position: 'relative' }}>
       <div style={pageHeaderStyle}>
-        <span style={{ fontSize: 13, fontWeight: 650, opacity: 0.85 }}>{t('tab.title')}</span>
-        <IconButton label={t('taskList.open')} onClick={() => setShowTaskList(true)}>
+        <div style={{ minWidth: 0 }}>
+          <div className="ls-eyebrow">{t('tab.title')}</div>
+          <div className="ls-page-title">{t('search.newTask')}</div>
+        </div>
+        <IconButton quiet label={t('taskList.open')} onClick={() => setShowTaskList(true)}>
           <TaskListIcon />
         </IconButton>
       </div>
       <form
+        className="ls-card"
         style={searchFormStyle}
         onSubmit={(event) => {
           event.preventDefault()
@@ -215,6 +219,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
             type="submit"
             variant="primary"
             size="sm"
+            className="ls-btn ls-btn-primary"
             disabled={creating || runnable === 0}
           >
             {creating ? t('search.searching') : t('search.button')}
@@ -229,6 +234,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
             <Pill
               type="button"
               active={selected.includes(id)}
+              className="ls-pill-source"
               aria-pressed={selected.includes(id)}
               onClick={() => toggleSource(id)}
             >
@@ -269,7 +275,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
         ) : (
           <ul style={historyListStyle}>
             {tasks.map((task) => (
-              <li key={task.id} style={historyRowStyle}>
+              <li key={task.id} className="ls-card ls-card-hover" style={historyRowStyle}>
                 <button
                   type="button"
                   style={historyTitleStyle}
@@ -327,7 +333,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
 
 const pageHeaderStyle = {
   display: 'flex',
-  alignItems: 'center',
+  alignItems: 'flex-start',
   justifyContent: 'space-between',
   gap: 8,
 } as const
@@ -348,24 +354,25 @@ const queryListStyle = {
 } as const
 
 const sectionTitleStyle = {
-  fontSize: 13,
-  fontWeight: 650,
-  opacity: 0.85,
-  margin: '8px 0 4px',
+  fontSize: 13.5,
+  fontWeight: 500,
+  color: 'var(--ls-ink-1)',
+  margin: '10px 0 8px',
 } as const
 
 const historyListStyle = {
   listStyle: 'none',
   margin: 0,
   padding: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
 } as const
 
 const historyRowStyle = {
   display: 'flex',
   flexDirection: 'column',
   gap: 3,
-  padding: '8px 0',
-  borderTop: '1px solid rgba(127,127,127,0.18)',
 } as const
 
 const historyTitleStyle = {
@@ -386,7 +393,7 @@ const historyMetaStyle = {
   flexWrap: 'wrap',
   gap: 8,
   fontSize: 11.5,
-  opacity: 0.66,
+  color: 'var(--ls-ink-3)',
 } as const
 
 const bannerStyle = {
@@ -399,7 +406,7 @@ const bannerStyle = {
 } as const
 const bannerButtonStyle = {
   ...linkButtonStyle,
-  color: '#fff',
   textDecoration: 'underline',
+  textUnderlineOffset: 2,
   flexShrink: 0,
 } as const

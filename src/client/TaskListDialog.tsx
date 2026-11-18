@@ -302,7 +302,7 @@ const rowStyle = {
   flexDirection: 'column',
   gap: 3,
   padding: '9px 0',
-  borderTop: '1px solid rgba(127,127,127,0.18)',
+  borderTop: '1px solid var(--ls-line)',
 } as const
 
 const titleButtonStyle = {
@@ -326,8 +326,8 @@ const currentBadgeStyle = {
   lineHeight: 1.4,
   padding: '0 5px',
   borderRadius: 4,
-  border: '1px solid rgba(80,140,255,0.5)',
-  color: ACCENT,
+  border: '1px solid var(--ls-accent-line-strong)',
+  color: 'var(--ls-accent-ink)',
   flexShrink: 0,
 } as const
 

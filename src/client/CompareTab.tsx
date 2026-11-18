@@ -251,7 +251,7 @@ const SELECT_STYLE: CSSProperties = {
   fontSize: 12,
   padding: '3px 5px',
   borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
   minWidth: 0,
@@ -264,8 +264,8 @@ const HEAD_ROW_STYLE: CSSProperties = {
 }
 const HEAD_STYLE: CSSProperties = {
   fontSize: 13,
-  fontWeight: 650,
-  opacity: 0.85,
+  fontWeight: 500,
+  color: 'var(--ls-ink-1)',
   margin: '8px 0 3px',
 }
 const LIST_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column' }
@@ -274,6 +274,6 @@ const ROW_STYLE: CSSProperties = {
   flexDirection: 'column',
   gap: 1,
   padding: '5px 0',
-  borderTop: '1px solid rgba(127,127,127,0.14)',
+  borderTop: '1px solid var(--ls-line)',
 }
 const ROW_META_STYLE: CSSProperties = { fontSize: 11, opacity: 0.7 }

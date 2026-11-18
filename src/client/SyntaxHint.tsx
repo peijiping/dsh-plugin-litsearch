@@ -45,5 +45,5 @@ export function sourceSyntaxTitle(
 const HINT_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.5,
-  color: '#b26a00',
+  color: 'var(--ls-warn)',
 }

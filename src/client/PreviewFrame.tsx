@@ -53,7 +53,7 @@ export function PreviewFrame({ t, src, height, onClose }: Props): ReactElement {
 function Spinner(): ReactElement {
   return (
     <svg width={30} height={30} viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" fill="none" stroke="rgba(80,140,255,0.22)" strokeWidth="3" />
+      <circle cx="12" cy="12" r="9" fill="none" stroke="var(--ls-accent-soft-2)" strokeWidth="3" />
       <circle
         cx="12"
         cy="12"
@@ -80,7 +80,7 @@ function Spinner(): ReactElement {
 
 const WRAP_STYLE: CSSProperties = {
   marginTop: 6,
-  border: '1px solid rgba(127,127,127,0.22)',
+  border: '1px solid var(--ls-line)',
   borderRadius: 6,
   overflow: 'hidden',
 }
@@ -91,13 +91,13 @@ const HEAD_STYLE: CSSProperties = {
   gap: 8,
   padding: '3px 8px',
   fontSize: 11,
-  background: 'rgba(127,127,127,0.08)',
+  background: 'var(--ls-surface-2)',
 }
 const CLOSE_STYLE: CSSProperties = {
   padding: 0,
   border: 'none',
   background: 'transparent',
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
   fontSize: 12.5,
   cursor: 'pointer',
 }
@@ -126,7 +126,7 @@ const OVERLAY_STYLE: CSSProperties = {
 }
 const LOADING_TEXT_STYLE: CSSProperties = {
   fontSize: 13.5,
-  fontWeight: 700,
+  fontWeight: 500,
   letterSpacing: '0.02em',
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
 }

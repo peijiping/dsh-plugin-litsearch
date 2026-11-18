@@ -246,7 +246,7 @@ export function FullTextTab({
         />
       )}
 
-      {list.error !== null && <div style={{ ...TEXT_STYLE, color: '#d64545' }}>{list.error}</div>}
+      {list.error !== null && <div style={{ ...TEXT_STYLE, color: 'var(--ls-error)' }}>{list.error}</div>}
 
       {list.papers.length === 0 ? (
         <div style={TEXT_STYLE}>{t('fulltext.none')}</div>
@@ -422,22 +422,25 @@ function statusKey(status: PdfStatus): keyof NonNullable<TaskStatsReport['fullTe
 
 const WRAP_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 6 }
 const TEXT_STYLE: CSSProperties = { fontSize: 12.5, lineHeight: 1.6 }
-const HINT_STYLE: CSSProperties = { fontSize: 11, opacity: 0.7, lineHeight: 1.6 }
+const HINT_STYLE: CSSProperties = { fontSize: 11, color: 'var(--ls-ink-3)', lineHeight: 1.6 }
 const CHIP_ROW_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 }
 const CHIP_BUTTON_STYLE: CSSProperties = {
   fontSize: 11,
-  padding: '1px 6px',
-  borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
-  background: 'transparent',
-  color: 'inherit',
+  letterSpacing: 0,
+  padding: '2px 9px',
+  borderRadius: 999,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface)',
+  color: 'var(--ls-ink-2)',
   cursor: 'pointer',
+  transition: 'border-color .15s ease, background .15s ease, color .15s ease',
 }
 const CHIP_ACTIVE_STYLE: CSSProperties = {
   ...CHIP_BUTTON_STYLE,
-  borderColor: '#508cff',
-  color: '#508cff',
-  fontWeight: 600,
+  borderColor: 'var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
+  color: 'var(--ls-accent-ink)',
+  fontWeight: 500,
 }
 const ROW_HEAD_STYLE: CSSProperties = {
   display: 'flex',
@@ -445,14 +448,15 @@ const ROW_HEAD_STYLE: CSSProperties = {
   justifyContent: 'space-between',
   gap: 8,
   marginTop: 4,
-  fontSize: 12.5,
-  fontWeight: 650,
+  fontSize: 13,
+  fontWeight: 500,
+  color: 'var(--ls-ink-1)',
 }
 const LINK_STYLE: CSSProperties = {
   padding: 0,
   border: 'none',
   background: 'transparent',
-  color: '#508cff',
+  color: 'var(--ls-accent-ink)',
   fontSize: 11,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
@@ -462,19 +466,19 @@ const BULK_STYLE: CSSProperties = {
   alignItems: 'center',
   flexWrap: 'wrap',
   gap: 8,
-  padding: '4px 6px',
-  borderRadius: 6,
-  background: 'rgba(80,140,255,0.08)',
-  border: '1px solid rgba(80,140,255,0.25)',
+  padding: '6px 9px',
+  borderRadius: 10,
+  background: 'var(--ls-accent-soft)',
+  border: '1px solid var(--ls-accent-line)',
 }
 const MORE_STYLE: CSSProperties = {
   alignSelf: 'flex-start',
   marginTop: 4,
-  padding: '3px 8px',
-  borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
-  background: 'transparent',
-  color: 'inherit',
+  padding: '3px 10px',
+  borderRadius: 999,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface)',
+  color: 'var(--ls-ink-2)',
   fontSize: 11,
   cursor: 'pointer',
 }
@@ -485,7 +489,7 @@ const ROW_STYLE: CSSProperties = {
   alignItems: 'flex-start',
   gap: 6,
   padding: '5px 0',
-  borderBottom: '1px solid rgba(127,127,127,0.1)',
+  borderBottom: '1px solid var(--ls-line)',
 }
 const ROW_MAIN_STYLE: CSSProperties = {
   display: 'flex',
@@ -495,13 +499,13 @@ const ROW_MAIN_STYLE: CSSProperties = {
 }
 const ROW_TITLE_STYLE: CSSProperties = {
   fontSize: 12.5,
-  fontWeight: 650,
-  lineHeight: 1.45,
-  color: 'inherit',
+  fontWeight: 500,
+  lineHeight: 1.5,
+  color: 'var(--ls-ink-1)',
   textDecoration: 'none',
 }
-const ROW_META_STYLE: CSSProperties = { fontSize: 11, opacity: 0.66 }
-const ROW_ERROR_STYLE: CSSProperties = { fontSize: 11, color: '#b26a00' }
+const ROW_META_STYLE: CSSProperties = { fontSize: 11, color: 'var(--ls-ink-3)' }
+const ROW_ERROR_STYLE: CSSProperties = { fontSize: 11, color: 'var(--ls-warn)' }
 const ROW_ACTIONS_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',

@@ -32,6 +32,7 @@ import {
   badgeRowStyle,
   badgeStyle,
   cardStyle,
+  CARD_CLASS,
   linkButtonStyle,
   linkStyle,
   metaStyle,
@@ -61,10 +62,10 @@ export interface PdfDownloadUi {
 }
 
 const SCREENING_COLOR: Record<Screening, string> = {
-  unread: 'rgba(127,127,127,0.9)',
-  read: '#508cff',
-  included: '#2e9e5b',
-  excluded: '#d64545',
+  unread: 'var(--ls-ink-2)',
+  read: 'var(--ls-accent)',
+  included: 'var(--ls-success)',
+  excluded: 'var(--ls-error)',
 }
 
 interface Props {
@@ -211,13 +212,13 @@ export function PaperCard({
         : undefined
   const zoteroColor =
     state?.zoteroStatus === 'synced'
-      ? '#2e9e5b'
+      ? 'var(--ls-success)'
       : state?.zoteroStatus === 'failed'
         ? ERROR
         : undefined
 
   return (
-    <article style={cardStyle}>
+    <article className={`${CARD_CLASS} ls-card-hover`} style={cardStyle}>
       {/* 顶部工具行：勾选、筛读、分组集中在一处，正文从标题开始。 */}
       <div style={STATE_ROW_STYLE}>
         {onToggleSelect !== undefined && (
@@ -362,7 +363,7 @@ export function PaperCard({
             variant="ghost"
             size="sm"
             type="button"
-            style={{ color: ACCENT }}
+            style={{ color: 'var(--ls-accent-ink)' }}
             onClick={() => onInsert(paper)}
           >
             {t('result.insert')}
@@ -489,14 +490,14 @@ export function PaperCard({
 }
 
 const PDF_COLOR: Record<PdfStatus, string> = {
-  unknown: 'rgba(127,127,127,0.8)',
-  available: '#508cff',
-  downloaded: '#2e9e5b',
-  missing: '#d64545',
-  'html-only': '#b26a00',
-  paywalled: '#b26a00',
-  blocked: '#d64545',
-  failed: '#d64545',
+  unknown: 'var(--ls-ink-3)',
+  available: 'var(--ls-accent)',
+  downloaded: 'var(--ls-success)',
+  missing: 'var(--ls-error)',
+  'html-only': 'var(--ls-warn)',
+  paywalled: 'var(--ls-warn)',
+  blocked: 'var(--ls-error)',
+  failed: 'var(--ls-error)',
 }
 
 /** 卡片顶部工具行：勾选 / 筛读 / 分组。 */
@@ -520,7 +521,7 @@ const FIELD_ICON_STYLE: CSSProperties = {
   flexShrink: 0,
   width: 14,
   marginTop: 2,
-  color: ACCENT,
+  color: 'var(--ls-accent-ink)',
   opacity: 0.75,
 }
 const FIELD_BODY_STYLE: CSSProperties = { flex: 1, minWidth: 0 }
@@ -529,7 +530,7 @@ const FIELD_BODY_STYLE: CSSProperties = { flex: 1, minWidth: 0 }
  * 卡片底部两行：左边固定宽度的行标签，右边是内容。
  * 「状态与来源」用青绿、「快捷操作」用主题蓝，避免两行都是蓝字难以分辨。
  */
-const INFO_COLOR = '#12836c'
+const INFO_COLOR = 'var(--ls-info)'
 const CARD_ROW_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
@@ -542,11 +543,11 @@ const ROW_LABEL_STYLE: CSSProperties = {
   paddingTop: 1,
   fontSize: 11.5,
   lineHeight: '16px',
-  fontWeight: 650,
+  fontWeight: 500,
   whiteSpace: 'nowrap',
 }
 const INFO_LABEL_STYLE: CSSProperties = { ...ROW_LABEL_STYLE, color: INFO_COLOR }
-const ACTION_LABEL_STYLE: CSSProperties = { ...ROW_LABEL_STYLE, color: ACCENT }
+const ACTION_LABEL_STYLE: CSSProperties = { ...ROW_LABEL_STYLE, color: 'var(--ls-accent-ink)' }
 const INFO_BADGE_STYLE: CSSProperties = {
   ...badgeStyle,
   padding: '1px 6px',
@@ -558,7 +559,7 @@ const SELECT_STYLE: CSSProperties = {
   fontSize: 11,
   padding: '2px 4px',
   borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
   maxWidth: 130,

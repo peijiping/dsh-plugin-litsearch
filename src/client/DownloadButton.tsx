@@ -12,9 +12,9 @@ import { SpinnerIcon } from './icons'
 import type { Translate } from './locales'
 
 /** 已下载状态的绿色，与徽章 / 状态色一致。 */
-const DOWNLOADED_COLOR = '#2e9e5b'
+const DOWNLOADED_COLOR = 'var(--ls-success)'
 /** 本地文件已被删除的警示色。 */
-const MISSING_COLOR = '#d64545'
+const MISSING_COLOR = 'var(--ls-error)'
 
 interface Props {
   t: Translate
@@ -152,10 +152,10 @@ const MENU_STYLE: CSSProperties = {
   flexDirection: 'column',
   minWidth: 132,
   padding: 2,
-  borderRadius: 6,
-  border: '1px solid rgba(127,127,127,0.3)',
-  background: '#fff',
-  boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+  borderRadius: 8,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface)',
+  boxShadow: 'var(--ls-shadow-2)',
 }
 
 const MENU_ITEM_STYLE: CSSProperties = {
@@ -163,7 +163,7 @@ const MENU_ITEM_STYLE: CSSProperties = {
   border: 'none',
   borderRadius: 4,
   background: 'transparent',
-  color: '#1f2328',
+  color: 'var(--ls-ink-1)',
   fontSize: 12,
   lineHeight: 1.4,
   textAlign: 'left',

@@ -88,14 +88,14 @@ export function paperRefFromAddress(
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
 
 const PDF_COLOR: Record<PdfStatus, string> = {
-  unknown: 'rgba(127,127,127,0.8)',
-  available: '#508cff',
-  downloaded: '#2e9e5b',
-  missing: '#d64545',
-  'html-only': '#b26a00',
-  paywalled: '#b26a00',
-  blocked: '#d64545',
-  failed: '#d64545',
+  unknown: 'var(--ls-ink-3)',
+  available: 'var(--ls-accent)',
+  downloaded: 'var(--ls-success)',
+  missing: 'var(--ls-error)',
+  'html-only': 'var(--ls-warn)',
+  paywalled: 'var(--ls-warn)',
+  blocked: 'var(--ls-error)',
+  failed: 'var(--ls-error)',
 }
 
 function messageOf(error: unknown): string {
@@ -184,10 +184,10 @@ export function PaperPane({
     [paper],
   )
 
-  if (loading) return <div style={panelStyle}>{t('paperTab.loading')}</div>
+  if (loading) return <div className="ls-root" style={panelStyle}>{t('paperTab.loading')}</div>
   if (detail === null || paper === undefined) {
     return (
-      <div style={panelStyle}>
+      <div className="ls-root" style={panelStyle}>
         <div style={{ ...statusStyle, color: ERROR }}>{error ?? t('paperTab.notFound')}</div>
         <Button variant="outline" size="sm" type="button" onClick={() => setNonce((n) => n + 1)}>
           {t('paperTab.retry')}
@@ -302,8 +302,8 @@ export function PaperPane({
   const groupName = detail.groups.find((group) => group.id === state?.groupId)?.name
 
   return (
-    <div style={{ ...panelStyle, position: 'relative' }}>
-      <div style={{ ...statusStyle, opacity: 0.66 }}>
+    <div className="ls-root" style={{ ...panelStyle, position: 'relative' }}>
+      <div className="ls-sub">
         {tpl(t('paperTab.fromTask'), { title: detail.taskTitle })}
       </div>
 
@@ -533,7 +533,7 @@ export function PaperPane({
           type="button"
           style={
             state?.zoteroStatus === 'synced'
-              ? { ...linkButtonStyle, color: '#2e9e5b' }
+              ? { ...linkButtonStyle, color: 'var(--ls-success)' }
               : state?.zoteroStatus === 'failed'
                 ? { ...linkButtonStyle, color: ERROR }
                 : linkButtonStyle
@@ -585,25 +585,24 @@ export function PaperPane({
 }
 
 const SCREENING_COLOR: Record<Screening, string> = {
-  unread: 'rgba(127,127,127,0.9)',
-  read: '#508cff',
-  included: '#2e9e5b',
-  excluded: '#d64545',
+  unread: 'var(--ls-ink-2)',
+  read: 'var(--ls-accent)',
+  included: 'var(--ls-success)',
+  excluded: 'var(--ls-error)',
 }
 
 /** 独立论文页是整页主视图，标题比结果卡片再大一级。 */
 const PAPER_TITLE_STYLE: CSSProperties = {
   ...titleStyle,
-  fontSize: 16,
-  fontWeight: 700,
-  lineHeight: 1.45,
+  fontSize: 15,
+  lineHeight: 1.5,
 }
 
 const HEAD_STYLE: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 650,
-  opacity: 0.85,
-  margin: '10px 0 4px',
+  fontSize: 13.5,
+  fontWeight: 500,
+  color: 'var(--ls-ink-1)',
+  margin: '12px 0 6px',
 }
 
 const STATE_ROW_STYLE: CSSProperties = {
@@ -615,11 +614,11 @@ const STATE_ROW_STYLE: CSSProperties = {
 }
 const SELECT_STYLE: CSSProperties = {
   fontSize: 11.5,
-  padding: '2px 4px',
-  borderRadius: 4,
-  border: '1px solid rgba(127,127,127,0.28)',
-  background: 'transparent',
-  color: 'inherit',
+  padding: '3px 7px',
+  borderRadius: 8,
+  border: '1px solid transparent',
+  background: 'var(--ls-surface-2)',
+  color: 'var(--ls-ink-1)',
   maxWidth: 150,
 }
 const IDS_STYLE: CSSProperties = {
@@ -635,17 +634,17 @@ const FALLBACK_STYLE: CSSProperties = {
   alignItems: 'center',
   flexWrap: 'wrap',
   gap: 8,
-  borderLeft: '3px solid #b26a00',
+  borderLeft: '3px solid var(--ls-warn)',
 }
 const FALLBACK_LINK_STYLE: CSSProperties = {
-  color: '#fff',
+  color: 'var(--ls-accent-ink)',
   fontSize: 12,
   textDecoration: 'underline',
+  textUnderlineOffset: 2,
 }
 const FALLBACK_BUTTON_STYLE: CSSProperties = {
   ...linkButtonStyle,
-  color: '#fff',
-  textDecoration: 'underline',
+  textDecoration: 'none',
 }
 const ACTION_STYLE: CSSProperties = {
   display: 'flex',

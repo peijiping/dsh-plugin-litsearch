@@ -646,11 +646,11 @@ const TOGGLE_STYLE: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
-  padding: '2px 8px',
-  borderRadius: 10,
-  border: '1px solid rgba(80,140,255,0.35)',
-  background: 'rgba(80,140,255,0.06)',
-  color: '#508cff',
+  padding: '3px 10px',
+  borderRadius: 999,
+  border: '1px solid var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
+  color: 'var(--ls-accent-ink)',
   fontSize: 11.5,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
@@ -658,18 +658,17 @@ const TOGGLE_STYLE: CSSProperties = {
 /** 有生效条件时高亮，提示点击可查看/清除。 */
 const TOGGLE_ACTIVE_STYLE: CSSProperties = {
   ...TOGGLE_STYLE,
-  borderColor: '#508cff',
-  background: 'rgba(80,140,255,0.14)',
-  color: '#508cff',
-  fontWeight: 600,
+  borderColor: 'var(--ls-accent)',
+  background: 'var(--ls-accent-soft-2)',
+  color: 'var(--ls-accent-ink)',
+  fontWeight: 500,
 }
 const RESET_STYLE: CSSProperties = {
   padding: 0,
   border: 'none',
   background: 'transparent',
-  color: 'inherit',
   fontSize: 12,
-  opacity: 0.7,
+  color: 'var(--ls-ink-2)',
   cursor: 'pointer',
 }
 const GRID_STYLE: CSSProperties = {
@@ -711,7 +710,7 @@ const PILL_STYLE: CSSProperties = {
   fontSize: 11.5,
   padding: '2px 8px',
   borderRadius: 10,
-  border: '1px solid rgba(127,127,127,0.3)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
   cursor: 'pointer',
@@ -719,15 +718,15 @@ const PILL_STYLE: CSSProperties = {
 }
 const PILL_ACTIVE_STYLE: CSSProperties = {
   ...PILL_STYLE,
-  borderColor: '#508cff',
-  color: '#508cff',
-  fontWeight: 600,
+  borderColor: 'var(--ls-accent)',
+  color: 'var(--ls-accent-ink)',
+  fontWeight: 500,
 }
 const INPUT_STYLE: CSSProperties = {
   fontSize: 12.5,
   padding: '5px 8px',
   borderRadius: 6,
-  border: '1px solid rgba(127,127,127,0.28)',
+  border: '1px solid var(--ls-line-strong)',
   background: 'transparent',
   color: 'inherit',
   minWidth: 0,
@@ -751,7 +750,7 @@ const CHECK_STYLE: CSSProperties = {
 /** 分组标题需要比下拉框内容更醒目，样式只能通过 contentClassName 命中内部 label。 */
 const FILTER_CONTENT_CLASS = 'litsearch-filter-content'
 const FILTER_CONTENT_CSS = `
-.${FILTER_CONTENT_CLASS} label>span,.${FILTER_CONTENT_CLASS} .litsearch-filter-label{font-size:12px;font-weight:650;line-height:1.5}
+.${FILTER_CONTENT_CLASS} label>span,.${FILTER_CONTENT_CLASS} .litsearch-filter-label{font-size:12.5px;font-weight:500;line-height:1.5;color:var(--ls-ink-2)}
 `
 
 const CHIP_STYLE: CSSProperties = {
@@ -759,10 +758,11 @@ const CHIP_STYLE: CSSProperties = {
   alignItems: 'center',
   gap: 4,
   fontSize: 11.5,
-  padding: '2px 7px',
-  borderRadius: 4,
-  border: '1px solid rgba(80,140,255,0.4)',
-  color: '#508cff',
+  padding: '2px 9px',
+  borderRadius: 999,
+  border: '1px solid var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
+  color: 'var(--ls-accent-ink)',
 }
 const CHIP_REMOVE_STYLE: CSSProperties = {
   padding: 0,

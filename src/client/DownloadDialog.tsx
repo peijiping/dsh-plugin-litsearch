@@ -29,10 +29,10 @@ export interface BatchDownloadItem {
 type BatchPhase = 'pending' | 'downloading' | 'downloaded' | 'manual' | 'failed'
 
 const PHASE_COLOR: Record<BatchPhase, string> = {
-  pending: 'rgba(127,127,127,0.9)',
+  pending: 'var(--ls-ink-2)',
   downloading: ACCENT,
-  downloaded: '#2e9e5b',
-  manual: '#b26a00',
+  downloaded: 'var(--ls-success)',
+  manual: 'var(--ls-warn)',
   failed: ERROR,
 }
 
@@ -235,8 +235,8 @@ const OVERVIEW_STYLE: CSSProperties = {
   marginBottom: 8,
   padding: '8px 10px',
   borderRadius: 8,
-  border: '1px solid rgba(80,140,255,0.25)',
-  background: 'rgba(80,140,255,0.08)',
+  border: '1px solid var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
 }
 
 const COUNTS_STYLE: CSSProperties = {
@@ -250,7 +250,7 @@ const COUNTS_STYLE: CSSProperties = {
 const BAR_TRACK_STYLE: CSSProperties = {
   height: 4,
   borderRadius: 2,
-  background: 'rgba(127,127,127,0.22)',
+  background: 'var(--ls-line)',
   overflow: 'hidden',
 }
 
@@ -263,8 +263,8 @@ const BAR_FILL_STYLE: CSSProperties = {
 
 const COMPLETE_STYLE: CSSProperties = {
   fontSize: 12,
-  fontWeight: 650,
-  color: '#2e9e5b',
+  fontWeight: 500,
+  color: 'var(--ls-success)',
 }
 
 const LIST_STYLE: CSSProperties = {
@@ -280,7 +280,7 @@ const ROW_STYLE: CSSProperties = {
   alignItems: 'flex-start',
   gap: 8,
   padding: '7px 0',
-  borderTop: '1px solid rgba(127,127,127,0.18)',
+  borderTop: '1px solid var(--ls-line)',
 }
 
 const INDEX_STYLE: CSSProperties = {
@@ -303,7 +303,7 @@ const ROW_MAIN_STYLE: CSSProperties = {
 const ROW_TITLE_STYLE: CSSProperties = {
   fontSize: 12.5,
   lineHeight: 1.45,
-  fontWeight: 600,
+  fontWeight: 500,
   overflow: 'hidden',
   display: '-webkit-box',
   WebkitLineClamp: 2,
@@ -315,7 +315,6 @@ const ROW_ERROR_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.4,
   color: ERROR,
-  opacity: 0.85,
   overflow: 'hidden',
   display: '-webkit-box',
   WebkitLineClamp: 2,
@@ -350,7 +349,7 @@ const MODEL_BADGE_STYLE: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.5,
   paddingBottom: 4,
-  borderBottom: '1px solid rgba(127,127,127,0.18)',
+  borderBottom: '1px solid var(--ls-line)',
 }
 
 const MODEL_TAG_STYLE: CSSProperties = {
@@ -358,13 +357,13 @@ const MODEL_TAG_STYLE: CSSProperties = {
   padding: '1px 6px',
   borderRadius: 4,
   border: `1px solid ${ACCENT}`,
-  color: ACCENT,
-  fontWeight: 650,
+  color: 'var(--ls-accent-ink)',
+  fontWeight: 500,
   fontSize: 11,
 }
 
 const REASON_STYLE: CSSProperties = {
-  opacity: 0.75,
+  color: 'var(--ls-ink-2)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -374,7 +373,7 @@ const REASON_STYLE: CSSProperties = {
 const ROW_META_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.4,
-  opacity: 0.65,
+  color: 'var(--ls-ink-3)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -382,6 +381,6 @@ const ROW_META_STYLE: CSSProperties = {
 
 const CANCELLED_STYLE: CSSProperties = {
   fontSize: 12,
-  fontWeight: 650,
+  fontWeight: 500,
   color: ERROR,
 }

@@ -4,39 +4,49 @@
  * 项目不依赖图标库，SVG 一律用 `currentColor` 描边，深浅主题都能读清。
  */
 
-import { useState, type ReactElement, type ReactNode } from 'react'
+import type { CSSProperties, ReactElement, ReactNode } from 'react'
 
 interface IconButtonProps {
   label: string
   onClick: () => void
   children: ReactNode
+  /** 边长，默认 26（面板头部）；分组行传 20。 */
+  size?: number
+  /** 安静模式：默认透明底，hover 才出现底纹。 */
+  quiet?: boolean
+  /** 处于生效状态（例如该分组正在被筛选）。 */
+  active?: boolean
+  disabled?: boolean
+  className?: string
+  style?: CSSProperties
 }
 
-export function IconButton({ label, onClick, children }: IconButtonProps): ReactElement {
-  const [hover, setHover] = useState(false)
+/**
+ * 图标按钮：外观交给 `.ls-icon-btn`，这里只管尺寸与可达性。
+ * 不再用 hover state —— CSS 的 :hover 更省事，也不会在触摸设备上卡住。
+ */
+export function IconButton({
+  label,
+  onClick,
+  children,
+  size = 26,
+  quiet = false,
+  active = false,
+  disabled = false,
+  className,
+  style,
+}: IconButtonProps): ReactElement {
   return (
     <button
       type="button"
       title={label}
       aria-label={label}
+      disabled={disabled}
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 26,
-        height: 26,
-        padding: 0,
-        borderRadius: 6,
-        cursor: 'pointer',
-        color: 'inherit',
-        opacity: hover ? 1 : 0.74,
-        border: `1px solid ${hover ? 'rgba(80,140,255,0.7)' : 'rgba(127,127,127,0.32)'}`,
-        background: hover ? 'rgba(80,140,255,0.12)' : 'transparent',
-        flexShrink: 0,
-      }}
+      className={`ls-icon-btn${className === undefined ? '' : ` ${className}`}`}
+      {...(quiet ? { 'data-quiet': 'true' } : {})}
+      {...(active ? { 'aria-pressed': 'true', 'data-active': 'true' } : {})}
+      style={{ width: size, height: size, flexShrink: 0, ...style }}
     >
       {children}
     </button>
@@ -245,6 +255,38 @@ export function SortIcon(): ReactElement {
     <svg {...fieldSvgProps}>
       <path d="M4 6.5h13M4 12h9M4 17.5h5" />
       <path d="M17 15.5l2.5 2.5 2.5-2.5M19.5 6.5v11.5" />
+    </svg>
+  )
+}
+
+/** 排序 · 上移：向上箭头。 */
+export function ArrowUpIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M12 19V5" />
+      <path d="m6 11 6-6 6 6" />
+    </svg>
+  )
+}
+
+/** 排序 · 下移：向下箭头。 */
+export function ArrowDownIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M12 5v14" />
+      <path d="m6 13 6 6 6-6" />
+    </svg>
+  )
+}
+
+/** 删除：垃圾桶。 */
+export function TrashIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M4.5 6.5h15" />
+      <path d="M9 6.5V4.8a.8.8 0 0 1 .8-.8h4.4a.8.8 0 0 1 .8.8v1.7" />
+      <path d="M6.5 6.5 7.4 19a1.2 1.2 0 0 0 1.2 1.1h6.8a1.2 1.2 0 0 0 1.2-1.1l.9-12.5" />
+      <path d="M10.5 10v6M13.5 10v6" />
     </svg>
   )
 }

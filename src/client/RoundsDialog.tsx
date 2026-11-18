@@ -216,7 +216,7 @@ const timelineStyle = {
   position: 'relative',
   marginLeft: 8,
   paddingLeft: 20,
-  borderLeft: '2px solid rgba(127,127,127,0.28)',
+  borderLeft: '2px solid var(--ls-line-strong)',
 } as const
 
 const roundRowStyle = {
@@ -239,6 +239,6 @@ const dotStyle = {
 const roundCardStyle = {
   padding: '8px 10px',
   borderRadius: 8,
-  border: '1px solid rgba(127,127,127,0.24)',
-  background: 'rgba(127,127,127,0.06)',
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface-2)',
 } as const
