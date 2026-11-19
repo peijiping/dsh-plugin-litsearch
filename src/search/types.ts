@@ -788,6 +788,8 @@ export interface TaskFocus {
   at: number
   /** 发起检索的会话；客户端只在该会话可见时打开，避免抢占其他对话的面板。 */
   sessionId?: string
+  /** 用户显式要求切换任务；客户端据此忽略「自动打开任务」开关。 */
+  force?: boolean
 }
 
 /**

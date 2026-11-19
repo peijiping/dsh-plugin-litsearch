@@ -99,6 +99,7 @@ const PDF_STATUSES: readonly PdfStatus[] = [
 const TASK_ACTIONS = [
   'current',
   'list',
+  'activate',
   'get',
   'update',
   'run',
@@ -240,7 +241,7 @@ const TASK_PARAMETERS = {
       type: 'string',
       enum: [...TASK_ACTIONS],
       description:
-        'current 读「当前任务」（推荐在执行检索/任务操作前先调用，确认这个对话正在用哪个任务，无需 id）；list 列任务；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/分组；compare 与旧任务对比；stats 读语料统计。',
+        'current 读「当前任务」（推荐在执行检索/任务操作前先调用，确认这个对话正在用哪个任务，无需 id）；list 列任务；activate 切换「当前任务」并在右侧栏打开/聚焦该任务 tab（只切换、不检索，id 必填）；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/分组；compare 与旧任务对比；stats 读语料统计。',
     },
     id: { type: 'string', description: '任务 id；除 current / list 外必填。' },
     withTaskId: { type: 'string', description: 'compare 时的基准任务 id。' },
@@ -600,7 +601,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
       name: 'literature_search',
       description:
         '检索免费开放学术文献。并发查询 PubMed、Europe PMC、OpenAlex、Crossref、Semantic Scholar、arXiv、PubTator，跨源与跨检索式去重合并成一篇文献一条，返回标题、作者、年份、出处、DOI、被引次数、开放获取状态与摘要，支持一次提交多条检索式（queries）。' +
-        '【任务模型】一个研究主题 = 一个任务 = 一个右侧栏 tab；一个对话只保留一个任务 tab，切换任务由用户在任务列表里完成。若不确定这个对话当前用哪个任务，先调用 literature_task（action=current）查清再执行。默认复用「当前任务」并在同一任务内开新一轮：任务 id 不变、tab 不变，结果替换为最新一轮，已有的已读/纳入/排除/备注按文献身份保留；绝不会新建任务或新开 tab。当前任务是持久化的「最近一次使用或打开的任务」，跨对话、宿主重启都有效；用户从右侧栏点开别的任务会切换当前任务。只有用户明确要求新建查询任务，或研究主题与当前任务明显不同时，才传 newTask=true 并用 title 给新任务起一个概括主题的名称；也可用 taskId 显式指定要复用的任务（先用 literature_task current/list 查 id，或让用户点右侧栏的「加入对话」把任务 id 带进对话）。每次调用请提交【完整】的新检索条件，缺省项回落到插件默认设置而非沿用旧条件。' +
+        '【任务模型】一个研究主题 = 一个任务 = 一个右侧栏 tab；一个对话只保留一个任务 tab。若不确定这个对话当前用哪个任务，先调用 literature_task（action=current）查清再执行。默认复用「当前任务」并在同一任务内开新一轮：任务 id 不变、tab 不变，结果替换为最新一轮，已有的已读/纳入/排除/备注按文献身份保留；绝不会新建任务或新开 tab。当前任务是持久化的「最近一次使用或打开的任务」，跨对话、宿主重启都有效；用户从右侧栏点开别的任务会切换当前任务，用户要求切换时也可用 literature_task action=activate 切换（不要靠再检索一次来切换）。只有用户明确要求新建查询任务，或研究主题与当前任务明显不同时，才传 newTask=true 并用 title 给新任务起一个概括主题的名称；也可用 taskId 显式指定要复用的任务（先用 literature_task current/list 查 id，或让用户点右侧栏的「加入对话」把任务 id 带进对话）。每次调用请提交【完整】的新检索条件，缺省项回落到插件默认设置而非沿用旧条件。' +
         '【轮次约束】本轮检索结束后，只给用户一份「如何完善检索」的建议，禁止自行发起下一轮、禁止重复调用本工具；必须等用户查看结果后，在右侧栏调整条件、或在对话里明确要求调整，才可在同一任务里再搜一次。' +
         '超过 25 秒仍在进行时会先返回当前进度，任务会继续在右侧栏完成。适合找论文、查某主题的代表作、补充参考文献。',
       parameters: SEARCH_PARAMETERS,
@@ -688,9 +689,9 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_task',
       description:
-        '读取与推进已保存的检索任务。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词/年份/来源/类型/语言/全文状态/是否有 PDF 过滤；fields=ids 时每条只回「paperId｜标题｜有无 PDF」，一次最多 200 条，适合列清单或核对范围）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态与分组；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
+        '读取与推进已保存的检索任务。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；activate 切换「当前任务」并在右侧栏打开/聚焦该任务 tab（只切换、不检索，id 必填）；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词/年份/来源/类型/语言/全文状态/是否有 PDF 过滤；fields=ids 时每条只回「paperId｜标题｜有无 PDF」，一次最多 200 条，适合列清单或核对范围）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态与分组；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
         'current / get 会回显「面板视图：第 x/y 页｜每页 20 条｜筛选…」，这是判断用户所说「第几页」的唯一依据；含页码的下载/同步请直接用 literature_download 的 scope=pages，不要靠 get 的 offset 自己拼页码。' +
-        '注意：一个对话只保留一个任务 tab，切换任务由用户在任务列表里完成；run 会在指定任务内开新一轮检索（并把它设为当前任务），与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。用户要求批量下载 PDF 时改用 literature_download，要求批量存入 Zotero 时改用 literature_zotero。',
+        '注意：一个对话只保留一个任务 tab；用户要求切换任务（如「切到口臭那个任务」）时，先用 list / current 找到任务 id，再调用 activate——它会原位替换右侧 tab、把该任务设为「当前任务」，不发起检索；不要通过再检索一次来切换。run 会在指定任务内开新一轮检索（并把它设为当前任务），与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。用户要求批量下载 PDF 时改用 literature_download，要求批量存入 Zotero 时改用 literature_zotero。',
       parameters: TASK_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args, exec): Promise<{ text: string }> {
@@ -1307,6 +1308,17 @@ async function runTaskAction(
       const tasks = await service.list()
       return formatTaskList(tasks, args.limit ?? 30)
     }
+    case 'activate': {
+      const id = requireId(args)
+      const task = await service.get(id)
+      const previous = await service.currentTask()
+      // 与用户从任务列表点开完全同一条路径：切换当前任务 + 原位打开/聚焦 tab。
+      await service.activate(id, await resolveSessionWorkspace(sessionId))
+      service.focusTask(task.id, task.title, sessionId, true)
+      const summary = `「${task.title}」（id: ${id}，${task.rounds.length} 轮，已加载 ${task.result.papers.length} 篇）`
+      if (previous?.id === id) return `当前任务已经是${summary}，已在右侧栏聚焦该任务 tab。`
+      return `已切换到任务${summary}，右侧栏已打开该任务 tab。后续检索与未指定 taskId 的下载/同步默认落在这个任务。`
+    }
     case 'get': {
       const id = requireId(args)
       const task = await service.get(id)
@@ -1846,7 +1858,7 @@ function formatCurrentTask(task: SearchTask | undefined, view: readonly string[]
   if (task === undefined) {
     return [
       '当前没有任务：这个对话还没有任何检索任务。',
-      '若用户要求检索，请直接调用 literature_search（不要传 newTask）；若用户要继续某个已有任务，请让用户从右侧栏任务列表打开它，或点任务页的「加入对话」把任务 id 带进对话。',
+      '若用户要求检索，请直接调用 literature_search（不要传 newTask）；若用户要继续某个已有任务，先用 literature_task list 查到 id，再调用 literature_task action=activate 切换过去（也可让用户从右侧栏任务列表打开）。',
     ].join('\n')
   }
   const conditions = task.conditions

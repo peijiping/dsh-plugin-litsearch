@@ -5,6 +5,7 @@
  * - 首次轮询只对齐版本号，不把宿主启动前的历史任务全打开；
  * - 模型每次运行任务都会请求 `focus`：直接打开/聚焦该任务 tab（面板关着时
  *   重新打开），不受「一轮只开一个」限制，但仍尊重自动打开开关；
+ *   用户显式要求切换任务（`force`）时不受该开关限制；
  * - 之后只对 `origin === 'model'` 的新任务调 `openResource`；
  * - 同一轮（2 分钟）最多自动打开 1 个 tab，其余进「待打开」队列，由主面板横幅提示；
  * - `maxTaskTabs` 按「最近真的打开过的 tab」计数（带 30 分钟有效期），不再用
@@ -308,14 +309,16 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
     const autoOpen = settings?.autoOpenTaskTab ?? DEFAULT_AUTO_OPEN
     // 聚焦请求优先处理，且不因「首次轮询」而丢弃：页面在后台时轮询会暂停，
     // 回到前台后的第一次轮询不能把刚发生的检索当成历史。
-    if (autoOpen && page.focus !== undefined && isFreshFocus(page.focus)) {
+    // force 是用户显式要求切换任务，即使关掉自动打开也要生效。
+    const focus = page.focus
+    if (focus !== undefined && (autoOpen || focus.force === true) && isFreshFocus(focus)) {
       const screen = options.sessionId?.()
-      const target = page.focus.sessionId
+      const target = focus.sessionId
       // 只处理当前屏幕这个对话的聚焦；别的对话的检索不抢占这里的面板。
       if (target === undefined || (screen !== undefined && target === screen)) {
-        alsoFocus(page.focus.taskId, page.focus.title)
+        alsoFocus(focus.taskId, focus.title)
       } else {
-        rememberOpened(page.focus.taskId, false)
+        rememberOpened(focus.taskId, false)
       }
     }
     if (first || !autoOpen) return

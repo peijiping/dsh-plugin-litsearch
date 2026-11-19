@@ -408,9 +408,12 @@ export class TaskService {
     this.persistCurrent()
   }
 
-  /** 请求客户端打开/聚焦某任务 tab（面板被关掉时重新打开）。 */
-  focusTask(id: string, title: string, sessionId?: string): void {
-    this.events.requestFocus(id, title, sessionId)
+  /**
+   * 请求客户端打开/聚焦某任务 tab（面板被关掉时重新打开）。
+   * `force` 表示用户显式要求切换，客户端不再受「自动打开任务」开关限制。
+   */
+  focusTask(id: string, title: string, sessionId?: string, force?: boolean): void {
+    this.events.requestFocus(id, title, sessionId, force)
   }
 
   /** 下发一条模型批量下载指令；右侧栏轮询 /events 拿增量后自行执行。 */

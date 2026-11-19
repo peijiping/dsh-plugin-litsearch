@@ -24,6 +24,7 @@ interface FocusEntry {
   title: string
   at: number
   sessionId?: string
+  force?: boolean
 }
 
 interface DownloadEntry {
@@ -63,7 +64,7 @@ export class TaskEvents {
   }
 
   /** 请求客户端把某个任务 tab 打开/切到前台（面板关着时重新打开）。 */
-  requestFocus(taskId: string, title: string, sessionId?: string): void {
+  requestFocus(taskId: string, title: string, sessionId?: string, force?: boolean): void {
     this.rev += 1
     this.focus = {
       globalRev: this.rev,
@@ -71,6 +72,7 @@ export class TaskEvents {
       title,
       at: Date.now(),
       ...(sessionId === undefined ? {} : { sessionId }),
+      ...(force === true ? { force: true } : {}),
     }
   }
 
@@ -124,6 +126,7 @@ export class TaskEvents {
             ...(this.focus.sessionId === undefined
               ? {}
               : { sessionId: this.focus.sessionId }),
+            ...(this.focus.force === true ? { force: true } : {}),
           }
         : undefined
     const downloads = this.downloadEntries
