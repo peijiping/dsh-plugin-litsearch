@@ -73,6 +73,8 @@ export const Config = Schema.object({
   contactEmail: Schema.string().default('').volatile(),
   /** 可选 NCBI API Key（E-utilities 额度从 3 req/s 提升到 10 req/s）。 */
   ncbiApiKey: Schema.string().default('').role('secret').volatile(),
+  /** 可选 OpenAlex 免费 API Key；匿名 search 在集群高负载时会被临时限流。 */
+  openalexApiKey: Schema.string().default('').role('secret').volatile(),
   /** 可选 Semantic Scholar API Key。 */
   s2ApiKey: Schema.string().default('').role('secret').volatile(),
   /** 可选 SerpAPI Key；配置后启用 Google Scholar 数据源（付费/有免费额度）。 */
@@ -149,6 +151,7 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
   setSettingsReader(() => ({
     contactEmail: config.contactEmail.get().trim(),
     ncbiApiKey: config.ncbiApiKey.get().trim(),
+    openalexApiKey: config.openalexApiKey.get().trim(),
     s2ApiKey: config.s2ApiKey.get().trim(),
     serpApiKey: config.serpApiKey.get().trim(),
     pubmedIntervalMs: clampInt(

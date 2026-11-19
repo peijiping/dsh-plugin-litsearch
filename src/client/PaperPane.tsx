@@ -29,6 +29,12 @@ import { DownloadButton } from './DownloadButton'
 import { EntityPanel } from './Entities'
 import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
+import {
+  canDownloadPdf,
+  paperPdfStatus,
+  pdfActionUi,
+  zoteroActionUi,
+} from './pdfActions'
 import { PreviewFrame } from './PreviewFrame'
 import { ZoteroSyncDialog } from './ZoteroSyncDialog'
 import { subscribeTaskSummary } from './taskListStore'
@@ -242,10 +248,8 @@ export function PaperPane({
     setZoteroOpen(true)
   }
 
-  const pdfStatus: PdfStatus =
-    state?.pdfStatus ?? (paper.pdfUrl === '' ? 'unknown' : 'available')
-  const canPdf =
-    paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '' || paper.doi !== ''
+  const pdfStatus: PdfStatus = paperPdfStatus(paper, state)
+  const canPdf = canDownloadPdf(paper, pdfStatus)
   const canHtml =
     paper.ids.pmcid !== '' ||
     paper.ids.arxivId !== '' ||
@@ -265,33 +269,14 @@ export function PaperPane({
     state?.pdfStatus === 'blocked' ||
     state?.pdfStatus === 'paywalled' ||
     state?.pdfStatus === 'failed'
-  const downloaded = !downloading && state?.pdfStatus === 'downloaded'
-  const downloadedPath = downloaded ? state?.pdfFile : undefined
-  const pdfMissing = !downloading && state?.pdfStatus === 'missing'
-  const failedMessage =
-    !downloading && state?.pdfStatus === 'failed' ? state.pdfError : undefined
-  const downloadLabel = downloading
-    ? t('pdf.downloading')
-    : downloaded
-      ? t('pdf.downloadedAction')
-      : pdfMissing
-        ? t('pdf.missingAction')
-        : state?.pdfStatus === 'failed'
-          ? t('pdf.retry')
-          : t('pdf.download')
-  const downloadHint = downloading
-    ? t('pdf.downloadingHint')
-    : downloaded
-      ? tpl(t('pdf.downloadedHint'), {
-          path: downloadedPath ?? detail.downloadDir ?? '',
-        })
-      : pdfMissing
-        ? t('pdf.missingHint')
-        : failedMessage !== undefined
-          ? tpl(t('pdf.retryHint'), { message: failedMessage })
-          : tpl(t('pdf.downloadHint'), {
-              path: detail.downloadDir ?? t('pdf.downloadDirUnknown'),
-            })
+  const pdfAction = pdfActionUi({
+    paper,
+    state,
+    download: downloading ? { state: 'downloading' } : undefined,
+    downloadDir: detail.downloadDir,
+    t,
+  })
+  const zoteroAction = zoteroActionUi(t, state)
   const authors =
     paper.authors.length === 0
       ? ''
@@ -506,11 +491,13 @@ export function PaperPane({
         {canPdf && (
           <DownloadButton
             t={t}
-            label={downloadLabel}
-            hint={downloadHint}
-            {...(downloadedPath === undefined ? {} : { downloadedPath })}
-            missing={pdfMissing}
-            downloading={downloading}
+            label={pdfAction.label}
+            hint={pdfAction.hint}
+            {...(pdfAction.downloadedPath === undefined
+              ? {}
+              : { downloadedPath: pdfAction.downloadedPath })}
+            missing={pdfAction.pdfMissing}
+            downloading={pdfAction.downloading}
             disabled={busy}
             style={linkButtonStyle}
             onDownload={download}
@@ -532,27 +519,15 @@ export function PaperPane({
         <button
           type="button"
           style={
-            state?.zoteroStatus === 'synced'
-              ? { ...linkButtonStyle, color: 'var(--ls-success)' }
-              : state?.zoteroStatus === 'failed'
-                ? { ...linkButtonStyle, color: ERROR }
-                : linkButtonStyle
+            zoteroAction.color === undefined
+              ? linkButtonStyle
+              : { ...linkButtonStyle, color: zoteroAction.color }
           }
-          title={
-            state?.zoteroStatus === 'synced'
-              ? state.zoteroCollection
-              : state?.zoteroStatus === 'failed'
-                ? state.zoteroError
-                : undefined
-          }
+          title={zoteroAction.hint}
           disabled={busy}
           onClick={zotero}
         >
-          {state?.zoteroStatus === 'synced'
-            ? t('pdf.zoteroSynced')
-            : state?.zoteroStatus === 'failed'
-              ? t('pdf.zoteroRetry')
-              : t('pdf.zotero')}
+          {zoteroAction.label}
         </button>
         {directPdfUrl !== '' && (
           <a style={linkStyle} href={directPdfUrl} target="_blank" rel="noreferrer noopener">

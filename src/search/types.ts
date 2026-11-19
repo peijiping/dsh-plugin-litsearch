@@ -203,6 +203,7 @@ export interface ProviderSearchOptions {
   bypassCooldown?: boolean
   /** 可选密钥；provider 只用于请求参数/请求头，不得写日志。 */
   ncbiApiKey?: string
+  openalexApiKey?: string
   s2ApiKey?: string
   serpApiKey?: string
 }
@@ -919,7 +920,7 @@ export interface HealthInfo {
   sources: ProviderInfo[]
   sourceHealth: SourceHealth[]
   /** 密钥是否已配置（只给布尔值，绝不返回密钥）。 */
-  keys: { ncbi: boolean; s2: boolean; serpapi: boolean }
+  keys: { ncbi: boolean; openalex: boolean; s2: boolean; serpapi: boolean }
   settings: {
     defaultSources: SourceId[]
     defaultPageSize: number

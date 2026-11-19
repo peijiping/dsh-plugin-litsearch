@@ -500,9 +500,12 @@ const zh: Record<string, string> = {
   'group.zoteroHint': '通过 Zotero 桌面端 connector 保存条目与 PDF；只连接本机 127.0.0.1。',
   'field.contactEmail': '联系邮箱',
   'field.contactEmailHint':
-    '作为 OpenAlex / Crossref / NCBI 的 polite pool 标识；填写后还会启用 Unpaywall，按 DOI 补全开放获取 PDF 地址，提升批量下载成功率',
+    '作为 Crossref / NCBI 的 polite pool 标识；填写后还会启用 Unpaywall，按 DOI 补全开放获取 PDF 地址，提升批量下载成功率',
   'field.ncbiApiKey': 'NCBI API Key',
   'field.ncbiApiKeyHint': '可选；配置后 PubMed E-utilities 额度从 3 次/秒提升到 10 次/秒',
+  'field.openalexApiKey': 'OpenAlex API Key',
+  'field.openalexApiKeyHint':
+    '可选，免费申请；无 Key 时匿名检索在集群高负载时会被临时限流，容易出现「已跳过」',
   'field.s2ApiKey': 'Semantic Scholar Key',
   'field.s2ApiKeyHint': '可选；无 Key 时 Semantic Scholar 配额很小，容易触发 429',
   'field.serpApiKey': 'SerpAPI Key（Google Scholar）',
@@ -1216,10 +1219,13 @@ const en: Record<string, string> = {
     'Saves items and PDFs through the Zotero desktop connector; only 127.0.0.1 is allowed.',
   'field.contactEmail': 'Contact email',
   'field.contactEmailHint':
-    'Polite-pool identifier for OpenAlex / Crossref / NCBI; also enables Unpaywall, which adds open-access PDF links by DOI and improves batch downloads',
+    'Polite-pool identifier for Crossref / NCBI; also enables Unpaywall, which adds open-access PDF links by DOI and improves batch downloads',
   'field.ncbiApiKey': 'NCBI API key',
   'field.ncbiApiKeyHint':
     'Optional; raises PubMed E-utilities quota from 3 req/s to 10 req/s',
+  'field.openalexApiKey': 'OpenAlex API key',
+  'field.openalexApiKeyHint':
+    'Optional and free. Without a key, anonymous searches may be temporarily rate-limited when the cluster is busy and get skipped',
   'field.s2ApiKey': 'Semantic Scholar key',
   'field.s2ApiKeyHint':
     'Optional; without a key Semantic Scholar quota is small and 429s are common',

@@ -25,6 +25,7 @@ export const ROW_ID = 'dsh-plugin-litsearch'
 export type FieldName =
   | 'contactEmail'
   | 'ncbiApiKey'
+  | 'openalexApiKey'
   | 's2ApiKey'
   | 'serpApiKey'
   | 'pubmedIntervalMs'
@@ -58,6 +59,7 @@ export type FieldName =
 
 export const TEXT_FIELD = 'contactEmail' as const
 export const NCBI_KEY_FIELD = 'ncbiApiKey' as const
+export const OPENALEX_KEY_FIELD = 'openalexApiKey' as const
 export const S2_KEY_FIELD = 's2ApiKey' as const
 export const SERP_KEY_FIELD = 'serpApiKey' as const
 export const SOURCES_FIELD: FieldName = 'defaultSources'
@@ -184,6 +186,7 @@ export function readSourceList(text: string): SourceId[] {
 export interface SettingsState extends SettingsFormState {
   contactEmail: SettingsFieldState
   ncbiApiKey: SettingsFieldState
+  openalexApiKey: SettingsFieldState
   s2ApiKey: SettingsFieldState
   serpApiKey: SettingsFieldState
   pubmedIntervalMs: SettingsFieldState
@@ -230,6 +233,7 @@ export class LitsearchSettingsController {
     this.form = new SettingsFormModel(scope, [
       ...TEXT_FIELDS.map((field): SettingsFieldSpec => settingsTextField(field)),
       settingsTextField(NCBI_KEY_FIELD),
+      settingsTextField(OPENALEX_KEY_FIELD),
       settingsTextField(S2_KEY_FIELD),
       settingsTextField(SERP_KEY_FIELD),
       ...NUMBER_FIELDS.map((field): SettingsFieldSpec => settingsNumberField(field)),
@@ -246,6 +250,7 @@ export class LitsearchSettingsController {
       ...this.form.shell(),
       contactEmail: this.form.field('contactEmail'),
       ncbiApiKey: this.form.field(NCBI_KEY_FIELD),
+      openalexApiKey: this.form.field(OPENALEX_KEY_FIELD),
       s2ApiKey: this.form.field(S2_KEY_FIELD),
       serpApiKey: this.form.field(SERP_KEY_FIELD),
       pubmedIntervalMs: this.form.field('pubmedIntervalMs'),

@@ -24,9 +24,9 @@ export const openalex: Provider = {
     label: 'OpenAlex',
     homepage: 'https://openalex.org',
     capabilities: { abstract: true, citationCount: true, openAccess: true, pdf: true },
-    rateLimit: '约 10 req/s；带邮箱进入 polite pool',
+    rateLimit: '有免费 API Key 更稳定；无 Key 时匿名 search 在集群高负载时会被临时限流',
     syntax: '自然语言；支持按年份与 OA 下推，不支持字段标签',
-    optionalKey: false,
+    optionalKey: true,
   },
 
   async search(query, options): Promise<PaperRecord[]> {
@@ -35,6 +35,9 @@ export const openalex: Provider = {
       'per-page': String(options.limit),
       sort: 'relevance_score:desc',
     })
+
+    const apiKey = options.openalexApiKey ?? ''
+    if (apiKey !== '') params.set('api_key', apiKey)
 
     const filters: string[] = []
     if (options.yearFrom !== undefined) filters.push(`from_publication_date:${options.yearFrom}-01-01`)
@@ -47,6 +50,9 @@ export const openalex: Provider = {
       timeoutMs: options.timeoutMs,
       signal: options.signal,
       bypassCooldown: options.bypassCooldown === true,
+      ...(apiKey === ''
+        ? { skipHint: '匿名检索在集群高负载时会被临时限流，可免费申请 OpenAlex API Key' }
+        : {}),
       headers: {
         accept: 'application/json',
         'user-agent': userAgent(options.contactEmail),

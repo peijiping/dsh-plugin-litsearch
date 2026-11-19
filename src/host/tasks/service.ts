@@ -313,6 +313,7 @@ export class TaskService {
       sourceHealth: sourceHealthList(),
       keys: {
         ncbi: settings.ncbiApiKey !== '',
+        openalex: settings.openalexApiKey !== '',
         s2: settings.s2ApiKey !== '',
         serpapi: settings.serpApiKey !== '',
       },

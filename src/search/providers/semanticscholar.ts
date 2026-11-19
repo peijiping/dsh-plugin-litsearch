@@ -48,14 +48,26 @@ export const semanticscholar: Provider = {
     if (year !== '') params.set('year', year)
 
     const headers: Record<string, string> = { accept: 'application/json' }
-    if (options.s2ApiKey !== undefined && options.s2ApiKey !== '') {
-      headers['x-api-key'] = options.s2ApiKey
-    }
+    const apiKey = options.s2ApiKey ?? ''
+    const hasKey = apiKey !== ''
+    if (hasKey) headers['x-api-key'] = apiKey
 
     const payload = await limitedJson(
       'semanticscholar',
       `${ENDPOINT}?${params.toString()}`,
-      { timeoutMs: options.timeoutMs, signal: options.signal, bypassCooldown: options.bypassCooldown === true, headers },
+      {
+        timeoutMs: options.timeoutMs,
+        signal: options.signal,
+        bypassCooldown: options.bypassCooldown === true,
+        ...(hasKey
+          ? {}
+          : {
+              // 匿名配额是全局共享池，退避 2 秒重试几乎必然再次 429，直接跳过。
+              retryOnRateLimit: false,
+              skipHint: '未配置 Key，匿名共享配额常被占满；可在设置中填写 Semantic Scholar Key',
+            }),
+        headers,
+      },
     )
 
     const papers = asArray(asRecord(payload)['data'])

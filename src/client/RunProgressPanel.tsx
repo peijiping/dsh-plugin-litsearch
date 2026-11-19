@@ -75,10 +75,17 @@ export function RunProgressPanel({ t, steps }: Props): ReactElement {
             .map((step) => (
               <div key={step.id} style={ROW_STYLE}>
                 <Mark status={step.status} />
-                <span style={ROW_LABEL_STYLE}>{t(`source.${step.source ?? ''}`)}</span>
-                <span style={{ ...ROW_VALUE_STYLE, color: COLOR[step.status] }}>
-                  {sourceText(t, step)}
-                </span>
+                <div style={ROW_BODY_STYLE}>
+                  <div style={ROW_MAIN_STYLE}>
+                    <span style={ROW_LABEL_STYLE}>{t(`source.${step.source ?? ''}`)}</span>
+                    <span style={{ ...ROW_VALUE_STYLE, color: COLOR[step.status] }}>
+                      {sourceText(t, step)}
+                    </span>
+                  </div>
+                  {step.status === 'skipped' && step.error !== undefined && step.error !== '' && (
+                    <div style={SKIP_REASON_STYLE}>{step.error}</div>
+                  )}
+                </div>
               </div>
             ))}
         </div>
@@ -204,9 +211,31 @@ const GROUP_LABEL_STYLE: CSSProperties = {
 
 const ROW_STYLE: CSSProperties = {
   display: 'flex',
-  alignItems: 'center',
+  alignItems: 'flex-start',
   gap: 5,
   paddingLeft: 8,
+}
+
+const ROW_BODY_STYLE: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 1,
+}
+
+const ROW_MAIN_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 5,
+  minWidth: 0,
+}
+
+const SKIP_REASON_STYLE: CSSProperties = {
+  fontSize: 10.5,
+  lineHeight: 1.35,
+  color: '#8a93a6',
+  overflowWrap: 'anywhere',
 }
 
 const ROW_LABEL_STYLE: CSSProperties = {

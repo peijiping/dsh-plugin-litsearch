@@ -127,6 +127,8 @@ export interface LitsearchSettings {
   taskMaxPapers: number
   /** 可选 NCBI API Key；有 key 时 E-utilities 额度更高。 */
   ncbiApiKey: string
+  /** 可选 OpenAlex 免费 API Key；匿名 search 在集群高负载时会被临时限流。 */
+  openalexApiKey: string
   /** 可选 Semantic Scholar API Key；提高配额。 */
   s2ApiKey: string
   /** 可选 SerpAPI Key；配置后启用 Google Scholar 数据源。 */
@@ -173,6 +175,7 @@ let readSettings = (): LitsearchSettings => ({
   taskRetentionCount: DEFAULT_RETENTION_COUNT,
   taskMaxPapers: DEFAULT_TASK_MAX_PAPERS,
   ncbiApiKey: '',
+  openalexApiKey: '',
   s2ApiKey: '',
   serpApiKey: '',
   pubmedIntervalMs: DEFAULT_PUBMED_INTERVAL_MS,

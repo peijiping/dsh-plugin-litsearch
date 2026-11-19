@@ -13,7 +13,7 @@ import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isManualPdfFailure, type PaperState } from '../search/types'
 import { SpinnerIcon } from './icons'
 import { tpl, type Translate } from './locales'
-import type { PdfDownloadUi } from './PaperCard'
+import type { PdfDownloadUi } from './pdfActions'
 import { ACCENT, ERROR, statusStyle } from './styles'
 
 /** 弹窗里的一条待下载文献。标题可能暂缺（跨页选中的文献靠详情接口补齐）。 */

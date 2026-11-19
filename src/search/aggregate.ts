@@ -58,6 +58,7 @@ export async function searchSources(options: SearchOptions): Promise<SourceRunRe
               signal: options.signal,
               bypassCooldown: options.bypassCooldown === true,
               ncbiApiKey: settings.ncbiApiKey,
+              openalexApiKey: settings.openalexApiKey,
               s2ApiKey: settings.s2ApiKey,
               serpApiKey: settings.serpApiKey,
             })

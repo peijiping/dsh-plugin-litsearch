@@ -10,10 +10,8 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type {
   AnnotationInput,
-  OaLocation,
   Paper,
   PaperState,
-  PdfFailureReason,
   PdfStatus,
   Screening,
   TaskGroup,
@@ -23,10 +21,15 @@ import { DownloadButton } from './DownloadButton'
 import { EntityPanel } from './Entities'
 import { AbstractIcon, AuthorsIcon, TitleIcon } from './icons'
 import { tpl, type Translate } from './locales'
+import {
+  canDownloadPdf,
+  paperPdfStatus,
+  pdfActionUi,
+  zoteroActionUi,
+  type PdfDownloadUi,
+} from './pdfActions'
 import { PreviewFrame } from './PreviewFrame'
 import {
-  ACCENT,
-  ERROR,
   abstractStyle,
   actionRowStyle,
   badgeRowStyle,
@@ -45,21 +48,6 @@ const ABSTRACT_PREVIEW = 260
 const CREATE_GROUP_VALUE = '__create_group__'
 
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
-
-/** 出版商明确要求订阅 / 拒绝访问时，不再提供「下载 PDF」，避免必然失败的操作。 */
-const NO_PDF_STATUSES: ReadonlySet<PdfStatus> = new Set(['paywalled', 'blocked'])
-
-/** 单篇下载的进行中 / 已完成状态（由任务面板维护，跨 reload 保留）。 */
-export interface PdfDownloadUi {
-  state: 'downloading' | 'downloaded' | 'failed'
-  /** 下载成功后的绝对路径。 */
-  path?: string
-  error?: string
-  /** Host 返回的失败根因；用于区分「程序故障」与「需手动保存」。 */
-  reason?: PdfFailureReason
-  /** Host 返回的可点击全文位置，失败时用于渲染动作条。 */
-  links?: OaLocation[]
-}
 
 const SCREENING_COLOR: Record<Screening, string> = {
   unread: 'var(--ls-ink-2)',
@@ -133,10 +121,8 @@ export function PaperCard({
 
   const screening = state?.screening ?? 'unread'
   const groupName = groups.find((group) => group.id === state?.groupId)?.name
-  const pdfStatus: PdfStatus = state?.pdfStatus ?? (paper.pdfUrl === '' ? 'unknown' : 'available')
-  const canPdf =
-    !NO_PDF_STATUSES.has(pdfStatus) &&
-    (paper.pdfUrl !== '' || paper.ids.pmcid !== '' || paper.ids.arxivId !== '' || paper.doi !== '')
+  const pdfStatus: PdfStatus = paperPdfStatus(paper, state)
+  const canPdf = canDownloadPdf(paper, pdfStatus)
   // PMC 通道可用 PMID 反查 PMCID；只对标注开放的记录展示，减少无谓请求。
   const canHtml =
     paper.ids.pmcid !== '' ||
@@ -162,60 +148,8 @@ export function PaperCard({
     ]),
   ].slice(0, 3)
 
-  // 下载状态优先取面板的即时结果；刷新后回落到 Host 记录的已下载路径。
-  const downloading = download?.state === 'downloading'
-  const pdfMissing = !downloading && pdfStatus === 'missing'
-  // Host 的 missing 状态优先于本地下载记录：文件被删后按钮要立刻变成「重新下载」。
-  const downloaded =
-    !pdfMissing &&
-    (download?.state === 'downloaded' ||
-      (pdfStatus === 'downloaded' && !downloading))
-  const downloadedPath = downloaded
-    ? download?.path ?? state?.pdfFile
-    : undefined
-  const failedMessage =
-    download?.state === 'failed'
-      ? download.error
-      : pdfStatus === 'failed'
-        ? state?.pdfError
-        : undefined
-  const pdfLabel = downloading
-    ? t('pdf.downloading')
-    : downloaded
-      ? t('pdf.downloadedAction')
-      : pdfMissing
-        ? t('pdf.missingAction')
-        : pdfStatus === 'failed'
-          ? t('pdf.retry')
-          : t('pdf.download')
-  const pdfHint = downloading
-    ? t('pdf.downloadingHint')
-    : downloaded
-      ? tpl(t('pdf.downloadedHint'), { path: downloadedPath ?? downloadDir ?? '' })
-      : pdfMissing
-        ? t('pdf.missingHint')
-        : failedMessage !== undefined
-        ? tpl(t('pdf.retryHint'), { message: failedMessage })
-        : tpl(t('pdf.downloadHint'), { path: downloadDir ?? t('pdf.downloadDirUnknown') })
-  // Zotero 状态沿用卡片上的既有约定：文字回显结果，悬停看目标目录或失败原因。
-  const zoteroLabel =
-    state?.zoteroStatus === 'synced'
-      ? t('pdf.zoteroSynced')
-      : state?.zoteroStatus === 'failed'
-        ? t('pdf.zoteroRetry')
-        : t('pdf.zotero')
-  const zoteroHint =
-    state?.zoteroStatus === 'synced'
-      ? state.zoteroCollection
-      : state?.zoteroStatus === 'failed'
-        ? state.zoteroError
-        : undefined
-  const zoteroColor =
-    state?.zoteroStatus === 'synced'
-      ? 'var(--ls-success)'
-      : state?.zoteroStatus === 'failed'
-        ? ERROR
-        : undefined
+  const pdfAction = pdfActionUi({ paper, state, download, downloadDir, t })
+  const zoteroAction = zoteroActionUi(t, state)
 
   return (
     <article className={`${CARD_CLASS} ls-card-hover`} style={cardStyle}>
@@ -385,11 +319,13 @@ export function PaperCard({
           {canPdf && (
             <DownloadButton
               t={t}
-              label={pdfLabel}
-              hint={pdfHint}
-              {...(downloadedPath === undefined ? {} : { downloadedPath })}
-              missing={pdfMissing}
-              downloading={downloading}
+              label={pdfAction.label}
+              hint={pdfAction.hint}
+              {...(pdfAction.downloadedPath === undefined
+                ? {}
+                : { downloadedPath: pdfAction.downloadedPath })}
+              missing={pdfAction.pdfMissing}
+              downloading={pdfAction.downloading}
               disabled={busy}
               style={linkButtonStyle}
               onDownload={() => onDownload(paper)}
@@ -410,12 +346,16 @@ export function PaperCard({
           )}
           <button
             type="button"
-            style={zoteroColor === undefined ? linkButtonStyle : { ...linkButtonStyle, color: zoteroColor }}
+            style={
+              zoteroAction.color === undefined
+                ? linkButtonStyle
+                : { ...linkButtonStyle, color: zoteroAction.color }
+            }
             disabled={busy}
-            title={zoteroHint}
+            title={zoteroAction.hint}
             onClick={() => onZotero(paper)}
           >
-            {zoteroLabel}
+            {zoteroAction.label}
           </button>
           {directPdfUrl !== '' && (
             <a style={linkStyle} href={directPdfUrl} target="_blank" rel="noreferrer noopener">

@@ -8,7 +8,8 @@
  * - 冷却期内排队等待（有上限、可取消）；只有上游要求的冷却过长才优雅跳过。
  * - 真正收到 429 时记录冷却、自适应放大该源间隔，并退避重试一次；重试仍
  *   限流则抛 `SourceSkipped`，由聚合层标为 skipped，不计入失败。
- * - 连续成功若干次后间隔逐步回落；超时 / 临时网络故障也重试一次。
+ * - 连续成功若干次后间隔逐步回落；临时网络故障重试一次，超时不重试
+ *   （慢源重试只会把一次等待翻倍占用整轮时间）。
  * - 诊断探活（bypassCooldown）忽略冷却，429 仍按原始错误返回，便于定位。
  */
 
@@ -86,6 +87,10 @@ export class SourceSkipped extends Error {
 export interface LimitedRequest extends HttpRequest {
   /** 诊断测试可忽略冷却，但仍走队列与最小间隔。 */
   bypassCooldown?: boolean
+  /** 上游限流时是否退避重试；无 Key 的共享配额源可设为 false。 */
+  retryOnRateLimit?: boolean
+  /** 跳过时的补充说明（如缺少 Key 的建议）。 */
+  skipHint?: string
 }
 
 /** 当前生效的最小间隔（设置覆盖 + 下限保护）。 */
@@ -149,7 +154,9 @@ async function runLimited<T>(
       throwIfAborted(request.signal)
 
       const cooling = coolingWait(source, bypass, ignoreCooldown)
-      if (cooling > MAX_COOLDOWN_WAIT_MS) throw skippedTooLong(source, cooling)
+      if (cooling > MAX_COOLDOWN_WAIT_MS) {
+        throw skippedTooLong(source, cooling, request.skipHint)
+      }
       const spacing = Math.max(
         0,
         state.lastStart + effectiveIntervalMs(source, state) - Date.now(),
@@ -161,7 +168,7 @@ async function runLimited<T>(
       const refreshed = coolingWait(source, bypass, ignoreCooldown)
       if (refreshed > 0) {
         if (refreshed > MAX_COOLDOWN_WAIT_MS || waitRounds >= MAX_WAIT_ROUNDS) {
-          throw skippedTooLong(source, refreshed)
+          throw skippedTooLong(source, refreshed, request.skipHint)
         }
         waitRounds += 1
         continue
@@ -185,8 +192,8 @@ async function runLimited<T>(
           recordSourceCooldown(source, Date.now() + cooldown, errorMessage(error))
           boostInterval(state)
           if (bypass) throw error
-          if (retries >= MAX_RETRIES) {
-            throw new SourceSkipped(`${source} 触发上游限流，已放慢频率并重试，本次按限流跳过`)
+          if (request.retryOnRateLimit === false || retries >= MAX_RETRIES) {
+            throw skippedByRateLimit(source, request.skipHint)
           }
           retries += 1
           ignoreCooldown = true
@@ -212,9 +219,24 @@ function coolingWait(source: SourceId, bypass: boolean, ignoreCooldown: boolean)
   return Math.max(0, cooldownUntil(source) - Date.now())
 }
 
-function skippedTooLong(source: SourceId, remaining: number): SourceSkipped {
+function skippedTooLong(
+  source: SourceId,
+  remaining: number,
+  hint: string | undefined,
+): SourceSkipped {
+  const seconds = Math.ceil(remaining / 1000)
   return new SourceSkipped(
-    `${source} 处于上游限流冷却（约 ${Math.ceil(remaining / 1000)} 秒后恢复），本次已按限流跳过`,
+    hint === undefined
+      ? `${source} 处于上游限流冷却（约 ${seconds} 秒后恢复），本次已按限流跳过`
+      : `${source} 处于上游限流冷却（约 ${seconds} 秒后恢复）；${hint}`,
+  )
+}
+
+function skippedByRateLimit(source: SourceId, hint: string | undefined): SourceSkipped {
+  return new SourceSkipped(
+    hint === undefined
+      ? `${source} 触发上游限流，已放慢频率并重试，本次按限流跳过`
+      : `${source} 触发上游限流：${hint}`,
   )
 }
 
@@ -222,11 +244,9 @@ function isRateLimited(error: unknown): error is SearchError {
   return error instanceof SearchError && error.status === 429
 }
 
+/** 超时不重试：慢源重试一次只会把一次等待翻倍。 */
 function isTransient(error: unknown): boolean {
-  return (
-    error instanceof SearchError &&
-    (error.code === 'timeout' || error.code === 'network_error')
-  )
+  return error instanceof SearchError && error.code === 'network_error'
 }
 
 function errorMessage(error: unknown): string {

@@ -27,6 +27,7 @@ import {
   LANGUAGES,
   NCBI_KEY_FIELD,
   OA_LOOKUP_FIELD,
+  OPENALEX_KEY_FIELD,
   PDF_ROOT_FIELD,
   PMC_FULLTEXT_FIELD,
   S2_KEY_FIELD,
@@ -92,6 +93,7 @@ export function SettingsSection(props: Props): ReactElement {
   const draftKey = [
     state.contactEmail.text,
     state.ncbiApiKey.text,
+    state.openalexApiKey.text,
     state.s2ApiKey.text,
     state.serpApiKey.text,
     state.defaultPageSize.text,
@@ -288,6 +290,18 @@ export function SettingsSection(props: Props): ReactElement {
                       </a>
                     </div>
                   </>
+                )}
+                {id === 'openalex' && (
+                  <SecretField
+                    t={t}
+                    id="plugin-config-litsearch-openalexApiKey"
+                    label={t('field.openalexApiKey')}
+                    hint={t('field.openalexApiKeyHint')}
+                    configured={state.openalexApiKey.text.trim() !== ''}
+                    disabled={locked}
+                    onEdit={(value) => props.edit(OPENALEX_KEY_FIELD, value)}
+                    onClear={() => props.edit(OPENALEX_KEY_FIELD, '')}
+                  />
                 )}
                 {id === 'europepmc' && renderToggle(EPMC_FULLTEXT_FIELD)}
                 {id === 'semanticscholar' && (

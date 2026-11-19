@@ -14,7 +14,10 @@ import type { OaLocation, PaperRecord, Provider } from '../types.js'
 
 const ENDPOINT = 'https://api.openaire.eu/graph/v4/research-products'
 
-const TIMEOUT_CAP_MS = 18_000
+/** 响应体大、回传慢：实测 53 条约 230 KB，耗时中位数约 23s，给 30s 下限。 */
+const TIMEOUT_FLOOR_MS = 30_000
+/** 单次最多取的条数。耗时随响应体近似线性增长，25 条约 3–8s。 */
+const REQUEST_SIZE_CAP = 25
 
 /** 只取本 provider 用到的字段；字段名以 v4 实际返回为准。 */
 const SELECT_FIELDS = [
@@ -44,14 +47,14 @@ export const openaire: Provider = {
     const params = new URLSearchParams({
       search: query,
       filter: 'type:publication',
-      // 多取几条：专利记录会被过滤掉。
-      page_size: String(Math.max(1, Math.min(100, options.limit + 3))),
+      // 专利记录会被过滤掉，但仍按 25 条封顶以控制响应体与耗时。
+      page_size: String(Math.max(1, Math.min(options.limit, REQUEST_SIZE_CAP))),
       select: SELECT_FIELDS,
     })
     if (options.contactEmail !== '') params.set('mailto', options.contactEmail)
 
     const payload = await limitedJson('openaire', `${ENDPOINT}?${params.toString()}`, {
-      timeoutMs: Math.min(options.timeoutMs, TIMEOUT_CAP_MS),
+      timeoutMs: Math.max(options.timeoutMs, TIMEOUT_FLOOR_MS),
       signal: options.signal,
       bypassCooldown: options.bypassCooldown === true,
       headers: {

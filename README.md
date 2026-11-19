@@ -88,9 +88,9 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 | 字段 | 说明 | 默认 |
 | --- | --- | --- |
 | `contactEmail` | 联系邮箱（polite pool）；**填写后启用 Unpaywall** 按 DOI 补 OA 候选，补出的直链仍可能被拒 | 空 |
-| `ncbiApiKey` / `s2ApiKey` / `serpApiKey` | 提升 PubMed / S2 额度；`serpApiKey` 启用谷歌学术（每月 250 次免费），留空则该源不可选 | 空 |
+| `ncbiApiKey` / `openalexApiKey` / `s2ApiKey` / `serpApiKey` | 提升 PubMed / OpenAlex / S2 额度（OpenAlex Key 免费申请，无 Key 时匿名检索易被临时限流）；`serpApiKey` 启用谷歌学术（每月 250 次免费），留空则该源不可选 | 空 |
 | `pubmedIntervalMs` / `s2IntervalMs` / `arxivIntervalMs` | 各源最小请求间隔（毫秒） | 350 / 3000 / 3000 |
-| `defaultPageSize` / `requestTimeoutMs` | 每源条数 / 超时（Europe PMC 另有 25s 下限） | 20 / 20000 |
+| `defaultPageSize` / `requestTimeoutMs` | 每源条数 / 超时（Europe PMC 有 25s 下限；OpenAIRE 有 30s 下限、单次最多 25 条） | 20 / 20000 |
 | `defaultSources` / `defaultSort` / `defaultLanguage` | 新任务默认来源、排序、语言（至少留一个来源） | 七源 / 相关度 / 不限 |
 | `autoOpenTaskTab` / `maxTaskTabs` | 模型发起后自动打开 tab；后者为兜底上限 | 开 / 5 |
 | `taskRetentionDays` / `taskRetentionCount` / `taskMaxPapers` | 未保留任务的天数、条数、单任务结果上限 | 90 / 120 / 1500 |
