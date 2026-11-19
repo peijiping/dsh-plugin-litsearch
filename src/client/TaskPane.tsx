@@ -38,7 +38,7 @@ import { DownloadDialog, type BatchDownloadItem } from './DownloadDialog'
 import { NoticeBar } from './NoticeBar'
 import { ZoteroSyncDialog, type ZoteroCommandMeta } from './ZoteroSyncDialog'
 import { markZoteroConsumed, usePendingZoteroCommands } from './zoteroCommandStore'
-import { FullTextTab, type FullTextView } from './FullTextTab'
+import { FullTextTab } from './FullTextTab'
 import { GroupsTab } from './GroupsTab'
 import {
   AlertIcon,
@@ -58,6 +58,7 @@ import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
 import { NotesTab } from './NotesTab'
 import { OverviewTab } from './OverviewTab'
+import { Pager } from './Pager'
 import { RunProgressPanel } from './RunProgressPanel'
 import { PaperCard } from './PaperCard'
 import { BulkActionButton, BulkDownloadButton } from './BulkButtons'
@@ -1302,6 +1303,8 @@ export function TaskPane({
           rev={detail.rev}
           states={detail.states}
           stats={overview}
+          groups={detail.groups}
+          screeningCounts={detail.stats.screening}
           downloads={downloads}
           busy={view.busy}
           batchRunning={batchRunning}
@@ -1317,15 +1320,18 @@ export function TaskPane({
             )
           }
           onBatchZotero={(papers) => zoteroIds(papers.map((paper) => paper.paperId))}
-          onShowInResults={(viewKey: FullTextView) => {
-            // 清空其他筛选，保证按钮上写的篇数就是跳过去能看到的篇数。
-            setFilters(
-              viewKey === 'missing'
+          onShowInResults={(viewKey, ledgerFilter) => {
+            // 清空其他筛选，保证按钮上写的篇数就是跳过去能看到的篇数；
+            // 台账自己的筛读 / 分组条件一并带过去。
+            setFilters({
+              ...(viewKey === 'missing'
                 ? { missingFullText: true }
                 : viewKey === 'reachable'
                   ? { hasFullText: true }
-                  : { pdfStatus: viewKey },
-            )
+                  : { pdfStatus: viewKey }),
+              ...(ledgerFilter.screening === undefined ? {} : { screening: ledgerFilter.screening }),
+              ...(ledgerFilter.groupId === undefined ? {} : { groupId: ledgerFilter.groupId }),
+            })
             setTab('results')
           }}
         />
@@ -1789,67 +1795,6 @@ function BulkBar({
   )
 }
 
-/** 结果页翻页条：首页 / 上一页 / 页码 / 下一页 / 末页。单页时不渲染。 */
-function Pager({
-  t,
-  index,
-  count,
-  total,
-  onChange,
-}: {
-  t: Translate
-  index: number
-  count: number
-  /** 总篇数；给了就并进页码文案，省掉单独一行统计。 */
-  total?: number
-  onChange(index: number): void
-}): ReactElement | null {
-  if (count <= 1) return null
-  const atStart = index <= 0
-  const atEnd = index >= count - 1
-  return (
-    <div style={PAGER_STYLE}>
-      <button
-        type="button"
-        style={atStart ? PAGER_BUTTON_DISABLED : PAGER_BUTTON}
-        disabled={atStart}
-        onClick={() => onChange(0)}
-      >
-        {t('pager.first')}
-      </button>
-      <button
-        type="button"
-        style={atStart ? PAGER_BUTTON_DISABLED : PAGER_BUTTON}
-        disabled={atStart}
-        onClick={() => onChange(index - 1)}
-      >
-        {t('pager.prev')}
-      </button>
-      <span style={PAGER_STATUS_STYLE}>
-        {total === undefined
-          ? tpl(t('pager.status'), { page: index + 1, pages: count })
-          : tpl(t('pager.statusTotal'), { page: index + 1, pages: count, total })}
-      </span>
-      <button
-        type="button"
-        style={atEnd ? PAGER_BUTTON_DISABLED : PAGER_BUTTON}
-        disabled={atEnd}
-        onClick={() => onChange(index + 1)}
-      >
-        {t('pager.next')}
-      </button>
-      <button
-        type="button"
-        style={atEnd ? PAGER_BUTTON_DISABLED : PAGER_BUTTON}
-        disabled={atEnd}
-        onClick={() => onChange(count - 1)}
-      >
-        {t('pager.last')}
-      </button>
-    </div>
-  )
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -2141,27 +2086,3 @@ const PAGE_SORT_SELECT_STYLE: CSSProperties = {
   background: 'transparent',
   color: 'inherit',
 }
-const PAGER_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexWrap: 'wrap',
-  gap: 6,
-  fontSize: 11.5,
-}
-const PAGER_BUTTON: CSSProperties = {
-  padding: '2px 8px',
-  borderRadius: 10,
-  border: '1px solid var(--ls-line-strong)',
-  background: 'transparent',
-  color: 'inherit',
-  fontSize: 11.5,
-  cursor: 'pointer',
-  whiteSpace: 'nowrap',
-}
-const PAGER_BUTTON_DISABLED: CSSProperties = {
-  ...PAGER_BUTTON,
-  opacity: 0.4,
-  cursor: 'default',
-}
-const PAGER_STATUS_STYLE: CSSProperties = { color: 'var(--ls-ink-2)', whiteSpace: 'nowrap' }
