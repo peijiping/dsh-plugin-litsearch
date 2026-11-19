@@ -28,13 +28,14 @@ import {
   type ResultsQuery,
   type ViewSnapshotBody,
 } from './api'
-import { rememberTaskTitle } from './autoOpen'
+import { rememberTaskTitle, forgetTask } from './autoOpen'
 import { CompareTab } from './CompareTab'
 import { ConditionEditor } from './ConditionEditor'
 import { ConditionSummary } from './ConditionSummary'
 import { paperSummary, paperText, papersSummary, papersText, taskSummary, taskText } from './compose'
 import { markConsumed, usePendingDownloadCommands } from './downloadCommandStore'
 import { DownloadDialog, type BatchDownloadItem } from './DownloadDialog'
+import { NoticeBar } from './NoticeBar'
 import { ZoteroSyncDialog, type ZoteroCommandMeta } from './ZoteroSyncDialog'
 import { markZoteroConsumed, usePendingZoteroCommands } from './zoteroCommandStore'
 import { FullTextTab, type FullTextView } from './FullTextTab'
@@ -103,6 +104,8 @@ interface Props {
   onOpenTask?: (id: string, title: string) => void
   /** 当前任务被删除且没有别的任务可切换时，由宿主关闭这个任务 tab。 */
   onCloseTask?: (taskId: string) => void
+  /** 切换前记录的上一个任务；当前任务失效时可一键切回，避免困在错误页。 */
+  getPreviousTask?: () => { id: string; title: string } | null
   /** 已下载文献：先复核文件仍在，再在右侧面板预览本地 PDF。 */
   onOpenLocal?: (taskId: string, paperId: string, path: string) => void
   /** 已下载文献：在系统文件管理器中定位 PDF。 */
@@ -156,6 +159,7 @@ export function TaskPane({
   onOpenPaper,
   onOpenTask,
   onCloseTask,
+  getPreviousTask,
   onOpenLocal,
   onRevealLocal,
 }: Props): ReactElement {
@@ -246,6 +250,11 @@ export function TaskPane({
   useEffect(() => {
     if (detail !== null) rememberTaskTitle(detail.id, detail.title)
   }, [detail])
+
+  // 任务已不存在：清掉本地标题 / 待打开缓存，标签标题回退为默认文案。
+  useEffect(() => {
+    if (taskId !== null && view.errorCode === 'not_found') forgetTask(taskId)
+  }, [taskId, view.errorCode])
 
   // rev 变化（下载、筛读、重跑）后重取覆盖率，保证横幅与全文页一致。
   useEffect(() => {
@@ -664,13 +673,72 @@ export function TaskPane({
 
   const zoteroMany = (): void => zoteroIds(ids)
 
-  if (taskId === null) return <div className="ls-root" style={panelStyle}>{t('task.notFound')}</div>
+  const taskListDialog = (
+    <TaskListDialog
+      t={t}
+      open={showTaskList}
+      onClose={() => setShowTaskList(false)}
+      currentTaskId={taskId}
+      onOpenTask={onOpenTask ?? (() => undefined)}
+      onCurrentRemoved={(fallback) => {
+        if (fallback !== null) onOpenTask?.(fallback.id, fallback.title)
+        else if (taskId !== null) onCloseTask?.(taskId)
+      }}
+    />
+  )
 
-  if (detail === null) {
+  // 切换前预检没拦住（例如在别处被删）或布局恢复指向了已清理的任务：
+  // 不展示裸报错，改为「任务不存在」卡片 + 明确的恢复入口。
+  const missing = taskId === null || view.errorCode === 'not_found'
+  const back = getPreviousTask?.() ?? null
+
+  if (detail === null || taskId === null) {
     return (
-      <div className="ls-root" style={panelStyle}>
-        {view.loading ? (
+      <div className="ls-root" style={MISSING_PANEL_STYLE}>
+        <NoticeBar t={t} />
+        {view.loading && !missing ? (
           <div style={statusStyle}>{t('task.loading')}</div>
+        ) : missing ? (
+          <>
+            <div style={MISSING_CARD_STYLE}>
+              <div style={MISSING_TITLE_STYLE}>{t('task.notFound')}</div>
+              {taskId !== null && (
+                <div style={statusStyle}>{tpl(t('task.missingId'), { id: taskId })}</div>
+              )}
+              <div style={statusStyle}>{t('task.missingHint')}</div>
+              <div style={MISSING_ACTIONS_STYLE}>
+                {back !== null && back.id !== taskId && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    type="button"
+                    onClick={() => onOpenTask?.(back.id, back.title)}
+                  >
+                    {t('task.backToPrevious')}
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  onClick={() => setShowTaskList(true)}
+                >
+                  {t('task.openList')}
+                </Button>
+                {taskId !== null && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    onClick={() => onCloseTask?.(taskId)}
+                  >
+                    {t('task.closeTab')}
+                  </Button>
+                )}
+              </div>
+            </div>
+            {taskListDialog}
+          </>
         ) : (
           <>
             <div style={{ ...statusStyle, color: ERROR }}>{view.error ?? t('task.notFound')}</div>
@@ -761,6 +829,7 @@ export function TaskPane({
 
   return (
     <div className="ls-root" style={TASK_PANEL_STYLE}>
+      <NoticeBar t={t} />
       <header style={HEADER_STYLE}>
         <div style={HEADER_TOP_STYLE}>
           <div style={HEADER_LEAD_STYLE}>
@@ -1338,17 +1407,7 @@ export function TaskPane({
           notify(t('rounds.rerunStarted'))
         }}
       />
-      <TaskListDialog
-        t={t}
-        open={showTaskList}
-        onClose={() => setShowTaskList(false)}
-        currentTaskId={taskId}
-        onOpenTask={onOpenTask ?? (() => undefined)}
-        onCurrentRemoved={(fallback) => {
-          if (fallback !== null) onOpenTask?.(fallback.id, fallback.title)
-          else onCloseTask?.(taskId)
-        }}
-      />
+      {taskListDialog}
     </div>
   )
 }
@@ -2008,6 +2067,34 @@ const SCROLL_BODY_STYLE: CSSProperties = {
   minHeight: 0,
   overflowY: 'auto',
   overflowX: 'hidden',
+}
+
+/** 任务缺失时的整页容器：保留滚动与最小高度，不把宿主 tab 撑坏。 */
+const MISSING_PANEL_STYLE: CSSProperties = {
+  ...TASK_PANEL_STYLE,
+  overflowY: 'auto',
+}
+const MISSING_CARD_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '14px 14px',
+  borderRadius: 12,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface-2)',
+}
+const MISSING_TITLE_STYLE: CSSProperties = {
+  fontSize: 13.5,
+  fontWeight: 600,
+  lineHeight: 1.45,
+  color: ERROR,
+}
+const MISSING_ACTIONS_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 8,
+  marginTop: 2,
 }
 
 /** 排序（含本页全选 / 取消全选）与翻页同一行：操作靠左，翻页（含总篇数）靠右。 */

@@ -13,9 +13,18 @@
 
 import { createElement, useEffect, type ComponentType, type ReactElement } from 'react'
 
-import { activateTask, recheckPaperPdf, revealLocalFile, setSessionIdProvider } from './api'
+import {
+  ApiFailure,
+  activateTask,
+  fetchTask,
+  recheckPaperPdf,
+  revealLocalFile,
+  setSessionIdProvider,
+} from './api'
 import {
   ensureTaskTitle,
+  forgetTask,
+  getTaskTitle,
   rememberTaskTitle,
   startAutoOpen,
   useTaskTitle,
@@ -23,7 +32,9 @@ import {
 import { refreshHealth } from './health'
 import type { InputActions } from './inline'
 import { LitsearchPage } from './LitsearchPage'
-import { dicts, NS, type Translate } from './locales'
+import { dicts, NS, tpl, type Translate } from './locales'
+import { showNotice } from './noticeStore'
+import { notifyTaskListChanged } from './taskListStore'
 import { PAPER_ADDRESS_PREFIX, PaperPane } from './PaperPane'
 import { LitsearchSettingsController, ROW_ID } from './SettingsController'
 import { SettingsSection } from './SettingsSection'
@@ -198,27 +209,64 @@ export function apply(ctx: ClientContext): void {
   const taskTabsIn = (sessionId: string): SidebarRightOpenTab[] =>
     ctx.sidebarRight.tabsIn(sessionId).filter((tab) => tab.kind === TASK_TAB_ID)
 
-  /** 打开 / 聚焦某任务的 tab；先把标题记进缓存，布局恢复后不靠 params 也能显示。 */
+  /** 上一次成功打开的任务：目标任务随后失效时，任务页可一键切回。 */
+  let previousTask: { id: string; title: string } | null = null
+  /** 连续点击多个任务时只让最后一次生效，避免预检请求乱序。 */
+  let openSeq = 0
+
+  /**
+   * 打开 / 聚焦某任务的 tab。
+   *
+   * 先向 Host 确认任务仍然存在再替换当前 tab：任务被删除 / 自动清理后，
+   * 直接换 tab 只会让面板停在「任务不存在」上，而且原来的 tab 已经没了。
+   * 预检失败只提醒、不切换。
+   */
   const openTask = (id: string, title?: string): void => {
-    const address = `${TASK_ADDRESS_PREFIX}${encodeURIComponent(id)}`
-    if (title !== undefined && title !== '') rememberTaskTitle(id, title)
-    // 用户主动点开某任务 = 进入该任务，之后的模型检索默认落在这里。
-    // 自动打开路径也会调用，但 activate 是幂等的，不会改变已有语义。
-    void activateTask(id).catch(() => undefined)
-    // 一个对话只保留一个任务 tab：已经打开别的任务时，原位替换而不是再开一个。
-    const sessionId = ctx.sidebarRight.mounted.getSnapshot()
-    const tabs = sessionId === undefined ? [] : taskTabsIn(sessionId)
-    const previous = tabs.find((tab) => taskIdFromAddress(tab.contentId) !== id)
-    ctx.sidebarRight.openResource(address, {
-      ...(title === undefined || title === '' ? {} : { params: { title } }),
-      ...(previous === undefined ? {} : { replaceTab: previous.id }),
-    })
-    // 升级前可能遗留多个任务 tab：打开动作之后收敛到这一个。
-    for (const tab of tabs) {
-      if (tab.id !== previous?.id && taskIdFromAddress(tab.contentId) !== id) {
-        ctx.sidebarRight.close(tab.id)
-      }
-    }
+    const token = ++openSeq
+    void fetchTask(id)
+      .then((detail) => {
+        if (token !== openSeq) return
+        rememberTaskTitle(detail.id, detail.title)
+        const address = `${TASK_ADDRESS_PREFIX}${encodeURIComponent(detail.id)}`
+        // 一个对话只保留一个任务 tab：已经打开别的任务时，原位替换而不是再开一个。
+        const sessionId = ctx.sidebarRight.mounted.getSnapshot()
+        const tabs = sessionId === undefined ? [] : taskTabsIn(sessionId)
+        const previous = tabs.find((tab) => taskIdFromAddress(tab.contentId) !== detail.id)
+        if (previous !== undefined) {
+          const previousId = taskIdFromAddress(previous.contentId)
+          if (previousId !== null && previousId !== detail.id) {
+            previousTask = {
+              id: previousId,
+              title: getTaskTitle(previousId) ?? t('taskTab.title'),
+            }
+          }
+        }
+        ctx.sidebarRight.openResource(address, {
+          params: { title: title === undefined || title === '' ? detail.title : title },
+          ...(previous === undefined ? {} : { replaceTab: previous.id }),
+        })
+        // 升级前可能遗留多个任务 tab：打开动作之后收敛到这一个。
+        for (const tab of tabs) {
+          if (tab.id !== previous?.id && taskIdFromAddress(tab.contentId) !== detail.id) {
+            ctx.sidebarRight.close(tab.id)
+          }
+        }
+        // 用户主动点开某任务 = 进入该任务，之后的模型检索默认落在这里。
+        // 自动打开路径也会调用，但 activate 是幂等的，不会改变已有语义。
+        void activateTask(detail.id).catch(() => undefined)
+      })
+      .catch((error: unknown) => {
+        if (token !== openSeq) return
+        if (error instanceof ApiFailure && error.code === 'not_found') {
+          // 清掉本地标题 / 待打开缓存，并让所有任务列表刷新掉这条已失效的记录。
+          forgetTask(id)
+          notifyTaskListChanged()
+          showNotice(tpl(t('task.missingNotice'), { id }))
+          return
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        showNotice(tpl(t('task.openFailed'), { message }))
+      })
   }
 
   // 主页：t 闭包 + 打开任务 tab 的能力。
@@ -288,6 +336,7 @@ export function apply(ctx: ClientContext): void {
       onOpenPaper: openPaper,
       onOpenTask: (id: string, title: string) => openTask(id, title),
       onCloseTask: (id: string) => closeTask(id),
+      getPreviousTask: () => previousTask,
       onOpenLocal: openPdfPreview,
       onRevealLocal: revealPdf,
     })

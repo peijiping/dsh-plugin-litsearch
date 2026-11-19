@@ -22,6 +22,7 @@ import {
 import { useHealth } from './health'
 import { IconButton, TaskListIcon } from './icons'
 import { tpl, type Translate } from './locales'
+import { NoticeBar } from './NoticeBar'
 import { TaskListDialog } from './TaskListDialog'
 import { notifyTaskListChanged, useTaskListVersion } from './taskListStore'
 import { newQuery, QueryEditor, toQueryBodies, type QueryDraft } from './QueryEditor'
@@ -188,6 +189,7 @@ export function LitsearchPage({ t, onOpenTask }: Props): ReactElement {
           <TaskListIcon />
         </IconButton>
       </div>
+      <NoticeBar t={t} />
       <form
         className="ls-card"
         style={searchFormStyle}

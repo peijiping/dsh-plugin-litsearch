@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { AnnotationInput, ResultsPage, TaskDetail } from '../search/types'
 import { RESULT_PAGE_SIZE as SHARED_PAGE_SIZE } from '../search/types'
-import { annotateTask, cancelTask, fetchResults, fetchTask, runTask } from './api'
+import { ApiFailure, annotateTask, cancelTask, fetchResults, fetchTask, runTask } from './api'
 import type { ResultsQuery } from './api'
 import { subscribeTaskSummary } from './taskListStore'
 
@@ -28,6 +28,8 @@ interface TaskState {
   page: ResultsPage | null
   loading: boolean
   error: string | null
+  /** 错误码（来自 Host 信封）：`not_found` 时不再重试，直接展示恢复入口。 */
+  errorCode: string | null
 }
 
 export interface TaskView extends TaskState {
@@ -42,7 +44,13 @@ export interface TaskView extends TaskState {
   annotate(papers: readonly AnnotationInput[]): Promise<void>
 }
 
-const INITIAL: TaskState = { detail: null, page: null, loading: true, error: null }
+const INITIAL: TaskState = {
+  detail: null,
+  page: null,
+  loading: true,
+  error: null,
+  errorCode: null,
+}
 
 function isActive(status: TaskDetail['status'] | undefined): boolean {
   return status === 'running' || status === 'queued'
@@ -50,6 +58,10 @@ function isActive(status: TaskDetail['status'] | undefined): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function errorCodeOf(error: unknown): string | null {
+  return error instanceof ApiFailure ? error.code : null
 }
 
 export function useTask(
@@ -98,7 +110,7 @@ export function useTask(
       if (token !== undefined && seq.current !== token) return detail
       statusRef.current = detail.status
       revRef.current = detail.rev
-      setState({ detail, page, loading: false, error: null })
+      setState({ detail, page, loading: false, error: null, errorCode: null })
       return detail
     },
     [signal, size],
@@ -106,7 +118,7 @@ export function useTask(
 
   useEffect(() => {
     if (id === null) {
-      setState({ detail: null, page: null, loading: false, error: null })
+      setState({ detail: null, page: null, loading: false, error: null, errorCode: null })
       return undefined
     }
 
@@ -121,7 +133,13 @@ export function useTask(
 
     void load(id, pageIndex, current).catch((error: unknown) => {
       if (seq.current !== current || signal?.aborted === true) return
-      setState({ detail: null, page: null, loading: false, error: errorMessage(error) })
+      setState({
+        detail: null,
+        page: null,
+        loading: false,
+        error: errorMessage(error),
+        errorCode: errorCodeOf(error),
+      })
     })
     const poll = (): void => {
       if (document.hidden || signal?.aborted === true) return
@@ -143,8 +161,21 @@ export function useTask(
             if (seq.current !== current) return
             setState((previous) => ({ ...previous, detail, page }))
           }
-        } catch {
-          // 单次轮询失败不打断：下一拍继续。
+        } catch (error: unknown) {
+          if (seq.current !== current) return
+          // 任务在别处被删除 / 清理：停止轮询，交给面板展示恢复入口，
+          // 否则会一直停留在旧数据上，看起来像“正常但不同步”。
+          if (error instanceof ApiFailure && error.code === 'not_found') {
+            statusRef.current = undefined
+            setState({
+              detail: null,
+              page: null,
+              loading: false,
+              error: error.message,
+              errorCode: 'not_found',
+            })
+          }
+          // 其它单次失败不打断：下一拍继续。
         }
       })()
     }
@@ -187,6 +218,22 @@ export function useTask(
     [pageCount],
   )
 
+  /** 操作过程中发现任务已不存在：与首次加载一致，切到「任务不存在」恢复态。 */
+  const fail = useCallback((error: unknown): void => {
+    if (error instanceof ApiFailure && error.code === 'not_found') {
+      statusRef.current = undefined
+      setState({
+        detail: null,
+        page: null,
+        loading: false,
+        error: error.message,
+        errorCode: 'not_found',
+      })
+      return
+    }
+    setState((previous) => ({ ...previous, error: errorMessage(error) }))
+  }, [])
+
   const rerun = useCallback(async (): Promise<void> => {
     if (id === null || busy) return
     setBusy(true)
@@ -196,11 +243,11 @@ export function useTask(
       revRef.current = -1
       setNonce((value) => value + 1)
     } catch (error) {
-      setState((previous) => ({ ...previous, error: errorMessage(error) }))
+      fail(error)
     } finally {
       setBusy(false)
     }
-  }, [id, busy])
+  }, [id, busy, fail])
 
   const cancel = useCallback(async (): Promise<void> => {
     if (id === null || busy) return
@@ -209,11 +256,11 @@ export function useTask(
       await cancelTask(id)
       setNonce((value) => value + 1)
     } catch (error) {
-      setState((previous) => ({ ...previous, error: errorMessage(error) }))
+      fail(error)
     } finally {
       setBusy(false)
     }
-  }, [id, busy])
+  }, [id, busy, fail])
 
   const annotate = useCallback(
     async (papers: readonly AnnotationInput[]): Promise<void> => {
@@ -223,12 +270,12 @@ export function useTask(
         await annotateTask(id, papers)
         setNonce((value) => value + 1)
       } catch (error) {
-        setState((previous) => ({ ...previous, error: errorMessage(error) }))
+        fail(error)
       } finally {
         setBusy(false)
       }
     },
-    [id],
+    [id, fail],
   )
 
   return {

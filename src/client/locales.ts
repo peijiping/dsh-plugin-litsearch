@@ -58,6 +58,15 @@ const zh: Record<string, string> = {
 
   'task.loading': '加载任务…',
   'task.notFound': '任务不存在或已删除',
+  'task.missingNotice': '任务不存在或已删除，未切换：{id}',
+  'task.openFailed': '无法打开任务：{message}',
+  'task.missingId': '任务 id：{id}',
+  'task.missingHint':
+    '该任务可能已在其他窗口删除，或被自动清理。为避免反复报错，已停止加载；可切换到其它任务，或关闭这个标签。',
+  'task.backToPrevious': '返回上一个任务',
+  'task.openList': '打开任务列表',
+  'task.closeTab': '关闭此标签',
+  'notice.dismiss': '关闭',
   'task.retry': '重试',
   'task.refresh': '刷新',
   'task.runQuery': '执行查询',
@@ -773,6 +782,15 @@ const en: Record<string, string> = {
 
   'task.loading': 'Loading task…',
   'task.notFound': 'This task does not exist or was deleted',
+  'task.missingNotice': 'Task not found or deleted; switch cancelled: {id}',
+  'task.openFailed': 'Could not open task: {message}',
+  'task.missingId': 'Task id: {id}',
+  'task.missingHint':
+    'It may have been deleted in another window or pruned automatically. Loading has stopped; switch to another task or close this tab.',
+  'task.backToPrevious': 'Back to previous task',
+  'task.openList': 'Open task list',
+  'task.closeTab': 'Close this tab',
+  'notice.dismiss': 'Dismiss',
   'task.retry': 'Retry',
   'task.refresh': 'Refresh',
   'task.runQuery': 'Run search',
