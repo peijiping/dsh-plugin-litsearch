@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Literature Search for DSH">
+  <defs>
+    <linearGradient id="ls-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2cc8b2"/>
+      <stop offset="1" stop-color="#0c8f80"/>
+    </linearGradient>
+    <linearGradient id="ls-paper" x1="13" y1="12" x2="38" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e6f5f1"/>
+    </linearGradient>
+    <linearGradient id="ls-lens" x1="31" y1="28" x2="48" y2="45" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d9f1eb"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Self-contained badge: readable on both light and dark host themes. -->
+  <rect x="4" y="4" width="56" height="56" rx="15" fill="url(#ls-bg)"/>
+
+  <!-- The paper being searched. -->
+  <rect x="13" y="12" width="25" height="36" rx="4" fill="url(#ls-paper)"/>
+
+  <!-- Title + abstract lines; one line is picked out in the lens. -->
+  <rect x="17.5" y="17.5" width="10.5" height="2.8" rx="1.4" fill="#f2a93b"/>
+  <g fill="#a9c9c3">
+    <rect x="17.5" y="23.5" width="15" height="2.2" rx="1.1"/>
+    <rect x="17.5" y="28.3" width="11.5" height="2.2" rx="1.1"/>
+    <rect x="17.5" y="41.8" width="10" height="2.2" rx="1.1"/>
+    <rect x="17.5" y="45.8" width="6.5" height="2.2" rx="1.1"/>
+  </g>
+
+  <!-- Magnifier: paper inside the lens is enlarged and the match highlighted. -->
+  <line x1="46.3" y1="43.4" x2="51.6" y2="48.7" stroke="#0a6458" stroke-width="4.6" stroke-linecap="round"/>
+  <circle cx="39.5" cy="36.5" r="9.2" fill="url(#ls-lens)"/>
+  <circle cx="39.5" cy="36.5" r="9.2" fill="none" stroke="#0a6458" stroke-width="3.4"/>
+  <rect x="34.8" y="33.6" width="9.4" height="2.4" rx="1.2" fill="#0a6458"/>
+  <rect x="34.8" y="38.6" width="5.8" height="2.4" rx="1.2" fill="#f2a93b"/>
+</svg>

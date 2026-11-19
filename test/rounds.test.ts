@@ -136,16 +136,26 @@ test('finishRound 回填状态、命中统计与源级摘要', () => {
   })
   assert.equal(round.skippedSources, 1)
   assert.equal(round.failedSources, 1)
+  assert.deepEqual(round.skippedSourceList, [{ id: 'arxiv', note: '按限流跳过' }])
+  assert.deepEqual(round.failedSourceList, [{ id: 'openalex', error: '超时' }])
   assert.equal(round.error, '部分数据源不可用')
 })
 
-test('cloneRound 不与内存轮次共享条件与统计引用', () => {
+test('cloneRound 不与内存轮次共享条件、统计与源明细引用', () => {
   const task = makeTask()
   const round = startRound(task, 'panel', 30)
+  task.result.sources = [
+    { id: 'arxiv', ok: true, count: 0, skipped: true, note: '限流' },
+    { id: 'openalex', ok: false, count: 0, error: '超时' },
+  ]
   finishRound(round, task)
   const copy = cloneRound(round)
   copy.conditions.queries[0].text = 'changed'
   if (copy.stats !== undefined) copy.stats.perQuery.q1 = 999
+  if (copy.failedSourceList !== undefined) copy.failedSourceList[0].error = 'changed'
+  if (copy.skippedSourceList !== undefined) copy.skippedSourceList[0].note = 'changed'
   assert.equal(round.conditions.queries[0].text, 'halitosis treatment')
   assert.equal(round.stats?.perQuery.q1 ?? 0, 0)
+  assert.equal(round.failedSourceList?.[0].error, '超时')
+  assert.equal(round.skippedSourceList?.[0].note, '限流')
 })

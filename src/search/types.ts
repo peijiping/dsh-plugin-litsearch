@@ -397,6 +397,10 @@ export interface SearchRound {
   skippedSources?: number
   /** 真实失败的数据源数量。 */
   failedSources?: number
+  /** 失败的数据源明细（源 + 原因），供轮次历史逐条回显；旧轮次可能没有。 */
+  failedSourceList?: { id: SourceId; error: string }[]
+  /** 跳过的数据源明细（源 + 原因），供轮次历史逐条回显；旧轮次可能没有。 */
+  skippedSourceList?: { id: SourceId; note: string }[]
   /** 取消 / 异常原因。 */
   error?: string
 }

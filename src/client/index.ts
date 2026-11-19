@@ -29,6 +29,7 @@ import {
   startAutoOpen,
   useTaskTitle,
 } from './autoOpen'
+import { GuideIcon, type GuideIconProps } from './GuideIcon'
 import { refreshHealth } from './health'
 import type { InputActions } from './inline'
 import { LitsearchPage } from './LitsearchPage'
@@ -37,6 +38,7 @@ import { showNotice } from './noticeStore'
 import { notifyTaskListChanged } from './taskListStore'
 import { PAPER_ADDRESS_PREFIX, PaperPane } from './PaperPane'
 import { LitsearchSettingsController, ROW_ID } from './SettingsController'
+import { SettingsNavIcon } from './SettingsNavIcon'
 import { SettingsSection } from './SettingsSection'
 import { TASK_ADDRESS_PREFIX, TaskPane, taskIdFromAddress } from './TaskPane'
 import { installTheme } from './theme'
@@ -56,6 +58,7 @@ interface GuideEntry {
   title: () => string
   description?: () => string
   order?: number
+  icon?: ComponentType<GuideIconProps>
 }
 
 /** 右侧栏 tab 类型定义。 */
@@ -171,6 +174,7 @@ export function apply(ctx: ClientContext): void {
             title: () => t('guide.title'),
             description: () => t('guide.desc'),
             order: 20,
+            icon: GuideIcon,
           },
         ],
       }),
@@ -442,8 +446,8 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => () => controller.dispose(), 'dsh-plugin-litsearch: settings form')
   ctx.effect(
     () =>
-      ctx.configForms.whileServed([ROW_ID], () =>
-        ctx.slots.inject('settings.section', () =>
+      ctx.configForms.whileServed([ROW_ID], () => {
+        const offSection = ctx.slots.inject('settings.section', () =>
           ctx.slots.register(
             {
               name: 'settings.section',
@@ -455,8 +459,20 @@ export function apply(ctx: ClientContext): void {
             },
             SettingsSection as ComponentType<never>,
           ),
-        ),
-      ),
+        )
+        // 左导航图标是独立席位：外壳按 section id 取 `settings.section.icon`，
+        // 没注册就退回默认齿轮。id 必须与上面一致，两者生命周期也绑在一起。
+        const offIcon = ctx.slots.inject('settings.section.icon', () =>
+          ctx.slots.register(
+            { name: 'settings.section.icon', id: SETTINGS_SECTION_ID },
+            SettingsNavIcon as ComponentType<never>,
+          ),
+        )
+        return () => {
+          offSection()
+          offIcon()
+        }
+      }),
     'dsh-plugin-litsearch: settings section',
   )
 

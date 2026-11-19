@@ -247,7 +247,7 @@ export function SettingsSection(props: Props): ReactElement {
       {!state.failed && state.saving && <p style={SAVE_STATUS_STYLE}>{t('form.autosaving')}</p>}
 
       <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.searchSources')}</h4>
+        <GroupHead title={t('group.searchSources')} />
         <div style={HINT_STYLE}>{t('settings.sourcesHint')}</div>
         {SOURCE_IDS.map((id) => {
           const on = selectedSources.includes(id)
@@ -349,7 +349,7 @@ export function SettingsSection(props: Props): ReactElement {
       </section>
 
       <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.defaults')}</h4>
+        <GroupHead title={t('group.defaults')} />
 
         {renderNumberField('defaultPageSize')}
 
@@ -393,7 +393,7 @@ export function SettingsSection(props: Props): ReactElement {
       </section>
 
       <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.translate')}</h4>
+        <GroupHead title={t('group.translate')} />
         <div style={HINT_STYLE}>{t('settings.translateHint')}</div>
 
         <div style={TRANSLATE_ROW_STYLE}>
@@ -438,13 +438,13 @@ export function SettingsSection(props: Props): ReactElement {
       </section>
 
       <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.network')}</h4>
+        <GroupHead title={t('group.network')} />
         {renderText(TEXT_FIELD)}
         {renderNumberField('requestTimeoutMs')}
       </section>
 
       <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.tasks')}</h4>
+        <GroupHead title={t('group.tasks')} />
 
         <div style={CHOICE_ROW_STYLE}>
           <div style={TOGGLE_INFO_STYLE}>
@@ -486,7 +486,7 @@ export function SettingsSection(props: Props): ReactElement {
       </section>
 
       <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.fulltext')}</h4>
+        <GroupHead title={t('group.fulltext')} />
         <div style={HINT_STYLE}>{t('group.fulltextHint')}</div>
         {renderText(PDF_ROOT_FIELD)}
         {renderNumberField('pdfMaxMb')}
@@ -510,7 +510,7 @@ export function SettingsSection(props: Props): ReactElement {
       </section>
 
       <section style={GROUP_STYLE}>
-        <h4 style={GROUP_HEAD_STYLE}>{t('group.zotero')}</h4>
+        <GroupHead title={t('group.zotero')} />
         <div style={HINT_STYLE}>{t('group.zoteroHint')}</div>
         {renderToggle(ZOTERO_ENABLED_FIELD)}
         {renderText(ZOTERO_BASE_URL_FIELD)}
@@ -519,6 +519,16 @@ export function SettingsSection(props: Props): ReactElement {
         <ZoteroProbeRow t={t} disabled={locked} />
       </section>
     </div>
+  )
+}
+
+/** 分组标题：左侧强调条 + 加粗字号，与下方分隔线一起区分各大块。 */
+function GroupHead({ title }: { title: string }): ReactElement {
+  return (
+    <h4 style={GROUP_HEAD_STYLE}>
+      <span style={GROUP_HEAD_BAR_STYLE} aria-hidden="true" />
+      {title}
+    </h4>
   )
 }
 
@@ -866,7 +876,12 @@ function formatTime(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString()
 }
 
-const FORM_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', paddingBottom: 8 }
+const FORM_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  paddingBottom: 8,
+}
 const NOTICE_STYLE: CSSProperties = {
   margin: '0 0 12px',
   fontSize: 12,
@@ -885,22 +900,43 @@ const SAVE_FAILED_STYLE: CSSProperties = {
   opacity: 1,
   color: 'var(--dsw-alias-state-error-primary, var(--dsw-alias-label-error, var(--ls-error)))',
 }
-const GROUP_STYLE: CSSProperties = { marginTop: 4 }
+/** 每个设置分组是一张独立卡片，避免整页读成一大段。 */
+const GROUP_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  padding: '10px 12px 12px',
+  border: '1px solid var(--ls-line)',
+  borderRadius: 10,
+  background: 'var(--ls-surface)',
+}
 const GROUP_HEAD_STYLE: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 500,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 7,
+  fontSize: 14,
+  fontWeight: 600,
+  lineHeight: 1.4,
   color: 'var(--ls-ink-1)',
-  margin: '0 0 6px',
+  margin: '0 0 10px',
+  paddingBottom: 8,
+  borderBottom: '1px solid var(--ls-line)',
+}
+const GROUP_HEAD_BAR_STYLE: CSSProperties = {
+  flex: '0 0 auto',
+  width: 3,
+  height: 15,
+  borderRadius: 2,
+  background: 'var(--ls-accent)',
 }
 /** 某个来源的分组框：开关、密钥、参数与探活都在框内。 */
 const SOURCE_BOX_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 2,
-  marginBottom: 8,
+  marginBottom: 6,
   padding: '8px 10px',
   borderRadius: 8,
-  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface-2)',
 }
 const SOURCE_HEAD_STYLE: CSSProperties = {
   display: 'flex',

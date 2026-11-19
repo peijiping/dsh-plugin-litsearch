@@ -43,6 +43,12 @@ export function cloneRound(round: SearchRound): SearchRound {
     ...(round.stats === undefined
       ? {}
       : { stats: { ...round.stats, perQuery: { ...round.stats.perQuery } } }),
+    ...(round.failedSourceList === undefined
+      ? {}
+      : { failedSourceList: round.failedSourceList.map((item) => ({ ...item })) }),
+    ...(round.skippedSourceList === undefined
+      ? {}
+      : { skippedSourceList: round.skippedSourceList.map((item) => ({ ...item })) }),
   }
 }
 
@@ -89,9 +95,17 @@ export function finishRound(
     loaded: task.result.papers.length,
     perQuery: { ...task.stats.perQuery },
   }
-  round.skippedSources = task.result.sources.filter((source) => source.skipped === true).length
-  round.failedSources = task.result.sources.filter(
-    (source) => !source.ok && source.skipped !== true,
-  ).length
+  const skipped = task.result.sources.filter((source) => source.skipped === true)
+  const failed = task.result.sources.filter((source) => !source.ok && source.skipped !== true)
+  round.skippedSources = skipped.length
+  round.failedSources = failed.length
+  round.skippedSourceList = skipped.map((source) => ({
+    id: source.id,
+    note: source.note ?? '',
+  }))
+  round.failedSourceList = failed.map((source) => ({
+    id: source.id,
+    error: source.error ?? '',
+  }))
   if (task.error !== undefined) round.error = task.error
 }
