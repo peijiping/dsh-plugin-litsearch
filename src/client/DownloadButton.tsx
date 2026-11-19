@@ -6,7 +6,14 @@
  * 回到普通按钮并提示点击重新下载。
  */
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
 
 import { SpinnerIcon } from './icons'
 import type { Translate } from './locales'
@@ -28,6 +35,8 @@ interface Props {
   disabled?: boolean
   /** 调用点的链接按钮样式（各面板字号不同）。 */
   style: CSSProperties
+  /** 按钮文案前的图标；卡片快捷操作里传 DownloadIcon。 */
+  icon?: ReactNode
   onDownload(): void
   onOpen?(path: string): void
   onReveal?(path: string): void
@@ -42,6 +51,7 @@ export function DownloadButton({
   downloading = false,
   disabled = false,
   style,
+  icon,
   onDownload,
   onOpen,
   onReveal,
@@ -88,7 +98,7 @@ export function DownloadButton({
         else onDownload()
       }}
     >
-      {downloading && <SpinnerIcon />}
+      {downloading ? <SpinnerIcon /> : icon}
       {label}
     </button>
   )

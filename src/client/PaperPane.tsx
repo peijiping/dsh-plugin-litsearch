@@ -5,7 +5,7 @@
  * 单篇详情端点，避免为了打开一篇论文拉取整页结果。
  */
 
-import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -27,12 +27,15 @@ import {
 import { paperSummary, paperText } from './compose'
 import { DownloadButton } from './DownloadButton'
 import { EntityPanel } from './Entities'
+import { ChatIcon } from './icons'
 import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
+import { hostOf, plainText } from './text'
 import {
   canDownloadPdf,
   paperPdfStatus,
   pdfActionUi,
+  pdfLinkOptions,
   zoteroActionUi,
 } from './pdfActions'
 import { PreviewFrame } from './PreviewFrame'
@@ -92,6 +95,8 @@ export function paperRefFromAddress(
 }
 
 const SCREENINGS: readonly Screening[] = ['unread', 'read', 'included', 'excluded']
+/** 与结果卡片一致：摘要默认只展示 260 字。 */
+const ABSTRACT_PREVIEW = 260
 
 const PDF_COLOR: Record<PdfStatus, string> = {
   unknown: 'var(--ls-ink-3)',
@@ -131,6 +136,8 @@ export function PaperPane({
     setToastTone(tone)
   }
   const [showHtml, setShowHtml] = useState(false)
+  const [abstractOpen, setAbstractOpen] = useState(false)
+  const htmlRef = useRef<HTMLDivElement>(null)
   const [zoteroOpen, setZoteroOpen] = useState(false)
   const [risFallback, setRisFallback] = useState<{ ids: readonly string[]; message: string } | null>(
     null,
@@ -175,8 +182,14 @@ export function PaperPane({
 
   useEffect(() => {
     setShowHtml(false)
+    setAbstractOpen(false)
     setRisFallback(null)
   }, [ref?.taskId, ref?.paperId])
+
+  // 打开全文后把预览滚进视野，避免它停在页尾只露一行。
+  useEffect(() => {
+    if (showHtml) htmlRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [showHtml])
 
   useEffect(() => {
     if (toast === '') return undefined
@@ -185,6 +198,13 @@ export function PaperPane({
   }, [toast])
 
   const paper = detail?.paper
+  // 与结果卡片一致：超长摘要默认折到 260 字，点开再看全文。
+  const abstractText = paper === undefined ? '' : plainText(paper.abstract)
+  const canCollapseAbstract = abstractText.length > ABSTRACT_PREVIEW
+  const abstractShown =
+    abstractOpen || !canCollapseAbstract
+      ? abstractText
+      : `${abstractText.slice(0, ABSTRACT_PREVIEW)}…`
   const sources = useMemo(
     () => (paper === undefined ? [] : [...new Set(paper.hitSources.map((hit) => hit.source))]),
     [paper],
@@ -248,24 +268,31 @@ export function PaperPane({
     setZoteroOpen(true)
   }
 
+  /** 展开全文时顺手收起摘要，把空间让给正文；再点一次则只收起全文。 */
+  const toggleHtml = (): void => {
+    if (showHtml) {
+      setShowHtml(false)
+      return
+    }
+    setAbstractOpen(false)
+    setShowHtml(true)
+  }
+
   const pdfStatus: PdfStatus = paperPdfStatus(paper, state)
   const canPdf = canDownloadPdf(paper, pdfStatus)
   const canHtml =
     paper.ids.pmcid !== '' ||
     paper.ids.arxivId !== '' ||
     (paper.openAccess && paper.ids.pmid !== '')
-  const pdfLocations = (paper.oaLocations ?? []).filter(
-    (location) => location.kind === 'pdf' && location.textMining !== true,
-  )
-  const directPdfUrl = paper.pdfUrl !== '' ? paper.pdfUrl : pdfLocations[0]?.url ?? ''
-  const linkBarPdfs = [
-    ...new Set([
-      ...failedLinks.filter((location) => location.kind === 'pdf').map((location) => location.url),
-      ...pdfLocations.map((location) => location.url),
-    ]),
-  ].slice(0, 3)
+  const directPdfUrl =
+    paper.pdfUrl !== ''
+      ? paper.pdfUrl
+      : (paper.oaLocations ?? []).find(
+          (location) => location.kind === 'pdf' && location.textMining !== true,
+        )?.url ?? ''
+  const pdfLinks = pdfLinkOptions({ paper, failedLinks, directPdfUrl, t })
   const showLinkBar =
-    linkBarPdfs.length > 0 ||
+    pdfLinks.length > 0 ||
     state?.pdfStatus === 'blocked' ||
     state?.pdfStatus === 'paywalled' ||
     state?.pdfStatus === 'failed'
@@ -285,152 +312,237 @@ export function PaperPane({
     .filter((part) => part !== '')
     .join(' · ')
   const groupName = detail.groups.find((group) => group.id === state?.groupId)?.name
+  // 来源与引用量用一行次要文本表达，比一排灰胶囊安静得多。
+  const sourceLine = [
+    ...sources.map((source) => t(`source.${source}`)),
+    ...(paper.citedBy === null ? [] : [tpl(t('result.citedBy'), { n: paper.citedBy })]),
+    ...(paper.openAccess ? [t('result.openAccess')] : []),
+  ].join(' · ')
 
   return (
-    <div className="ls-root" style={{ ...panelStyle, position: 'relative' }}>
-      <div className="ls-sub">
-        {tpl(t('paperTab.fromTask'), { title: detail.taskTitle })}
-      </div>
+    <div className="ls-root" style={PAPER_PANEL_STYLE}>
+      <div style={SCROLL_BODY_STYLE}>
+        <div className="ls-sub">{tpl(t('paperTab.fromTask'), { title: detail.taskTitle })}</div>
 
-      <div>
-        {paper.url === '' ? (
-          <span style={PAPER_TITLE_STYLE}>{paper.title}</span>
-        ) : (
-          <a style={PAPER_TITLE_STYLE} href={paper.url} target="_blank" rel="noreferrer noopener">
-            {paper.title}
-          </a>
-        )}
-        {meta !== '' && <div style={metaStyle}>{meta}</div>}
-      </div>
+        <article className="ls-card" style={HERO_STYLE}>
+          <div style={STATUS_ROW_STYLE}>
+            <span style={{ ...badgeStyle, color: SCREENING_COLOR[state?.screening ?? 'unread'] }}>
+              {t(`screening.${state?.screening ?? 'unread'}`)}
+            </span>
+            {groupName !== undefined && <span style={badgeStyle}>{groupName}</span>}
+            <span style={{ ...badgeStyle, color: PDF_COLOR[pdfStatus] }}>
+              {t(`pdf.status.${pdfStatus}`)}
+            </span>
+          </div>
 
-      <div style={badgeRowStyle}>
-        <span style={{ ...badgeStyle, color: SCREENING_COLOR[state?.screening ?? 'unread'] }}>
-          {t(`screening.${state?.screening ?? 'unread'}`)}
-        </span>
-        {groupName !== undefined && <span style={badgeStyle}>{groupName}</span>}
-        {sources.map((source) => (
-          <span key={source} style={badgeStyle}>
-            {t(`source.${source}`)}
-          </span>
-        ))}
-        {paper.citedBy !== null && (
-          <span style={badgeStyle}>{tpl(t('result.citedBy'), { n: paper.citedBy })}</span>
-        )}
-        {paper.openAccess && <span style={badgeStyle}>{t('result.openAccess')}</span>}
-        <span style={{ ...badgeStyle, color: PDF_COLOR[pdfStatus] }}>
-          {t(`pdf.status.${pdfStatus}`)}
-        </span>
-      </div>
+          {paper.url === '' ? (
+            <span style={PAPER_TITLE_STYLE}>{paper.title}</span>
+          ) : (
+            <a style={PAPER_TITLE_STYLE} href={paper.url} target="_blank" rel="noreferrer noopener">
+              {paper.title}
+            </a>
+          )}
+          {meta !== '' && <div style={metaStyle}>{meta}</div>}
 
-      <div style={STATE_ROW_STYLE}>
-        <select
-          style={SELECT_STYLE}
-          value={state?.screening ?? 'unread'}
-          disabled={busy}
-          aria-label={t('filter.screening')}
-          onChange={(event) =>
-            annotate({ paperId: paper.paperId, screening: event.target.value as Screening })
-          }
-        >
-          {SCREENINGS.map((value) => (
-            <option key={value} value={value}>
-              {t(`screening.${value}`)}
-            </option>
-          ))}
-        </select>
-        <select
-          style={SELECT_STYLE}
-          value={state?.groupId ?? ''}
-          disabled={busy}
-          aria-label={t('annotate.group')}
-          title={detail.groups.length === 0 ? t('annotate.groupHint') : t('annotate.group')}
-          onChange={(event) =>
-            annotate({
-              paperId: paper.paperId,
-              groupId: event.target.value === '' ? null : event.target.value,
-            })
-          }
-        >
-          <option value="">{t('annotate.noGroup')}</option>
-          {detail.groups.map((group) => (
-            <option key={group.id} value={group.id}>
-              {group.name}
-            </option>
-          ))}
-        </select>
-      </div>
+          {sourceLine !== '' && <div style={SOURCE_LINE_STYLE}>{sourceLine}</div>}
+        </article>
 
-      {paper.abstract !== '' && (
-        <section>
-          <h4 style={HEAD_STYLE}>{t('paperTab.abstract')}</h4>
-          <div style={abstractStyle}>{paper.abstract}</div>
-        </section>
-      )}
-
-      <section>
-        <h4 style={HEAD_STYLE}>{t('paperTab.identifiers')}</h4>
-        <div style={IDS_STYLE}>
-          {paper.doi !== '' && (
-            <a
-              style={linkStyle}
-              href={`https://doi.org/${paper.doi}`}
-              target="_blank"
-              rel="noreferrer noopener"
+        <div style={CONTROL_STYLE}>
+          <div style={STATE_ROW_STYLE}>
+            <select
+              style={SELECT_STYLE}
+              value={state?.screening ?? 'unread'}
+              disabled={busy}
+              aria-label={t('filter.screening')}
+              onChange={(event) =>
+                annotate({ paperId: paper.paperId, screening: event.target.value as Screening })
+              }
             >
-              DOI: {paper.doi}
-            </a>
-          )}
-          {paper.ids.pmid !== '' && (
-            <a
-              style={linkStyle}
-              href={`https://pubmed.ncbi.nlm.nih.gov/${paper.ids.pmid}/`}
-              target="_blank"
-              rel="noreferrer noopener"
+              {SCREENINGS.map((value) => (
+                <option key={value} value={value}>
+                  {t(`screening.${value}`)}
+                </option>
+              ))}
+            </select>
+            <select
+              style={SELECT_STYLE}
+              value={state?.groupId ?? ''}
+              disabled={busy}
+              aria-label={t('annotate.group')}
+              title={detail.groups.length === 0 ? t('annotate.groupHint') : t('annotate.group')}
+              onChange={(event) =>
+                annotate({
+                  paperId: paper.paperId,
+                  groupId: event.target.value === '' ? null : event.target.value,
+                })
+              }
             >
-              PMID: {paper.ids.pmid}
-            </a>
-          )}
-          {paper.ids.pmcid !== '' && (
-            <a
-              style={linkStyle}
-              href={`https://www.ncbi.nlm.nih.gov/pmc/articles/${paper.ids.pmcid}/`}
-              target="_blank"
-              rel="noreferrer noopener"
+              <option value="">{t('annotate.noGroup')}</option>
+              {detail.groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={ACTION_STYLE}>
+            <button
+              type="button"
+              className="ls-btn ls-btn-primary ls-btn-compact"
+              onClick={insert}
             >
-              PMCID: {paper.ids.pmcid}
-            </a>
-          )}
-          {paper.ids.arxivId !== '' && (
-            <a
-              style={linkStyle}
-              href={`https://arxiv.org/abs/${paper.ids.arxivId}`}
-              target="_blank"
-              rel="noreferrer noopener"
+              <ChatIcon />
+              {t('result.insert')}
+            </button>
+            {canPdf && (
+              <DownloadButton
+                t={t}
+                label={pdfAction.label}
+                hint={pdfAction.hint}
+                {...(pdfAction.downloadedPath === undefined
+                  ? {}
+                  : { downloadedPath: pdfAction.downloadedPath })}
+                missing={pdfAction.pdfMissing}
+                downloading={pdfAction.downloading}
+                disabled={busy}
+                style={GHOST_PILL_STYLE}
+                onDownload={download}
+                {...(onOpenLocal === undefined
+                  ? {}
+                  : { onOpen: (path: string) => onOpenLocal(taskId, paper.paperId, path) })}
+                {...(onRevealLocal === undefined ? {} : { onReveal: onRevealLocal })}
+              />
+            )}
+            {canHtml && (
+              <button
+                type="button"
+                className="ls-btn ls-btn-ghost ls-btn-compact"
+                onClick={toggleHtml}
+              >
+                {t('pdf.fulltext')}
+              </button>
+            )}
+            <button
+              type="button"
+              className="ls-btn ls-btn-ghost ls-btn-compact"
+              title={zoteroAction.hint}
+              disabled={busy}
+              onClick={zotero}
+              {...(zoteroAction.color === undefined ? {} : { style: { color: zoteroAction.color } })}
             >
-              arXiv: {paper.ids.arxivId}
-            </a>
-          )}
-          {paper.url !== '' && (
-            <a style={linkStyle} href={paper.url} target="_blank" rel="noreferrer noopener">
-              {t('paperTab.landing')}
-            </a>
-          )}
+              {zoteroAction.label}
+            </button>
+            {directPdfUrl !== '' && (
+              <a
+                className="ls-btn ls-btn-ghost ls-btn-compact"
+                href={directPdfUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {t('result.pdf')}
+              </a>
+            )}
+          </div>
         </div>
-      </section>
 
-      <section>
-        <h4 style={HEAD_STYLE}>{t('entity.title')}</h4>
-        <EntityPanel t={t} taskId={taskId} paperId={paper.paperId} pmid={paper.ids.pmid} />
-      </section>
+        {showLinkBar && (
+          <div style={LINK_BAR_STYLE}>
+            {pdfLinks.map((link) => (
+              <a
+                key={link.url}
+                style={linkStyle}
+                href={link.url}
+                title={link.title}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {link.label}
+              </a>
+            ))}
+            {paper.doi !== '' && (
+              <a
+                style={linkStyle}
+                href={`https://doi.org/${paper.doi}`}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {t('pdf.openLanding')}
+              </a>
+            )}
+          </div>
+        )}
 
-      {showHtml && (
-        <PreviewFrame
-          t={t}
-          src={paperFullTextUrl(taskId, paper.paperId)}
-          height={420}
-          onClose={() => setShowHtml(false)}
-        />
-      )}
+        {paper.abstract !== '' && (
+          <section style={SECTION_STYLE}>
+            <h4 style={HEAD_STYLE}>{t('paperTab.abstract')}</h4>
+            <div style={ABSTRACT_TEXT_STYLE}>
+              {abstractShown}
+              {canCollapseAbstract && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    style={linkButtonStyle}
+                    onClick={() => setAbstractOpen((value) => !value)}
+                  >
+                    {abstractOpen ? t('result.collapseAbstract') : t('result.expandAbstract')}
+                  </button>
+                </>
+              )}
+            </div>
+          </section>
+        )}
+
+        <section style={SECTION_STYLE}>
+          <h4 style={HEAD_STYLE}>{t('paperTab.identifiers')}</h4>
+          <div className="ls-card-quiet" style={ID_CARD_STYLE}>
+            {paper.doi !== '' && (
+              <IdRow label="DOI" value={paper.doi} href={`https://doi.org/${paper.doi}`} />
+            )}
+            {paper.ids.pmid !== '' && (
+              <IdRow
+                label="PMID"
+                value={paper.ids.pmid}
+                href={`https://pubmed.ncbi.nlm.nih.gov/${paper.ids.pmid}/`}
+              />
+            )}
+            {paper.ids.pmcid !== '' && (
+              <IdRow
+                label="PMCID"
+                value={paper.ids.pmcid}
+                href={`https://www.ncbi.nlm.nih.gov/pmc/articles/${paper.ids.pmcid}/`}
+              />
+            )}
+            {paper.ids.arxivId !== '' && (
+              <IdRow
+                label="arXiv"
+                value={paper.ids.arxivId}
+                href={`https://arxiv.org/abs/${paper.ids.arxivId}`}
+              />
+            )}
+            {paper.url !== '' && (
+              <IdRow label={t('paperTab.landing')} value={hostOf(paper.url)} href={paper.url} />
+            )}
+          </div>
+        </section>
+
+        <section style={SECTION_STYLE}>
+          <h4 style={HEAD_STYLE}>{t('entity.title')}</h4>
+          <EntityPanel t={t} taskId={taskId} paperId={paper.paperId} pmid={paper.ids.pmid} />
+        </section>
+
+        {showHtml && (
+          <div ref={htmlRef} style={HTML_ANCHOR_STYLE}>
+            <PreviewFrame
+              t={t}
+              src={paperFullTextUrl(taskId, paper.paperId)}
+              height={560}
+              onClose={() => setShowHtml(false)}
+            />
+          </div>
+        )}
+      </div>
 
       {(toast !== '' || risFallback !== null) && (
         <div style={toastStackStyle}>
@@ -483,78 +595,24 @@ export function PaperPane({
           setRisFallback({ ids: failedIds, message: t('zotero.dialog.failFallback') })
         }}
       />
+    </div>
+  )
+}
 
-      <div style={ACTION_STYLE}>
-        <Button variant="ghost" size="sm" type="button" onClick={insert}>
-          {t('result.insert')}
-        </Button>
-        {canPdf && (
-          <DownloadButton
-            t={t}
-            label={pdfAction.label}
-            hint={pdfAction.hint}
-            {...(pdfAction.downloadedPath === undefined
-              ? {}
-              : { downloadedPath: pdfAction.downloadedPath })}
-            missing={pdfAction.pdfMissing}
-            downloading={pdfAction.downloading}
-            disabled={busy}
-            style={linkButtonStyle}
-            onDownload={download}
-            {...(onOpenLocal === undefined
-              ? {}
-              : { onOpen: (path: string) => onOpenLocal(taskId, paper.paperId, path) })}
-            {...(onRevealLocal === undefined ? {} : { onReveal: onRevealLocal })}
-          />
-        )}
-        {canHtml && (
-          <button
-            type="button"
-            style={linkButtonStyle}
-            onClick={() => setShowHtml((value) => !value)}
-          >
-            {t('pdf.fulltext')}
-          </button>
-        )}
-        <button
-          type="button"
-          style={
-            zoteroAction.color === undefined
-              ? linkButtonStyle
-              : { ...linkButtonStyle, color: zoteroAction.color }
-          }
-          title={zoteroAction.hint}
-          disabled={busy}
-          onClick={zotero}
-        >
-          {zoteroAction.label}
-        </button>
-        {directPdfUrl !== '' && (
-          <a style={linkStyle} href={directPdfUrl} target="_blank" rel="noreferrer noopener">
-            {t('result.pdf')}
-          </a>
-        )}
-      </div>
-
-      {showLinkBar && (
-        <div style={{ ...ACTION_STYLE, marginTop: 0, flexWrap: 'wrap', rowGap: 6 }}>
-          {linkBarPdfs.map((url) => (
-            <a key={url} style={linkStyle} href={url} target="_blank" rel="noreferrer noopener">
-              {t('pdf.openPdfLink')}
-            </a>
-          ))}
-          {paper.doi !== '' && (
-            <a
-              style={linkStyle}
-              href={`https://doi.org/${paper.doi}`}
-              target="_blank"
-              rel="noreferrer noopener"
-            >
-              {t('pdf.openLanding')}
-            </a>
-          )}
-        </div>
-      )}
+/** 标识符一行：左标签、右可点值，长值省略号截断。 */
+function IdRow({ label, value, href }: { label: string; value: string; href: string }): ReactElement {
+  return (
+    <div style={ID_ROW_STYLE}>
+      <span style={ID_LABEL_STYLE}>{label}</span>
+      <a
+        style={ID_VALUE_STYLE}
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        title={value}
+      >
+        {value}
+      </a>
     </div>
   )
 }
@@ -566,18 +624,130 @@ const SCREENING_COLOR: Record<Screening, string> = {
   excluded: 'var(--ls-error)',
 }
 
+/** 宿主 tab 只给固定高度：论文页自己撑满并滚动，浮层留在滚动容器外。 */
+const PAPER_PANEL_STYLE: CSSProperties = {
+  ...panelStyle,
+  position: 'relative',
+  height: '100%',
+  minHeight: 0,
+  boxSizing: 'border-box',
+}
+const SCROLL_BODY_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  overflowX: 'hidden',
+}
+/** 全文预览的锚点：点开后滚到这里，整块都能看见。 */
+const HTML_ANCHOR_STYLE: CSSProperties = { scrollMarginTop: 8 }
+
 /** 独立论文页是整页主视图，标题比结果卡片再大一级。 */
 const PAPER_TITLE_STYLE: CSSProperties = {
   ...titleStyle,
-  fontSize: 15,
+  fontSize: 16,
   lineHeight: 1.5,
+}
+
+/** 头部卡：状态徽章 → 标题 → 作者/年份/出处 → 来源徽章。 */
+const HERO_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '13px 14px',
+}
+
+const STATUS_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 6,
+}
+
+const SOURCE_LINE_STYLE: CSSProperties = {
+  fontSize: 11,
+  lineHeight: 1.6,
+  color: 'var(--ls-ink-3)',
+}
+
+/** 状态与动作：窄面板下动作按钮自然换行，不挤成一排。 */
+const CONTROL_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+}
+
+const SECTION_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
 }
 
 const HEAD_STYLE: CSSProperties = {
   fontSize: 13.5,
   fontWeight: 500,
   color: 'var(--ls-ink-1)',
-  margin: '12px 0 6px',
+  margin: 0,
+}
+
+const ABSTRACT_TEXT_STYLE: CSSProperties = {
+  fontSize: 12.5,
+  lineHeight: 1.75,
+  color: 'var(--ls-ink-2)',
+}
+
+const ID_CARD_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  padding: '10px 12px',
+}
+
+const ID_ROW_STYLE: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '62px minmax(0, 1fr)',
+  alignItems: 'baseline',
+  gap: 10,
+}
+
+const ID_LABEL_STYLE: CSSProperties = {
+  fontSize: 11,
+  color: 'var(--ls-ink-3)',
+}
+
+const ID_VALUE_STYLE: CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--ls-accent-ink)',
+  textDecoration: 'none',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const LINK_BAR_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 12,
+}
+
+/** 次要动作的胶囊外观；下载按钮也复用它。 */
+const GHOST_PILL_STYLE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '4px 10px',
+  borderRadius: 999,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface)',
+  color: 'var(--ls-ink-2)',
+  fontSize: 11.5,
+  lineHeight: 1.4,
+  textDecoration: 'none',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
 }
 
 const STATE_ROW_STYLE: CSSProperties = {
@@ -585,22 +755,16 @@ const STATE_ROW_STYLE: CSSProperties = {
   alignItems: 'center',
   flexWrap: 'wrap',
   gap: 6,
-  fontSize: 12,
 }
 const SELECT_STYLE: CSSProperties = {
   fontSize: 11.5,
-  padding: '3px 7px',
+  padding: '4px 8px',
   borderRadius: 8,
-  border: '1px solid transparent',
-  background: 'var(--ls-surface-2)',
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface)',
   color: 'var(--ls-ink-1)',
-  maxWidth: 150,
-}
-const IDS_STYLE: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 3,
-  fontSize: 12,
+  maxWidth: 160,
+  cursor: 'pointer',
 }
 const FALLBACK_STYLE: CSSProperties = {
   ...toastStyle,
@@ -625,6 +789,5 @@ const ACTION_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   flexWrap: 'wrap',
-  gap: 10,
-  marginTop: 2,
+  gap: 6,
 }

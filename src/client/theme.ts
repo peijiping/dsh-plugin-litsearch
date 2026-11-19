@@ -144,6 +144,51 @@ export const THEME_CSS = `
   font-family: inherit;
 }
 
+/**
+ * 自绘复选框：原生控件在深色主题下会渲染成白方块（accent-color 只管选中态），
+ * 所以统一走 appearance:none，未选是描边空框，已选是靛蓝底 + 白色对勾。
+ */
+.ls-root input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1px solid var(--ls-line-strong);
+  border-radius: 4px;
+  background: var(--ls-surface);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.ls-root input[type='checkbox']:hover {
+  border-color: var(--ls-accent-line);
+}
+
+.ls-root input[type='checkbox']:checked {
+  border-color: var(--ls-accent);
+  background: var(--ls-accent);
+}
+
+.ls-root input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 3px;
+  width: 4px;
+  height: 7px;
+  border: solid #ffffff;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+.ls-root input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--ls-accent-line);
+  outline-offset: 1px;
+}
+
 .ls-root ::placeholder {
   color: var(--ls-placeholder);
   opacity: 1;

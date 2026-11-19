@@ -7,6 +7,7 @@
 
 import type { OaLocation, Paper, PaperState, PdfFailureReason, PdfStatus } from '../search/types'
 import { tpl, type Translate } from './locales'
+import { hostOf } from './text'
 
 /** 单篇下载的进行中 / 已完成状态（由任务面板维护，跨 reload 保留）。 */
 export interface PdfDownloadUi {
@@ -128,4 +129,59 @@ export function zoteroActionUi(t: Translate, state?: PaperState): ZoteroActionUi
     return { label: t('pdf.zoteroRetry'), hint: state.zoteroError, color: 'var(--ls-error)' }
   }
   return { label: t('pdf.zotero') }
+}
+
+/** 备用 PDF 链接的展示项：文案已带区分信息，组件直接渲染。 */
+export interface PdfLinkOption {
+  url: string
+  label: string
+  title: string
+}
+
+/**
+ * 「可用全文」里的 PDF 链接：合并上次下载失败的候选与检索到的 OA 候选，
+ * 按 URL 去重、最多 3 条，并排除已由「PDF」按钮直连的地址。
+ *
+ * 每条链接都带域名/来源标签——多条候选共用「浏览器打开 PDF」会让人误以为是重复按钮。
+ */
+export function pdfLinkOptions({
+  paper,
+  failedLinks,
+  directPdfUrl,
+  t,
+}: {
+  paper: Paper
+  failedLinks: readonly OaLocation[]
+  directPdfUrl: string
+  t: Translate
+}): PdfLinkOption[] {
+  const candidates = [
+    ...failedLinks
+      .filter((location) => location.kind === 'pdf')
+      .map((location) => ({ location, failed: true })),
+    ...(paper.oaLocations ?? [])
+      .filter((location) => location.kind === 'pdf' && location.textMining !== true)
+      .map((location) => ({ location, failed: false })),
+  ]
+  const seen = new Set<string>()
+  const options: PdfLinkOption[] = []
+  for (const { location, failed } of candidates) {
+    if (location.url === '' || location.url === directPdfUrl || seen.has(location.url)) continue
+    seen.add(location.url)
+    const rawHost = hostOf(location.url)
+    const host = rawHost === location.url ? '' : rawHost.replace(/^www\./u, '')
+    const place = host === '' ? location.source : host
+    const tag = failed
+      ? t('pdf.pdfLinkFailedTag')
+      : location.best === true
+        ? t('pdf.pdfLinkBestTag')
+        : ''
+    options.push({
+      url: location.url,
+      label: tpl(t('pdf.openPdfLinkWithHost'), { host: place, tag }),
+      title: tpl(t('pdf.pdfLinkHint'), { source: location.source, url: location.url }),
+    })
+    if (options.length >= 3) break
+  }
+  return options
 }

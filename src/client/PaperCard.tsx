@@ -6,8 +6,6 @@
 
 import { useState, type CSSProperties, type ReactElement } from 'react'
 
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-
 import type {
   AnnotationInput,
   Paper,
@@ -19,18 +17,28 @@ import type {
 import { paperFullTextUrl } from './api'
 import { DownloadButton } from './DownloadButton'
 import { EntityPanel } from './Entities'
-import { AbstractIcon, AuthorsIcon, TitleIcon } from './icons'
+import {
+  AbstractIcon,
+  AuthorsIcon,
+  ChatIcon,
+  DownloadIcon,
+  TitleIcon,
+  ZoteroIcon,
+} from './icons'
 import { tpl, type Translate } from './locales'
+import { plainText } from './text'
 import {
   canDownloadPdf,
   paperPdfStatus,
   pdfActionUi,
+  pdfLinkOptions,
   zoteroActionUi,
   type PdfDownloadUi,
 } from './pdfActions'
 import { PreviewFrame } from './PreviewFrame'
 import {
   abstractStyle,
+  actionButtonStyle,
   actionRowStyle,
   badgeRowStyle,
   badgeStyle,
@@ -115,9 +123,11 @@ export function PaperCard({
     .join(' · ')
 
   const sources = [...new Set(paper.hitSources.map((hit) => hit.source))]
-  const canCollapse = paper.abstract.length > ABSTRACT_PREVIEW
+  // 上游摘要带 JATS 行内标签，先清标记再算截断长度，避免把 `<i>` 也算进字数。
+  const abstractText = plainText(paper.abstract)
+  const canCollapse = abstractText.length > ABSTRACT_PREVIEW
   const abstract =
-    expanded || !canCollapse ? paper.abstract : `${paper.abstract.slice(0, ABSTRACT_PREVIEW)}…`
+    expanded || !canCollapse ? abstractText : `${abstractText.slice(0, ABSTRACT_PREVIEW)}…`
 
   const screening = state?.screening ?? 'unread'
   const groupName = groups.find((group) => group.id === state?.groupId)?.name
@@ -128,25 +138,24 @@ export function PaperCard({
     paper.ids.pmcid !== '' ||
     paper.ids.arxivId !== '' ||
     (paper.openAccess && paper.ids.pmid !== '')
-  const pdfLocations = (paper.oaLocations ?? []).filter(
-    (location) => location.kind === 'pdf' && location.textMining !== true,
-  )
   const directPdfUrl =
-    paper.pdfUrl !== '' ? paper.pdfUrl : pdfLocations[0]?.url ?? ''
+    paper.pdfUrl !== ''
+      ? paper.pdfUrl
+      : (paper.oaLocations ?? []).find(
+          (location) => location.kind === 'pdf' && location.textMining !== true,
+        )?.url ?? ''
   // 下载失败（或已知被墙/需订阅）时给出可点击的替代路径，而不是只弹 toast。
   const showLinkBar =
     download?.state === 'failed' ||
     pdfStatus === 'failed' ||
     pdfStatus === 'blocked' ||
     pdfStatus === 'paywalled'
-  const linkBarPdfs = [
-    ...new Set([
-      ...(download?.links ?? [])
-        .filter((location) => location.kind === 'pdf')
-        .map((location) => location.url),
-      ...pdfLocations.map((location) => location.url),
-    ]),
-  ].slice(0, 3)
+  const pdfLinks = pdfLinkOptions({
+    paper,
+    failedLinks: download?.links ?? [],
+    directPdfUrl,
+    t,
+  })
 
   const pdfAction = pdfActionUi({ paper, state, download, downloadDir, t })
   const zoteroAction = zoteroActionUi(t, state)
@@ -234,7 +243,7 @@ export function PaperCard({
         </div>
       )}
 
-      {paper.abstract !== '' && (
+      {abstractText !== '' && (
         <div style={{ ...FIELD_ROW_STYLE, marginTop: 6 }}>
           <span style={FIELD_ICON_STYLE}>
             <AbstractIcon />
@@ -293,15 +302,48 @@ export function PaperCard({
             rowGap: 2,
           }}
         >
-          <Button
-            variant="ghost"
-            size="sm"
+          <button
             type="button"
-            style={{ color: 'var(--ls-accent-ink)' }}
+            style={actionButtonStyle}
             onClick={() => onInsert(paper)}
           >
+            <ChatIcon />
             {t('result.insert')}
-          </Button>
+          </button>
+          {canPdf && (
+            <DownloadButton
+              t={t}
+              label={pdfAction.label}
+              hint={pdfAction.hint}
+              {...(pdfAction.downloadedPath === undefined
+                ? {}
+                : { downloadedPath: pdfAction.downloadedPath })}
+              missing={pdfAction.pdfMissing}
+              downloading={pdfAction.downloading}
+              disabled={busy}
+              style={actionButtonStyle}
+              icon={<DownloadIcon />}
+              onDownload={() => onDownload(paper)}
+              {...(onOpenLocal === undefined
+                ? {}
+                : { onOpen: (path: string) => onOpenLocal(taskId, paper.paperId, path) })}
+              {...(onRevealLocal === undefined ? {} : { onReveal: onRevealLocal })}
+            />
+          )}
+          <button
+            type="button"
+            style={
+              zoteroAction.color === undefined
+                ? actionButtonStyle
+                : { ...actionButtonStyle, color: zoteroAction.color }
+            }
+            disabled={busy}
+            title={zoteroAction.hint}
+            onClick={() => onZotero(paper)}
+          >
+            <ZoteroIcon />
+            {zoteroAction.label}
+          </button>
           {onOpenPaper !== undefined && (
             <button type="button" style={linkButtonStyle} onClick={() => onOpenPaper(paper)}>
               {t('paper.open')}
@@ -316,25 +358,6 @@ export function PaperCard({
               {t('entity.title')}
             </button>
           )}
-          {canPdf && (
-            <DownloadButton
-              t={t}
-              label={pdfAction.label}
-              hint={pdfAction.hint}
-              {...(pdfAction.downloadedPath === undefined
-                ? {}
-                : { downloadedPath: pdfAction.downloadedPath })}
-              missing={pdfAction.pdfMissing}
-              downloading={pdfAction.downloading}
-              disabled={busy}
-              style={linkButtonStyle}
-              onDownload={() => onDownload(paper)}
-              {...(onOpenLocal === undefined
-                ? {}
-                : { onOpen: (path: string) => onOpenLocal(taskId, paper.paperId, path) })}
-              {...(onRevealLocal === undefined ? {} : { onReveal: onRevealLocal })}
-            />
-          )}
           {canHtml && (
             <button
               type="button"
@@ -344,19 +367,6 @@ export function PaperCard({
               {t('pdf.fulltext')}
             </button>
           )}
-          <button
-            type="button"
-            style={
-              zoteroAction.color === undefined
-                ? linkButtonStyle
-                : { ...linkButtonStyle, color: zoteroAction.color }
-            }
-            disabled={busy}
-            title={zoteroAction.hint}
-            onClick={() => onZotero(paper)}
-          >
-            {zoteroAction.label}
-          </button>
           {directPdfUrl !== '' && (
             <a style={linkStyle} href={directPdfUrl} target="_blank" rel="noreferrer noopener">
               {t('result.pdf')}
@@ -375,7 +385,7 @@ export function PaperCard({
         </div>
       </div>
 
-      {showLinkBar && (linkBarPdfs.length > 0 || paper.doi !== '' || canHtml) && (
+      {showLinkBar && (pdfLinks.length > 0 || paper.doi !== '' || canHtml) && (
         <div style={CARD_ROW_STYLE}>
           <span style={ACTION_LABEL_STYLE}>{t('pdf.linksLabel')}</span>
           <div
@@ -389,9 +399,16 @@ export function PaperCard({
               alignItems: 'center',
             }}
           >
-            {linkBarPdfs.map((url) => (
-              <a key={url} style={linkStyle} href={url} target="_blank" rel="noreferrer noopener">
-                {t('pdf.openPdfLink')}
+            {pdfLinks.map((link) => (
+              <a
+                key={link.url}
+                style={linkStyle}
+                href={link.url}
+                title={link.title}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {link.label}
               </a>
             ))}
             {paper.doi !== '' && (

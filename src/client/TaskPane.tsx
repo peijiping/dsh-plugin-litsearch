@@ -46,7 +46,6 @@ import {
   ChevronDownIcon,
   ClockIcon,
   HistoryIcon,
-  PlusIcon,
   RefreshIcon,
   ResultIcon,
   RoundIcon,
@@ -876,7 +875,7 @@ export function TaskPane({
               title={t('task.insertToChatHint')}
               onClick={insertTask}
             >
-              <PlusIcon />
+              <ChatIcon />
               {t('task.insertToChat')}
             </Button>
             <Button

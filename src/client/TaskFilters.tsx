@@ -23,7 +23,7 @@ import {
   type ReactElement,
 } from 'react'
 
-import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type {
   CountEntry,
@@ -331,302 +331,344 @@ export function TaskFilters({
 
   return (
     <Modal
-        open={open}
-        onClose={() => onOpenChange(false)}
-        title={t('filter.title')}
-        contentClassName={FILTER_CONTENT_CLASS}
-        footer={
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <button type="button" style={RESET_STYLE} onClick={resetAll}>
-              {t('filter.reset')}
-            </button>
-            <Button variant="outline" size="sm" type="button" onClick={() => onOpenChange(false)}>
-              {t('filter.done')}
-            </Button>
-          </div>
-        }
-      >
-        <style>{FILTER_CONTENT_CSS}</style>
-        <div style={GRID_STYLE}>
-          <div style={SCREENING_FIELD_STYLE}>
-            <span className="litsearch-filter-label">{t('filter.screening')}</span>
-            <div style={PILL_ROW_STYLE}>
-              {SCREENINGS.map((state) => (
-                <button
-                  key={state}
-                  type="button"
-                  style={value.screening === state ? PILL_ACTIVE_STYLE : PILL_STYLE}
-                  onClick={() =>
-                    patch({ screening: value.screening === state ? undefined : state })
-                  }
-                >
-                  {t(`screening.${state}`)}
-                  {screeningCounts === undefined ? '' : ` ${screeningCounts[state]}`}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <label style={FIELD_STYLE}>
-            <span>{t('filter.keyword')}</span>
-            <input
-              style={INPUT_STYLE}
-              value={keyword}
-              placeholder={t('filter.keywordPlaceholder')}
-              onChange={(event) => setKeyword(event.target.value)}
-            />
-          </label>
-
-          <label style={FIELD_STYLE}>
-            <span>{t('filter.source')}</span>
-            <select
-              style={INPUT_STYLE}
-              value={value.source ?? ''}
-              onChange={(event) =>
-                patch({
-                  source:
-                    event.target.value === '' ? undefined : (event.target.value as SourceId),
-                })
-              }
-            >
-              <option value="">{t('filter.any')}</option>
-              {sources.map((id) => (
-                <option key={id} value={id}>
-                  {t(`source.${id}`)}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label style={FIELD_STYLE}>
-            <span>{t('filter.year')}</span>
-            <select
-              style={INPUT_STYLE}
-              value={preset}
-              onChange={(event) => setPreset(event.target.value as YearPreset)}
-            >
-              <option value="any">{t('filter.any')}</option>
-              <option value="1">{t('filter.yearPreset1')}</option>
-              <option value="5">{t('filter.yearPreset5')}</option>
-              <option value="10">{t('filter.yearPreset10')}</option>
-              <option value="custom">{t('filter.yearCustom')}</option>
-            </select>
-          </label>
-
-          {preset === 'custom' && (
-            <div style={CUSTOM_YEAR_STYLE}>
-              <label style={FIELD_STYLE}>
-                <span>{t('condition.yearFrom')}</span>
-                <select
-                  style={INPUT_STYLE}
-                  value={value.yearFrom === undefined ? '' : String(value.yearFrom)}
-                  onChange={(event) =>
-                    patch({
-                      yearFrom:
-                        event.target.value === '' ? undefined : Number(event.target.value),
-                    })
-                  }
-                >
-                  <option value="">{t('filter.any')}</option>
-                  {YEAR_OPTIONS.map((year) => (
-                    <option key={year} value={year}>
-                      {year}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label style={FIELD_STYLE}>
-                <span>{t('condition.yearTo')}</span>
-                <select
-                  style={INPUT_STYLE}
-                  value={value.yearTo === undefined ? '' : String(value.yearTo)}
-                  onChange={(event) =>
-                    patch({
-                      yearTo: event.target.value === '' ? undefined : Number(event.target.value),
-                    })
-                  }
-                >
-                  <option value="">{t('filter.any')}</option>
-                  {YEAR_OPTIONS.map((year) => (
-                    <option key={year} value={year}>
-                      {year}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          )}
-
-          <label style={FIELD_STYLE}>
-            <span>{t('filter.group')}</span>
-            <select
-              style={INPUT_STYLE}
-              value={value.groupId ?? ''}
-              onChange={(event) =>
-                patch({ groupId: event.target.value === '' ? undefined : event.target.value })
-              }
-            >
-              <option value="">{t('filter.any')}</option>
-              {groups.map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label style={FIELD_STYLE}>
-            <span>{t('filter.language')}</span>
-            <select
-              style={INPUT_STYLE}
-              value={value.language === 'any' ? '' : (value.language ?? '')}
-              onChange={(event) =>
-                patch({
-                  language:
-                    event.target.value === '' ? undefined : (event.target.value as TaskLanguage),
-                })
-              }
-            >
-              <option value="">{t('filter.any')}</option>
-              {LANGUAGES.map((code) => (
-                <option key={code} value={code}>
-                  {t(`lang.${code}`)}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label style={FIELD_STYLE}>
-            <span>{t('filter.sort')}</span>
-            <select
-              style={INPUT_STYLE}
-              value={value.sort ?? 'relevance'}
-              onChange={(event) =>
-                // 相关度是默认排序，不写进筛选对象，否则会被当成一条生效条件。
-                patch({
-                  sort:
-                    event.target.value === 'relevance'
-                      ? undefined
-                      : (event.target.value as SortMode),
-                })
-              }
-            >
-              {SORT_MODES.map((mode) => (
-                <option key={mode} value={mode}>
-                  {t(`sort.${mode}`)}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div style={FULLTEXT_FIELD_STYLE}>
-            <span className="litsearch-filter-label">{t('filter.fullText')}</span>
-            <div style={CHECK_ROW_STYLE}>
-              <label style={CHECK_STYLE}>
-                <input
-                  type="checkbox"
-                  checked={value.openAccessOnly === true}
-                  onChange={(event) =>
-                    patch({ openAccessOnly: event.target.checked ? true : undefined })
-                  }
-                />
-                {t('filter.openAccess')}
-              </label>
-
-              <label style={CHECK_STYLE}>
-                <input
-                  type="checkbox"
-                  checked={value.hasPdf === true}
-                  onChange={(event) => patch({ hasPdf: event.target.checked ? true : undefined })}
-                />
-                {t('filter.hasPdf')}
-              </label>
-
-              <label style={CHECK_STYLE}>
-                <input
-                  type="checkbox"
-                  checked={value.missingFullText === true}
-                  onChange={(event) =>
-                    patch({
-                      missingFullText: event.target.checked ? true : undefined,
-                      hasFullText: undefined,
-                    })
-                  }
-                />
-                {t('filter.missingFullText')}
-              </label>
-
-              <label style={CHECK_STYLE}>
-                <input
-                  type="checkbox"
-                  checked={value.hasFullText === true}
-                  onChange={(event) =>
-                    patch({
-                      hasFullText: event.target.checked ? true : undefined,
-                      missingFullText: undefined,
-                    })
-                  }
-                />
-                {t('filter.hasFullText')}
-              </label>
-            </div>
-          </div>
-
-          <label style={FIELD_STYLE}>
-            <span>{t('filter.type')}</span>
-            <select
-              style={INPUT_STYLE}
-              value={value.type ?? ''}
-              onChange={(event) =>
-                patch({ type: event.target.value === '' ? undefined : event.target.value })
-              }
-            >
-              <option value="">{t('filter.any')}</option>
-              {typeOptions.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label style={FIELD_STYLE}>
-            <span>{t('filter.venue')}</span>
-            <select
-              style={INPUT_STYLE}
-              value={value.venue ?? ''}
-              onChange={(event) =>
-                patch({ venue: event.target.value === '' ? undefined : event.target.value })
-              }
-            >
-              <option value="">{t('filter.any')}</option>
-              {venueOptions.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label style={FIELD_STYLE}>
-            <span>{t('filter.author')}</span>
-            <select
-              style={INPUT_STYLE}
-              value={value.author ?? ''}
-              onChange={(event) =>
-                patch({ author: event.target.value === '' ? undefined : event.target.value })
-              }
-            >
-              <option value="">{t('filter.any')}</option>
-              {authorOptions.map((option) => (
-                <option key={option.key} value={option.key}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+      open={open}
+      onClose={() => onOpenChange(false)}
+      title={t('filter.title')}
+      {...(stats === null
+        ? {}
+        : {
+            description: tpl(t('filter.summary'), {
+              n: stats.loaded,
+              m: activeFilterCount(value),
+            }),
+          })}
+      contentClassName={`ls-root ${FILTER_CONTENT_CLASS}`}
+      footer={
+        <div className="ls-root" style={FOOTER_STYLE}>
+          <button
+            type="button"
+            className="ls-btn ls-btn-ghost ls-btn-compact"
+            disabled={activeFilterCount(value) === 0}
+            onClick={resetAll}
+          >
+            {t('filter.reset')}
+          </button>
+          <button
+            type="button"
+            className="ls-btn ls-btn-primary"
+            onClick={() => onOpenChange(false)}
+          >
+            {t('filter.done')}
+          </button>
         </div>
+      }
+    >
+      <style>{FILTER_CONTENT_CSS}</style>
+
+      <div style={STACK_STYLE}>
+        <section style={SECTION_STYLE}>
+          <div style={SECTION_TITLE_STYLE}>{t('filter.quick')}</div>
+
+          <div style={SUB_GROUP_STYLE}>
+            <span style={SUB_LABEL_STYLE}>{t('filter.screening')}</span>
+            <div style={PILL_ROW_STYLE}>
+              {SCREENINGS.map((state) => {
+                const active = value.screening === state
+                const count = screeningCounts === undefined ? undefined : screeningCounts[state]
+                return (
+                  <button
+                    key={state}
+                    type="button"
+                    aria-pressed={active}
+                    style={active ? PILL_ACTIVE_STYLE : PILL_STYLE}
+                    onClick={() => patch({ screening: active ? undefined : state })}
+                  >
+                    {t(`screening.${state}`)}
+                    {count === undefined ? null : (
+                      <span style={active ? PILL_COUNT_ON_STYLE : PILL_COUNT_STYLE}>{count}</span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div style={SUB_GROUP_STYLE}>
+            <span style={SUB_LABEL_STYLE}>{t('filter.fullText')}</span>
+            <div style={CHECK_ROW_STYLE}>
+              <CheckChip
+                checked={value.openAccessOnly === true}
+                label={t('filter.openAccess')}
+                onChange={(next) => patch({ openAccessOnly: next ? true : undefined })}
+              />
+              <CheckChip
+                checked={value.hasPdf === true}
+                label={t('filter.hasPdf')}
+                onChange={(next) => patch({ hasPdf: next ? true : undefined })}
+              />
+              <CheckChip
+                checked={value.missingFullText === true}
+                label={t('filter.missingFullText')}
+                onChange={(next) =>
+                  patch({
+                    missingFullText: next ? true : undefined,
+                    hasFullText: undefined,
+                  })
+                }
+              />
+              <CheckChip
+                checked={value.hasFullText === true}
+                label={t('filter.hasFullText')}
+                onChange={(next) =>
+                  patch({
+                    hasFullText: next ? true : undefined,
+                    missingFullText: undefined,
+                  })
+                }
+              />
+            </div>
+          </div>
+        </section>
+
+        <div style={DIVIDER_STYLE} />
+
+        <section style={SECTION_STYLE}>
+          <div style={SECTION_TITLE_STYLE}>{t('filter.meta')}</div>
+          <div style={GRID_STYLE}>
+            <label style={{ ...FIELD_STYLE, gridColumn: '1 / -1' }}>
+              <span>{t('filter.keyword')}</span>
+              <input
+                style={INPUT_STYLE}
+                value={keyword}
+                placeholder={t('filter.keywordPlaceholder')}
+                onChange={(event) => setKeyword(event.target.value)}
+              />
+            </label>
+
+            <label style={FIELD_STYLE}>
+              <span>{t('filter.source')}</span>
+              <select
+                style={INPUT_STYLE}
+                value={value.source ?? ''}
+                onChange={(event) =>
+                  patch({
+                    source:
+                      event.target.value === '' ? undefined : (event.target.value as SourceId),
+                  })
+                }
+              >
+                <option value="">{t('filter.any')}</option>
+                {sources.map((id) => (
+                  <option key={id} value={id}>
+                    {t(`source.${id}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={FIELD_STYLE}>
+              <span>{t('filter.year')}</span>
+              <select
+                style={INPUT_STYLE}
+                value={preset}
+                onChange={(event) => setPreset(event.target.value as YearPreset)}
+              >
+                <option value="any">{t('filter.any')}</option>
+                <option value="1">{t('filter.yearPreset1')}</option>
+                <option value="5">{t('filter.yearPreset5')}</option>
+                <option value="10">{t('filter.yearPreset10')}</option>
+                <option value="custom">{t('filter.yearCustom')}</option>
+              </select>
+            </label>
+
+            {preset === 'custom' && (
+              <div style={CUSTOM_YEAR_STYLE}>
+                <label style={FIELD_STYLE}>
+                  <span>{t('condition.yearFrom')}</span>
+                  <select
+                    style={INPUT_STYLE}
+                    value={value.yearFrom === undefined ? '' : String(value.yearFrom)}
+                    onChange={(event) =>
+                      patch({
+                        yearFrom:
+                          event.target.value === '' ? undefined : Number(event.target.value),
+                      })
+                    }
+                  >
+                    <option value="">{t('filter.any')}</option>
+                    {YEAR_OPTIONS.map((year) => (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span style={YEAR_DASH_STYLE}>–</span>
+                <label style={FIELD_STYLE}>
+                  <span>{t('condition.yearTo')}</span>
+                  <select
+                    style={INPUT_STYLE}
+                    value={value.yearTo === undefined ? '' : String(value.yearTo)}
+                    onChange={(event) =>
+                      patch({
+                        yearTo:
+                          event.target.value === '' ? undefined : Number(event.target.value),
+                      })
+                    }
+                  >
+                    <option value="">{t('filter.any')}</option>
+                    {YEAR_OPTIONS.map((year) => (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+
+            <label style={FIELD_STYLE}>
+              <span>{t('filter.type')}</span>
+              <select
+                style={INPUT_STYLE}
+                value={value.type ?? ''}
+                onChange={(event) =>
+                  patch({ type: event.target.value === '' ? undefined : event.target.value })
+                }
+              >
+                <option value="">{t('filter.any')}</option>
+                {typeOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={FIELD_STYLE}>
+              <span>{t('filter.venue')}</span>
+              <select
+                style={INPUT_STYLE}
+                value={value.venue ?? ''}
+                onChange={(event) =>
+                  patch({ venue: event.target.value === '' ? undefined : event.target.value })
+                }
+              >
+                <option value="">{t('filter.any')}</option>
+                {venueOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={FIELD_STYLE}>
+              <span>{t('filter.author')}</span>
+              <select
+                style={INPUT_STYLE}
+                value={value.author ?? ''}
+                onChange={(event) =>
+                  patch({ author: event.target.value === '' ? undefined : event.target.value })
+                }
+              >
+                <option value="">{t('filter.any')}</option>
+                {authorOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={FIELD_STYLE}>
+              <span>{t('filter.group')}</span>
+              <select
+                style={INPUT_STYLE}
+                value={value.groupId ?? ''}
+                onChange={(event) =>
+                  patch({ groupId: event.target.value === '' ? undefined : event.target.value })
+                }
+              >
+                <option value="">{t('filter.any')}</option>
+                {groups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={FIELD_STYLE}>
+              <span>{t('filter.language')}</span>
+              <select
+                style={INPUT_STYLE}
+                value={value.language === 'any' ? '' : (value.language ?? '')}
+                onChange={(event) =>
+                  patch({
+                    language:
+                      event.target.value === '' ? undefined : (event.target.value as TaskLanguage),
+                  })
+                }
+              >
+                <option value="">{t('filter.any')}</option>
+                {LANGUAGES.map((code) => (
+                  <option key={code} value={code}>
+                    {t(`lang.${code}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={FIELD_STYLE}>
+              <span>{t('filter.sort')}</span>
+              <select
+                style={INPUT_STYLE}
+                value={value.sort ?? 'relevance'}
+                onChange={(event) =>
+                  // 相关度是默认排序，不写进筛选对象，否则会被当成一条生效条件。
+                  patch({
+                    sort:
+                      event.target.value === 'relevance'
+                        ? undefined
+                        : (event.target.value as SortMode),
+                  })
+                }
+              >
+                {SORT_MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {t(`sort.${mode}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </section>
+      </div>
     </Modal>
+  )
+}
+
+/** 全文可得性的多选项：整个胶囊就是一个可点区域，选中后换靛蓝底。 */
+function CheckChip({
+  checked,
+  label,
+  onChange,
+}: {
+  checked: boolean
+  label: string
+  onChange(next: boolean): void
+}): ReactElement {
+  return (
+    <label style={checked ? CHECK_ON_STYLE : CHECK_STYLE}>
+      <input
+        type="checkbox"
+        style={CHECKBOX_STYLE}
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
+    </label>
   )
 }
 
@@ -663,13 +705,51 @@ const TOGGLE_ACTIVE_STYLE: CSSProperties = {
   color: 'var(--ls-accent-ink)',
   fontWeight: 500,
 }
+/** 结果页条件行里的「重置」文字按钮。 */
 const RESET_STYLE: CSSProperties = {
   padding: 0,
   border: 'none',
   background: 'transparent',
   fontSize: 12,
-  color: 'var(--ls-ink-2)',
+  color: 'var(--ls-accent-ink)',
   cursor: 'pointer',
+  textDecoration: 'none',
+}
+
+const STACK_STYLE: CSSProperties = {  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+}
+const SECTION_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+}
+const SECTION_TITLE_STYLE: CSSProperties = {
+  fontSize: 12.5,
+  fontWeight: 500,
+  letterSpacing: '0.02em',
+  color: 'var(--ls-ink-1)',
+}
+const SUB_GROUP_STYLE: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+}
+const SUB_LABEL_STYLE: CSSProperties = {
+  fontSize: 11,
+  color: 'var(--ls-ink-3)',
+}
+const DIVIDER_STYLE: CSSProperties = {
+  height: 1,
+  background: 'var(--ls-line)',
+}
+const FOOTER_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  width: '100%',
 }
 const GRID_STYLE: CSSProperties = {
   display: 'grid',
@@ -680,77 +760,100 @@ const FIELD_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 4,
-  fontSize: 12,
   minWidth: 0,
 }
-/** 筛读状态单独占满第一行，四个胶囊横向平铺。 */
-const SCREENING_FIELD_STYLE: CSSProperties = {
-  ...FIELD_STYLE,
-  gridColumn: '1 / -1',
+/** 筛读状态与全文勾选都排成可换行的胶囊行。 */
+const PILL_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
 }
-/** 「全文」勾选项合成一组，整行平铺，组内仍是多选。 */
-const FULLTEXT_FIELD_STYLE: CSSProperties = {
-  ...FIELD_STYLE,
-  gridColumn: '1 / -1',
+const PILL_STYLE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  fontSize: 11.5,
+  lineHeight: 1.4,
+  padding: '4px 10px',
+  borderRadius: 999,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface-2)',
+  color: 'var(--ls-ink-2)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  transition: 'background .15s ease, border-color .15s ease, color .15s ease',
+}
+const PILL_ACTIVE_STYLE: CSSProperties = {
+  ...PILL_STYLE,
+  border: '1px solid var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
+  color: 'var(--ls-accent-ink)',
+  fontWeight: 500,
+}
+const PILL_COUNT_STYLE: CSSProperties = {
+  fontSize: 10.5,
+  fontVariantNumeric: 'tabular-nums',
+  color: 'var(--ls-ink-3)',
+}
+const PILL_COUNT_ON_STYLE: CSSProperties = {
+  ...PILL_COUNT_STYLE,
+  color: 'var(--ls-accent-ink)',
 }
 const CHECK_ROW_STYLE: CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
-  gap: '6px 16px',
-  paddingTop: 1,
-}
-/** 筛读状态的胶囊按钮，与结果页原先的计数按钮同款。 */
-const PILL_ROW_STYLE: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 4,
-  paddingTop: 1,
-}
-const PILL_STYLE: CSSProperties = {
-  fontSize: 11.5,
-  padding: '2px 8px',
-  borderRadius: 10,
-  border: '1px solid var(--ls-line-strong)',
-  background: 'transparent',
-  color: 'inherit',
-  cursor: 'pointer',
-  whiteSpace: 'nowrap',
-}
-const PILL_ACTIVE_STYLE: CSSProperties = {
-  ...PILL_STYLE,
-  borderColor: 'var(--ls-accent)',
-  color: 'var(--ls-accent-ink)',
-  fontWeight: 500,
-}
-const INPUT_STYLE: CSSProperties = {
-  fontSize: 12.5,
-  padding: '5px 8px',
-  borderRadius: 6,
-  border: '1px solid var(--ls-line-strong)',
-  background: 'transparent',
-  color: 'inherit',
-  minWidth: 0,
-}
-const CUSTOM_YEAR_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  gridColumn: '1 / -1',
+  gap: 6,
 }
 const CHECK_STYLE: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 5,
-  fontSize: 12,
-  opacity: 0.92,
+  gap: 6,
+  fontSize: 11.5,
+  lineHeight: 1.4,
+  padding: '4px 10px',
+  borderRadius: 999,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface)',
+  color: 'var(--ls-ink-2)',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
+  transition: 'background .15s ease, border-color .15s ease, color .15s ease',
+}
+const CHECK_ON_STYLE: CSSProperties = {
+  ...CHECK_STYLE,
+  border: '1px solid var(--ls-accent-line)',
+  background: 'var(--ls-accent-soft)',
+  color: 'var(--ls-accent-ink)',
+}
+/** 尺寸与对勾都由 theme.ts 的 `.ls-root input[type='checkbox']` 决定。 */
+const CHECKBOX_STYLE: CSSProperties = { margin: 0, cursor: 'pointer' }
+const INPUT_STYLE: CSSProperties = {
+  fontSize: 12,
+  padding: '6px 9px',
+  borderRadius: 8,
+  border: '1px solid transparent',
+  background: 'var(--ls-surface-2)',
+  color: 'var(--ls-ink-1)',
+  minWidth: 0,
+}
+const CUSTOM_YEAR_STYLE: CSSProperties = {
+  gridColumn: '1 / -1',
+  display: 'grid',
+  gridTemplateColumns: '1fr auto 1fr',
+  alignItems: 'end',
+  gap: 8,
+}
+const YEAR_DASH_STYLE: CSSProperties = {
+  paddingBottom: 8,
+  fontSize: 12,
+  color: 'var(--ls-ink-3)',
 }
 
 /** 分组标题需要比下拉框内容更醒目，样式只能通过 contentClassName 命中内部 label。 */
 const FILTER_CONTENT_CLASS = 'litsearch-filter-content'
 const FILTER_CONTENT_CSS = `
-.${FILTER_CONTENT_CLASS} label>span,.${FILTER_CONTENT_CLASS} .litsearch-filter-label{font-size:12.5px;font-weight:500;line-height:1.5;color:var(--ls-ink-2)}
+.${FILTER_CONTENT_CLASS} label>span,.${FILTER_CONTENT_CLASS} .litsearch-filter-label{font-size:11.5px;font-weight:400;line-height:1.5;color:var(--ls-ink-2)}
+.${FILTER_CONTENT_CLASS} select:focus,.${FILTER_CONTENT_CLASS} input:not([type='checkbox']):focus{outline:none;background:var(--ls-surface);border-color:var(--ls-accent);box-shadow:0 0 0 3px var(--ls-accent-soft)}
 `
 
 const CHIP_STYLE: CSSProperties = {

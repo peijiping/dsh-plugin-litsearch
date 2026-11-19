@@ -129,6 +129,22 @@ export const linkButtonStyle = {
   cursor: 'pointer',
 } as const
 
+/** 卡片快捷操作里的主操作按钮：描边胶囊 + 图标 + 文案。 */
+export const actionButtonStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '3px 9px',
+  borderRadius: 5,
+  border: `1px solid ${LS.accentLineStrong}`,
+  background: 'transparent',
+  color: LS.accentInk,
+  fontSize: 11.5,
+  lineHeight: 1.4,
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+} as const
+
 /** 普通外链。 */
 export const linkStyle = {
   color: LS.accentInk,
