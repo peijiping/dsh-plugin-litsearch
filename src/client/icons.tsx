@@ -76,6 +76,46 @@ export function HistoryIcon(): ReactElement {
   )
 }
 
+/** 切换任务：上下相反的双向箭头。 */
+export function SwitchIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M4 9h13.5l-3.2-3.2" />
+      <path d="M20 15H6.5l3.2 3.2" />
+    </svg>
+  )
+}
+
+/** 执行查询：实心播放三角。 */
+export function RunIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps} fill="currentColor" stroke="none">
+      <path d="M8.5 5.2v13.6L19 12z" />
+    </svg>
+  )
+}
+
+/** 刷新：双向缺口圆环箭头。 */
+export function RefreshIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M20.5 12a8.5 8.5 0 0 1-14.7 5.8L3 15" />
+      <path d="M3 20v-5h5" />
+      <path d="M3.5 12a8.5 8.5 0 0 1 14.7-5.8L21 9" />
+      <path d="M21 4v5h-5" />
+    </svg>
+  )
+}
+
+/** 加入 / 新建：加号。 */
+export function PlusIcon(): ReactElement {
+  return (
+    <svg {...fieldSvgProps}>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  )
+}
+
 /** 搜索任务列表：三行清单。 */
 export function TaskListIcon(): ReactElement {
   return (

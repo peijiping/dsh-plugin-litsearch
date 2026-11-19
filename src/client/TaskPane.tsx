@@ -45,11 +45,13 @@ import {
   ChevronDownIcon,
   ClockIcon,
   HistoryIcon,
-  IconButton,
+  PlusIcon,
+  RefreshIcon,
   ResultIcon,
   RoundIcon,
+  RunIcon,
   SpinnerIcon,
-  TaskListIcon,
+  SwitchIcon,
   ZoteroIcon,
 } from './icons'
 import { insertQuote, type InputActions } from './inline'
@@ -682,6 +684,8 @@ export function TaskPane({
   }
 
   const active = detail.status === 'running' || detail.status === 'queued'
+  /** 执行查询按钮的忙碌态：任务在跑，或本轮重跑请求尚未返回。 */
+  const running = active || view.busy
   const roundCount = detail.roundCount ?? 0
   const failed = detail.result.sources.filter((source) => !source.ok && !source.skipped)
   const skipped = detail.result.sources.filter((source) => source.skipped)
@@ -759,10 +763,39 @@ export function TaskPane({
     <div className="ls-root" style={TASK_PANEL_STYLE}>
       <header style={HEADER_STYLE}>
         <div style={HEADER_TOP_STYLE}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div className="ls-page-title">
+          <div style={HEADER_LEAD_STYLE}>
+            <div className="ls-page-title" style={HEADER_TITLE_STYLE}>
               {detail.title}
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              className="ls-btn ls-btn-ghost ls-btn-compact"
+              style={HEADER_BTN_STYLE}
+              title={t('taskList.open')}
+              onClick={() => setShowTaskList(true)}
+            >
+              <SwitchIcon />
+              {t('taskList.switch')}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              className="ls-btn ls-btn-ghost ls-btn-compact"
+              style={HEADER_BTN_STYLE}
+              title={running ? t('task.running') : t('task.runQueryHint')}
+              disabled={running}
+              onClick={() => {
+                void view.rerun()
+              }}
+            >
+              <span style={RUN_ICON_STYLE} aria-hidden>
+                {running ? <SpinnerIcon /> : <RunIcon />}
+              </span>
+              {t('task.runQuery')}
+            </Button>
           </div>
           <div style={HEADER_ACTIONS_STYLE}>
             <Button
@@ -770,9 +803,11 @@ export function TaskPane({
               size="sm"
               type="button"
               className="ls-btn ls-btn-ghost ls-btn-compact"
+              style={HEADER_BTN_STYLE}
               title={t('task.insertToChatHint')}
               onClick={insertTask}
             >
+              <PlusIcon />
               {t('task.insertToChat')}
             </Button>
             <Button
@@ -780,28 +815,26 @@ export function TaskPane({
               size="sm"
               type="button"
               className="ls-btn ls-btn-ghost ls-btn-compact"
-              disabled={active || view.busy}
-              onClick={() => {
-                void view.rerun()
-              }}
+              style={HEADER_BTN_STYLE}
+              onClick={() => view.reload()}
             >
-              {t('task.rerun')}
+              <RefreshIcon />
+              {t('task.refresh')}
             </Button>
             <Button
               variant="outline"
               size="sm"
               type="button"
               className="ls-btn ls-btn-ghost ls-btn-compact"
-              onClick={() => view.reload()}
+              style={HEADER_BTN_STYLE}
+              title={t('rounds.open')}
+              onClick={() => setShowRounds(true)}
             >
-              {t('task.refresh')}
-            </Button>
-            <IconButton quiet label={t('rounds.open')} onClick={() => setShowRounds(true)}>
               <HistoryIcon />
-            </IconButton>
-            <IconButton quiet label={t('taskList.open')} onClick={() => setShowTaskList(true)}>
-              <TaskListIcon />
-            </IconButton>
+              {currentRoundNo > 0
+                ? tpl(t('task.roundsButton'), { round: currentRoundNo })
+                : t('rounds.open')}
+            </Button>
           </div>
         </div>
         <div style={HEADER_SPLIT_STYLE}>
@@ -1330,7 +1363,28 @@ const HEADER_TOP_STYLE: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
+  flexWrap: 'wrap',
   gap: 8,
+}
+
+/** 标题与「切换任务 / 执行查询」同行；空间不足时按钮换行到标题下方。 */
+const HEADER_LEAD_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 6,
+  flex: '1 1 auto',
+  minWidth: 0,
+}
+
+/** 标题允许收缩换行，始终先保留按钮的完整尺寸。 */
+const HEADER_TITLE_STYLE: CSSProperties = {
+  minWidth: 0,
+}
+
+/** 头部胶囊按钮不参与压缩，避免文字被挤成多行。 */
+const HEADER_BTN_STYLE: CSSProperties = {
+  flexShrink: 0,
 }
 
 /** 头部操作区：窄面板下允许换行，避免按钮被裁掉。 */
@@ -1340,7 +1394,17 @@ const HEADER_ACTIONS_STYLE: CSSProperties = {
   justifyContent: 'flex-end',
   flexWrap: 'wrap',
   gap: 6,
-  flexShrink: 0,
+  flex: '0 1 auto',
+  minWidth: 0,
+  marginLeft: 'auto',
+}
+
+/** 执行查询按钮的图标：常态绿色播放键，执行中换成绿色转圈。 */
+const RUN_ICON_STYLE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: 'var(--ls-success)',
 }
 
 /** 标题下方左右两栏：左=查询条件，右=本轮结果与提醒。窄面板下自动上下堆叠。 */
@@ -1350,11 +1414,16 @@ const HEADER_SPLIT_STYLE: CSSProperties = {
   gap: 8,
 }
 
+/** 两栏卡片统一的最高高度（含内边距与描边）：超出部分在卡片内部滚动。 */
+const HEADER_BOX_MAX_HEIGHT = 142
+
 const CONDITION_BOX_STYLE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 5,
   minWidth: 0,
+  maxHeight: HEADER_BOX_MAX_HEIGHT,
+  boxSizing: 'border-box',
   padding: '10px 12px',
   borderRadius: 12,
   border: '1px solid var(--ls-line)',
@@ -1380,6 +1449,9 @@ const ROUND_BOX_STYLE: CSSProperties = {
   flexDirection: 'column',
   gap: 5,
   minWidth: 0,
+  maxHeight: HEADER_BOX_MAX_HEIGHT,
+  boxSizing: 'border-box',
+  overflowY: 'auto',
   padding: '10px 12px',
   borderRadius: 12,
   border: '1px solid var(--ls-accent-line)',

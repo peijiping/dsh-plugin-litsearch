@@ -117,7 +117,8 @@ const BODY_STYLE: CSSProperties = {
   flexDirection: 'column',
   gap: 7,
   minWidth: 0,
-  maxHeight: 168,
+  flex: 1,
+  minHeight: 0,
   overflowY: 'auto',
 }
 

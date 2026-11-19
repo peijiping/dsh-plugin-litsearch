@@ -60,7 +60,9 @@ const zh: Record<string, string> = {
   'task.notFound': '任务不存在或已删除',
   'task.retry': '重试',
   'task.refresh': '刷新',
-  'task.rerun': '重跑',
+  'task.runQuery': '执行查询',
+  'task.runQueryHint': '按当前查询条件重新执行一次检索',
+  'task.roundsButton': '第{round}轮查询',
   'task.cancel': '取消',
   'task.insertToChat': '加入对话',
   'task.insertToChatHint': '把任务 id 与当前检索条件作为引用写入会话草稿；建议一个对话只跟进一个检索任务',
@@ -713,6 +715,7 @@ const zh: Record<string, string> = {
 
   // ---- 搜索任务列表 -------------------------------------------------------
   'taskList.open': '搜索任务列表',
+  'taskList.switch': '切换查询任务',
   'taskList.title': '搜索任务',
   'taskList.desc': '一个研究主题对应一个任务；每个对话只保留一个任务 tab，切换任务请在这里进行。',
   'taskList.count': '共 {n} 个任务',
@@ -772,7 +775,9 @@ const en: Record<string, string> = {
   'task.notFound': 'This task does not exist or was deleted',
   'task.retry': 'Retry',
   'task.refresh': 'Refresh',
-  'task.rerun': 'Run again',
+  'task.runQuery': 'Run search',
+  'task.runQueryHint': 'Run the search again with the current conditions',
+  'task.roundsButton': 'Round {round}',
   'task.cancel': 'Cancel',
   'task.insertToChat': 'Add to chat',
   'task.insertToChatHint':
@@ -1444,6 +1449,7 @@ const en: Record<string, string> = {
 
   // ---- Search task list ---------------------------------------------------
   'taskList.open': 'Search tasks',
+  'taskList.switch': 'Switch task',
   'taskList.title': 'Search tasks',
   'taskList.desc': 'One research topic = one task. Each conversation keeps a single task tab — switch tasks here.',
   'taskList.count': '{n} tasks',
