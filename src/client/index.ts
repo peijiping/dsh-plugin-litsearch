@@ -7,11 +7,21 @@
  * - 设置对话框里的「文献检索」页；
  * - 模型任务的自动打开轮询（`startAutoOpen`）。
  *
+ * 主页与任务页共用同一个「检索页」名额：同一会话的右侧栏里只留一个，
+ * 分栏 / 浮动面板里多开出来的会被自动关闭；论文详情 tab 不受限制。
+ * 已有检索页时再点插件入口只聚焦它，不会把任务页换成「新建检索」。
+ *
  * 注意：cordis 的对象式 inject 是「拦截 config」，不是 {required,optional}，
  * 因此这里用数组式 inject。
  */
 
-import { createElement, useEffect, type ComponentType, type ReactElement } from 'react'
+import {
+  createElement,
+  useEffect,
+  useLayoutEffect,
+  type ComponentType,
+  type ReactElement,
+} from 'react'
 
 import {
   ApiFailure,
@@ -92,6 +102,7 @@ interface SidebarRightService {
     options?: { params?: unknown; replaceTab?: string; revealIfOpened?: boolean },
   ): void
   close(tabId: string): void
+  focus(tabId: string): void
   active(): SidebarRightOpenTab | undefined
   mounted: {
     getSnapshot(): string | undefined
@@ -213,6 +224,38 @@ export function apply(ctx: ClientContext): void {
   const taskTabsIn = (sessionId: string): SidebarRightOpenTab[] =>
     ctx.sidebarRight.tabsIn(sessionId).filter((tab) => tab.kind === TASK_TAB_ID)
 
+  /** 检索页：主页与任务页共用唯一名额，论文详情不计入。 */
+  const searchTabsIn = (sessionId: string): SidebarRightOpenTab[] =>
+    ctx.sidebarRight.tabsIn(sessionId).filter(
+      (tab) => tab.kind === TAB_ID || tab.kind === TASK_TAB_ID,
+    )
+
+  /**
+   * 把会话内的检索页收敛到一个。
+   *
+   * 主页是「按 pane 去重」的页面类型，分栏 / 浮动面板里可以各开一份；任务页
+   * 也可能从旧布局里遗留多份。大模型只有一个「当前任务」，界面上也只留一个
+   * 检索页，才不会出现「到底控制哪个面板」的歧义。优先保留当前激活的 tab，
+   * 否则保留刚打开的目标地址，再退到任务页 / 最后一个。
+   */
+  const convergeSearchTabs = (preferredAddress?: string): void => {
+    const sessionId = ctx.sidebarRight.mounted.getSnapshot()
+    if (sessionId === undefined) return
+    const tabs = searchTabsIn(sessionId)
+    if (tabs.length <= 1) return
+    const activeId = ctx.sidebarRight.active()?.id
+    const keeper =
+      tabs.find((tab) => tab.id === activeId) ??
+      (preferredAddress === undefined
+        ? undefined
+        : tabs.find((tab) => tab.contentId === preferredAddress)) ??
+      tabs.find((tab) => tab.kind === TASK_TAB_ID) ??
+      tabs[tabs.length - 1]
+    for (const tab of tabs) {
+      if (tab.id !== keeper.id) ctx.sidebarRight.close(tab.id)
+    }
+  }
+
   /** 上一次成功打开的任务：目标任务随后失效时，任务页可一键切回。 */
   let previousTask: { id: string; title: string } | null = null
   /** 连续点击多个任务时只让最后一次生效，避免预检请求乱序。 */
@@ -232,10 +275,13 @@ export function apply(ctx: ClientContext): void {
         if (token !== openSeq) return
         rememberTaskTitle(detail.id, detail.title)
         const address = `${TASK_ADDRESS_PREFIX}${encodeURIComponent(detail.id)}`
-        // 一个对话只保留一个任务 tab：已经打开别的任务时，原位替换而不是再开一个。
+        // 一个对话只保留一个检索页：已有任务页 / 主页时原位替换，不再另开。
         const sessionId = ctx.sidebarRight.mounted.getSnapshot()
-        const tabs = sessionId === undefined ? [] : taskTabsIn(sessionId)
-        const previous = tabs.find((tab) => taskIdFromAddress(tab.contentId) !== detail.id)
+        const tabs = sessionId === undefined ? [] : searchTabsIn(sessionId)
+        const previous =
+          tabs.find(
+            (tab) => tab.kind === TASK_TAB_ID && taskIdFromAddress(tab.contentId) !== detail.id,
+          ) ?? tabs.find((tab) => taskIdFromAddress(tab.contentId) !== detail.id)
         if (previous !== undefined) {
           const previousId = taskIdFromAddress(previous.contentId)
           if (previousId !== null && previousId !== detail.id) {
@@ -249,12 +295,8 @@ export function apply(ctx: ClientContext): void {
           params: { title: title === undefined || title === '' ? detail.title : title },
           ...(previous === undefined ? {} : { replaceTab: previous.id }),
         })
-        // 升级前可能遗留多个任务 tab：打开动作之后收敛到这一个。
-        for (const tab of tabs) {
-          if (tab.id !== previous?.id && taskIdFromAddress(tab.contentId) !== detail.id) {
-            ctx.sidebarRight.close(tab.id)
-          }
-        }
+        // 分栏里可能还留着别处的检索页（含同一任务的重复 tab）：统一收敛到这一个。
+        convergeSearchTabs(address)
         // 用户主动点开某任务 = 进入该任务，之后的模型检索默认落在这里。
         // 自动打开路径也会调用，但 activate 是幂等的，不会改变已有语义。
         void activateTask(detail.id).catch(() => undefined)
@@ -273,12 +315,50 @@ export function apply(ctx: ClientContext): void {
       })
   }
 
-  // 主页：t 闭包 + 打开任务 tab 的能力。
-  const Body = (): ReactElement =>
-    createElement(LitsearchPage, {
+  /**
+   * 再次点插件入口时的语义：不把已打开的检索页换成「新建检索」。
+   *
+   * 入口本身只会 `openTab('litsearch')`，宿主不知道这里已有任务页，于是新主页
+   * 会在当前 pane 里闪出来。主页挂载时检查一次：已有任务页就关掉自己、把任务页
+   * 聚焦回前台；有多份主页只留最早那份。没有别的检索页时才是真正的新建入口。
+   */
+  const yieldToExistingSearchPage = (selfId: string): void => {
+    const sessionId = ctx.sidebarRight.mounted.getSnapshot()
+    if (sessionId === undefined) return
+    const tabs = searchTabsIn(sessionId)
+    if (tabs.length <= 1) return
+    const task = tabs.find((tab) => tab.kind === TASK_TAB_ID)
+    if (task !== undefined) {
+      if (selfId !== task.id) ctx.sidebarRight.close(selfId)
+      for (const extra of tabs) {
+        if (extra.kind === TASK_TAB_ID && extra.id !== task.id) ctx.sidebarRight.close(extra.id)
+      }
+      ctx.sidebarRight.focus(task.id)
+      return
+    }
+    const keeper = tabs.find((tab) => tab.kind === TAB_ID)
+    if (keeper === undefined) return
+    if (keeper.id !== selfId) ctx.sidebarRight.close(selfId)
+    for (const tab of tabs) {
+      if (tab.id !== keeper.id) ctx.sidebarRight.close(tab.id)
+    }
+    ctx.sidebarRight.focus(keeper.id)
+  }
+
+  // 主页：t 闭包 + 打开任务 tab 的能力。入口重复点击时让位给已打开的检索页；
+  // 论文详情 tab 不计入、不受影响。
+  const Body = (props: {
+    useTabInfo: () => { tab: { id?: string } }
+  }): ReactElement => {
+    const selfId = props.useTabInfo().tab.id
+    useLayoutEffect(() => {
+      if (typeof selfId === 'string' && selfId !== '') yieldToExistingSearchPage(selfId)
+    }, [])
+    return createElement(LitsearchPage, {
       t,
       onOpenTask: (id: string, title: string) => openTask(id, title),
     })
+  }
 
   /** 关闭某个任务 tab；任务被删除且没有可切换的任务时用来清空窗口。 */
   const closeTask = (id: string): void => {
@@ -492,14 +572,12 @@ export function apply(ctx: ClientContext): void {
     const sync = (): void => {
       const sessionId = ctx.sidebarRight.mounted.getSnapshot()
       if (sessionId === undefined) return
+      // 恢复的旧布局里可能还留着主页 / 多个任务页：先收敛成一个检索页。
+      convergeSearchTabs()
       const tabs = taskTabsIn(sessionId)
       if (tabs.length === 0) return
       const activeId = ctx.sidebarRight.active()?.id
       const tab = tabs.find((entry) => entry.id === activeId) ?? tabs[0]
-      // 一个对话只留一个任务 tab：旧版本遗留的多余 tab 顺手收敛掉。
-      for (const extra of tabs) {
-        if (extra.id !== tab.id) ctx.sidebarRight.close(extra.id)
-      }
       const id = taskIdFromAddress(tab.contentId)
       if (id !== null) void activateTask(id).catch(() => undefined)
     }

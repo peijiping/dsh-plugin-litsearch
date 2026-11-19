@@ -30,7 +30,7 @@ import { EntityPanel } from './Entities'
 import { ChatIcon } from './icons'
 import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
-import { hostOf } from './text'
+import { abstractPreview, hostOf } from './text'
 import { TranslationButton } from './TranslationButton'
 import { useTranslation } from './useTranslation'
 import {
@@ -209,13 +209,13 @@ export function PaperPane({
     },
     t,
   )
-  // 与结果卡片一致：超长摘要默认折到 260 字，点开再看全文；译文按同样规则截断。
-  const abstractText = translation.abstract
-  const canCollapseAbstract = abstractText.length > ABSTRACT_PREVIEW
-  const abstractShown =
-    abstractOpen || !canCollapseAbstract
-      ? abstractText
-      : `${abstractText.slice(0, ABSTRACT_PREVIEW)}…`
+  // 与结果卡片一致：折叠与否按原文判定（译后按钮不会消失），预览按比例缩放。
+  const { text: abstractShown, collapsible: canCollapseAbstract } = abstractPreview({
+    shown: translation.abstract,
+    source: translation.sourceAbstract,
+    previewChars: ABSTRACT_PREVIEW,
+    expanded: abstractOpen,
+  })
   const sources = useMemo(
     () => (paper === undefined ? [] : [...new Set(paper.hitSources.map((hit) => hit.source))]),
     [paper],

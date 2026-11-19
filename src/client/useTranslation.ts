@@ -67,6 +67,8 @@ export interface TranslationState {
   title: string
   /** 按当前状态应展示的摘要（纯文本，截断交给调用方）。 */
   abstract: string
+  /** 原文摘要的纯文本，供调用方按原文长度决定是否可折叠（跨语言稳定）。 */
+  sourceAbstract: string
   /** 当前译文的引擎；未翻译时为空。 */
   provider?: TranslationEntry['provider']
   toggle(): void
@@ -75,6 +77,9 @@ export interface TranslationState {
 export function useTranslation(paper: TranslationSource, t: Translate): TranslationState {
   const srcTitle = paper.title
   const srcAbstract = plainText(paper.abstract)
+  // 落盘时长摘要尾部会补一个 …（见 host/tasks/store.ts 的 truncatePaper），它不是正文的一部分。
+  // 原文展示仍保留它（提示摘要被截短），但送进翻译会被渲染成 "......"，让人误以为译文没翻全。
+  const translateAbstract = srcAbstract.replace(/\s*…$/u, '')
   const paperId = paper.paperId
 
   const [entry, setEntry] = useState<TranslationEntry | undefined>(() =>
@@ -102,8 +107,10 @@ export function useTranslation(paper: TranslationSource, t: Translate): Translat
       return
     }
     setBusy(true)
-    const body = srcAbstract === '' ? { texts: [srcTitle] } : { texts: [srcTitle, srcAbstract] }
+    const body =
+      translateAbstract === '' ? { texts: [srcTitle] } : { texts: [srcTitle, translateAbstract] }
     try {
+      // 缓存键仍用带省略号的原文：它随原文变化，能保证同一篇复用、换篇失效。
       const result = await startOnce(`${paperId}\u0000${srcTitle}\u0000${srcAbstract}`, () =>
         translateTexts(body),
       )
@@ -132,7 +139,7 @@ export function useTranslation(paper: TranslationSource, t: Translate): Translat
     } finally {
       if (alive.current) setBusy(false)
     }
-  }, [paperId, srcTitle, srcAbstract, t])
+  }, [paperId, srcTitle, srcAbstract, translateAbstract, t])
 
   // 换了一篇（列表复用组件实例）时重新读缓存；不会主动发请求。
   useEffect(() => {
@@ -162,9 +169,10 @@ export function useTranslation(paper: TranslationSource, t: Translate): Translat
       busy,
       title: current.title,
       abstract: current.abstract === '' ? srcAbstract : current.abstract,
+      sourceAbstract: srcAbstract,
       provider: current.provider,
       toggle,
     }
   }
-  return { on: false, busy, title: srcTitle, abstract: srcAbstract, toggle }
+  return { on: false, busy, title: srcTitle, abstract: srcAbstract, sourceAbstract: srcAbstract, toggle }
 }

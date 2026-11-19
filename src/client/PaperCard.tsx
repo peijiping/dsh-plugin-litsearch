@@ -37,6 +37,7 @@ import {
 import { PreviewFrame } from './PreviewFrame'
 import { TranslationButton } from './TranslationButton'
 import { useTranslation } from './useTranslation'
+import { abstractPreview } from './text'
 import {
   abstractStyle,
   actionButtonStyle,
@@ -124,12 +125,14 @@ export function PaperCard({
     .join(' · ')
 
   const sources = [...new Set(paper.hitSources.map((hit) => hit.source))]
-  // 译文与原文共用同一套截断规则：标题外链保留，只换文本。
+  // 折叠与否按原文判定（译后按钮不会消失）；预览长度按译文/原文比例缩放。
   const translation = useTranslation(paper, t)
-  const abstractText = translation.abstract
-  const canCollapse = abstractText.length > ABSTRACT_PREVIEW
-  const abstract =
-    expanded || !canCollapse ? abstractText : `${abstractText.slice(0, ABSTRACT_PREVIEW)}…`
+  const { text: abstract, collapsible: canCollapse } = abstractPreview({
+    shown: translation.abstract,
+    source: translation.sourceAbstract,
+    previewChars: ABSTRACT_PREVIEW,
+    expanded,
+  })
 
   const screening = state?.screening ?? 'unread'
   const groupName = groups.find((group) => group.id === state?.groupId)?.name
@@ -256,7 +259,7 @@ export function PaperCard({
         </div>
       )}
 
-      {abstractText !== '' && (
+      {translation.sourceAbstract !== '' && (
         <div style={{ ...FIELD_ROW_STYLE, marginTop: 6 }}>
           <span style={FIELD_ICON_STYLE}>
             <AbstractIcon />
