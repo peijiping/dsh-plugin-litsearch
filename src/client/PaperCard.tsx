@@ -214,6 +214,16 @@ export function PaperCard({
             <option value={CREATE_GROUP_VALUE}>{t('annotate.createGroup')}</option>
           )}
         </select>
+        {/* 主操作靠右：卡片右上角常驻，「快捷操作」行只留次要入口。 */}
+        <button
+          type="button"
+          style={INSERT_BUTTON_STYLE}
+          title={t('result.insert')}
+          onClick={() => onInsert(paper)}
+        >
+          <ChatIcon />
+          {t('result.insert')}
+        </button>
       </div>
 
       <div style={FIELD_ROW_STYLE}>
@@ -266,8 +276,11 @@ export function PaperCard({
         </div>
       )}
 
-      <div style={CARD_ROW_STYLE} title={t('result.infoHint')}>
-        <span style={INFO_LABEL_STYLE}>{t('result.infoLabel')}</span>
+      {/* 底部三行共用两列网格：标签列宽度随文案自适应，内容列因此紧贴标签左移。 */}
+      <div style={CARD_ROWS_STYLE}>
+        <span style={INFO_LABEL_STYLE} title={t('result.infoHint')}>
+          {t('result.infoLabel')}
+        </span>
         <div style={{ ...badgeRowStyle, ...FIELD_BODY_STYLE, marginTop: 0 }}>
           <span style={{ ...INFO_BADGE_STYLE, color: SCREENING_COLOR[screening] }}>
             {t(`screening.${screening}`)}
@@ -289,10 +302,10 @@ export function PaperCard({
             {t(`pdf.status.${pdfStatus}`)}
           </span>
         </div>
-      </div>
 
-      <div style={CARD_ROW_STYLE} title={t('result.actionHint')}>
-        <span style={ACTION_LABEL_STYLE}>{t('result.actionLabel')}</span>
+        <span style={ACTION_LABEL_STYLE} title={t('result.actionHint')}>
+          {t('result.actionLabel')}
+        </span>
         <div
           style={{
             ...actionRowStyle,
@@ -302,14 +315,6 @@ export function PaperCard({
             rowGap: 2,
           }}
         >
-          <button
-            type="button"
-            style={actionButtonStyle}
-            onClick={() => onInsert(paper)}
-          >
-            <ChatIcon />
-            {t('result.insert')}
-          </button>
           {canPdf && (
             <DownloadButton
               t={t}
@@ -383,52 +388,52 @@ export function PaperCard({
             </a>
           )}
         </div>
-      </div>
 
-      {showLinkBar && (pdfLinks.length > 0 || paper.doi !== '' || canHtml) && (
-        <div style={CARD_ROW_STYLE}>
-          <span style={ACTION_LABEL_STYLE}>{t('pdf.linksLabel')}</span>
-          <div
-            style={{
-              ...FIELD_BODY_STYLE,
-              marginTop: 0,
-              display: 'flex',
-              flexWrap: 'wrap',
-              columnGap: 12,
-              rowGap: 4,
-              alignItems: 'center',
-            }}
-          >
-            {pdfLinks.map((link) => (
-              <a
-                key={link.url}
-                style={linkStyle}
-                href={link.url}
-                title={link.title}
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                {link.label}
-              </a>
-            ))}
-            {paper.doi !== '' && (
-              <a
-                style={linkStyle}
-                href={`https://doi.org/${paper.doi}`}
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                {t('pdf.openLanding')}
-              </a>
-            )}
-            {canHtml && (
-              <button type="button" style={linkButtonStyle} onClick={() => setShowHtml(true)}>
-                {t('pdf.webFullText')}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+        {showLinkBar && (pdfLinks.length > 0 || paper.doi !== '' || canHtml) && (
+          <>
+            <span style={ACTION_LABEL_STYLE}>{t('pdf.linksLabel')}</span>
+            <div
+              style={{
+                ...FIELD_BODY_STYLE,
+                marginTop: 0,
+                display: 'flex',
+                flexWrap: 'wrap',
+                columnGap: 12,
+                rowGap: 4,
+                alignItems: 'center',
+              }}
+            >
+              {pdfLinks.map((link) => (
+                <a
+                  key={link.url}
+                  style={linkStyle}
+                  href={link.url}
+                  title={link.title}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  {link.label}
+                </a>
+              ))}
+              {paper.doi !== '' && (
+                <a
+                  style={linkStyle}
+                  href={`https://doi.org/${paper.doi}`}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  {t('pdf.openLanding')}
+                </a>
+              )}
+              {canHtml && (
+                <button type="button" style={linkButtonStyle} onClick={() => setShowHtml(true)}>
+                  {t('pdf.webFullText')}
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
 
       {entities && (
         <EntityPanel t={t} taskId={taskId} paperId={paper.paperId} pmid={paper.ids.pmid} />
@@ -467,6 +472,13 @@ const STATE_ROW_STYLE: CSSProperties = {
   fontSize: 12,
 }
 
+/** 右上角常驻的「加入对话」：与工具行控件同高，靠右吸附。 */
+const INSERT_BUTTON_STYLE: CSSProperties = {
+  ...actionButtonStyle,
+  marginLeft: 'auto',
+  flexShrink: 0,
+}
+
 /** 标题 / 作者 / 摘要统一为「图标 + 正文」两列，长文本只在正文列换行。 */
 const FIELD_ROW_STYLE: CSSProperties = {
   display: 'flex',
@@ -484,19 +496,19 @@ const FIELD_ICON_STYLE: CSSProperties = {
 const FIELD_BODY_STYLE: CSSProperties = { flex: 1, minWidth: 0 }
 
 /**
- * 卡片底部两行：左边固定宽度的行标签，右边是内容。
+ * 卡片底部三行共用一个两列网格：标签列取 `max-content`（中文标签只有 5 个字，
+ * 不必再白占 92px 固定宽度），内容列 `minmax(0, 1fr)` 保证长串徽章能正常换行。
  * 「状态与来源」用青绿、「快捷操作」用主题蓝，避免两行都是蓝字难以分辨。
  */
 const INFO_COLOR = 'var(--ls-info)'
-const CARD_ROW_STYLE: CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: 8,
-  marginTop: 3,
+const CARD_ROWS_STYLE: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'max-content minmax(0, 1fr)',
+  columnGap: 6,
+  rowGap: 2,
+  marginTop: 2,
 }
 const ROW_LABEL_STYLE: CSSProperties = {
-  flexShrink: 0,
-  width: 92,
   paddingTop: 1,
   fontSize: 11.5,
   lineHeight: '16px',
@@ -507,7 +519,8 @@ const INFO_LABEL_STYLE: CSSProperties = { ...ROW_LABEL_STYLE, color: INFO_COLOR 
 const ACTION_LABEL_STYLE: CSSProperties = { ...ROW_LABEL_STYLE, color: 'var(--ls-accent-ink)' }
 const INFO_BADGE_STYLE: CSSProperties = {
   ...badgeStyle,
-  padding: '1px 6px',
+  padding: '1px 5px',
+  fontSize: 10.5,
   lineHeight: 1.3,
   color: INFO_COLOR,
   border: '1px solid rgba(18,131,108,0.45)',
