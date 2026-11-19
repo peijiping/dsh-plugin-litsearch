@@ -26,7 +26,6 @@ import {
   ZoteroIcon,
 } from './icons'
 import { tpl, type Translate } from './locales'
-import { plainText } from './text'
 import {
   canDownloadPdf,
   paperPdfStatus,
@@ -36,6 +35,8 @@ import {
   type PdfDownloadUi,
 } from './pdfActions'
 import { PreviewFrame } from './PreviewFrame'
+import { TranslationButton } from './TranslationButton'
+import { useTranslation } from './useTranslation'
 import {
   abstractStyle,
   actionButtonStyle,
@@ -123,8 +124,9 @@ export function PaperCard({
     .join(' · ')
 
   const sources = [...new Set(paper.hitSources.map((hit) => hit.source))]
-  // 上游摘要带 JATS 行内标签，先清标记再算截断长度，避免把 `<i>` 也算进字数。
-  const abstractText = plainText(paper.abstract)
+  // 译文与原文共用同一套截断规则：标题外链保留，只换文本。
+  const translation = useTranslation(paper, t)
+  const abstractText = translation.abstract
   const canCollapse = abstractText.length > ABSTRACT_PREVIEW
   const abstract =
     expanded || !canCollapse ? abstractText : `${abstractText.slice(0, ABSTRACT_PREVIEW)}…`
@@ -214,7 +216,8 @@ export function PaperCard({
             <option value={CREATE_GROUP_VALUE}>{t('annotate.createGroup')}</option>
           )}
         </select>
-        {/* 主操作靠右：卡片右上角常驻，「快捷操作」行只留次要入口。 */}
+        {/* 主操作靠右：翻译 + 加入对话都常驻右上角，「快捷操作」行只留次要入口。 */}
+        <TranslationButton t={t} state={translation} style={TRANSLATE_BUTTON_STYLE} />
         <button
           type="button"
           style={INSERT_BUTTON_STYLE}
@@ -231,7 +234,7 @@ export function PaperCard({
           <TitleIcon />
         </span>
         {paper.url === '' ? (
-          <span style={{ ...titleStyle, ...FIELD_BODY_STYLE }}>{paper.title}</span>
+          <span style={{ ...titleStyle, ...FIELD_BODY_STYLE }}>{translation.title}</span>
         ) : (
           <a
             style={{ ...titleStyle, ...FIELD_BODY_STYLE }}
@@ -239,7 +242,7 @@ export function PaperCard({
             target="_blank"
             rel="noreferrer noopener"
           >
-            {paper.title}
+            {translation.title}
           </a>
         )}
       </div>
@@ -472,11 +475,20 @@ const STATE_ROW_STYLE: CSSProperties = {
   fontSize: 12,
 }
 
-/** 右上角常驻的「加入对话」：与工具行控件同高，靠右吸附。 */
+/** 右上角常驻的「加入对话」：与工具行控件同高。 */
 const INSERT_BUTTON_STYLE: CSSProperties = {
+  ...actionButtonStyle,
+  flexShrink: 0,
+}
+
+/** 「原 / 译」：靠右吸附，单字宽，避免把筛读与分组挤走。 */
+const TRANSLATE_BUTTON_STYLE: CSSProperties = {
   ...actionButtonStyle,
   marginLeft: 'auto',
   flexShrink: 0,
+  justifyContent: 'center',
+  minWidth: 28,
+  fontWeight: 500,
 }
 
 /** 标题 / 作者 / 摘要统一为「图标 + 正文」两列，长文本只在正文列换行。 */

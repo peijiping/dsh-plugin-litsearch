@@ -19,6 +19,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { createHandler, type WebServerLike } from './host/router.js'
+import { createTranslator } from './host/translate.js'
 import { literatureTools, type ToolsService } from './host/tools.js'
 import { TaskService } from './host/tasks/service.js'
 import { setSessionStore, type SessionStoreLike } from './host/workspace.js'
@@ -45,6 +46,8 @@ import {
   DEFAULT_SOURCE_IDS,
   DEFAULT_SORT,
   DEFAULT_TASK_MAX_PAPERS,
+  DEFAULT_TRANSLATE_ENGINE,
+  DEFAULT_TRANSLATE_TARGET,
   DEFAULT_ZOTERO_ATTACH_PDF,
   DEFAULT_ZOTERO_BASE_URL,
   DEFAULT_ZOTERO_ENABLED,
@@ -54,8 +57,19 @@ import {
   ROUTE_MATCH,
   setSettingsReader,
 } from './search/config.js'
-import type { SortMode, SourceId, TaskLanguage } from './search/types.js'
-import { SOURCE_IDS, TASK_LANGUAGES } from './search/types.js'
+import type {
+  SortMode,
+  SourceId,
+  TaskLanguage,
+  TranslateEngine,
+  TranslateTarget,
+} from './search/types.js'
+import {
+  SOURCE_IDS,
+  TASK_LANGUAGES,
+  TRANSLATE_ENGINES,
+  TRANSLATE_TARGETS,
+} from './search/types.js'
 
 export const name = 'dsh-plugin-litsearch'
 
@@ -144,6 +158,14 @@ export const Config = Schema.object({
   zoteroBaseUrl: Schema.string().default(DEFAULT_ZOTERO_BASE_URL).volatile(),
   zoteroAttachPdf: Schema.boolean().default(DEFAULT_ZOTERO_ATTACH_PDF).volatile(),
   zoteroTag: Schema.string().default(DEFAULT_ZOTERO_TAG).volatile(),
+  /** 默认翻译引擎；只影响新发起的翻译，已缓存译文不受影响。 */
+  translateProvider: Schema.union(TRANSLATE_ENGINES.map((id) => Schema.const(id)))
+    .default(DEFAULT_TRANSLATE_ENGINE)
+    .volatile(),
+  /** 默认目标语言；auto = 中文→英文、其它→中文简体。 */
+  translateTarget: Schema.union(TRANSLATE_TARGETS.map((code) => Schema.const(code)))
+    .default(DEFAULT_TRANSLATE_TARGET)
+    .volatile(),
 })
 
 export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): void {
@@ -209,6 +231,8 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     zoteroBaseUrl: normalizeBaseUrl(config.zoteroBaseUrl.get()),
     zoteroAttachPdf: config.zoteroAttachPdf.get(),
     zoteroTag: config.zoteroTag.get().trim().slice(0, 40) || DEFAULT_ZOTERO_TAG,
+    translateProvider: normalizeTranslateEngine(config.translateProvider.get()),
+    translateTarget: normalizeTranslateTarget(config.translateTarget.get()),
   }))
 
   // 任务状态是模型工具与 HTTP 路由的唯一事实源。
@@ -240,7 +264,18 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
   // 人侧：右侧栏面板与设置页通过回环端点读写任务。
   ctx.inject(['webServer'], (hostCtx: Context) => {
     const webServer = (hostCtx as unknown as { webServer: WebServerLike }).webServer
-    const handler = createHandler(service)
+    // 翻译器按需取 llm：服务未就绪或宿主没装 provider 时只走 Bing，不让端点整体 500。
+    const translate = createTranslator({
+      getLlm: () => {
+        try {
+          const get = (ctx as unknown as { get?: (name: string) => unknown }).get
+          return typeof get === 'function' ? get.call(ctx, 'llm') : undefined
+        } catch {
+          return undefined
+        }
+      },
+    })
+    const handler = createHandler(service, { translate })
     hostCtx.effect(
       () => webServer.register({ kind: 'prefix', path: ROUTE_MATCH, handler }),
       'dsh-plugin-litsearch: http routes',
@@ -287,6 +322,18 @@ function normalizeSort(value: string): SortMode {
 
 function normalizeLanguage(value: string): TaskLanguage {
   return TASK_LANGUAGES.includes(value as TaskLanguage) ? (value as TaskLanguage) : 'any'
+}
+
+function normalizeTranslateEngine(value: string): TranslateEngine {
+  return TRANSLATE_ENGINES.includes(value as TranslateEngine)
+    ? (value as TranslateEngine)
+    : DEFAULT_TRANSLATE_ENGINE
+}
+
+function normalizeTranslateTarget(value: string): TranslateTarget {
+  return TRANSLATE_TARGETS.includes(value as TranslateTarget)
+    ? (value as TranslateTarget)
+    : DEFAULT_TRANSLATE_TARGET
 }
 
 function normalizeBaseUrl(value: string): string {

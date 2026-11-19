@@ -30,7 +30,9 @@ import { EntityPanel } from './Entities'
 import { ChatIcon } from './icons'
 import { insertQuote, type InputActions } from './inline'
 import { tpl, type Translate } from './locales'
-import { hostOf, plainText } from './text'
+import { hostOf } from './text'
+import { TranslationButton } from './TranslationButton'
+import { useTranslation } from './useTranslation'
 import {
   canDownloadPdf,
   paperPdfStatus,
@@ -198,8 +200,17 @@ export function PaperPane({
   }, [toast])
 
   const paper = detail?.paper
-  // 与结果卡片一致：超长摘要默认折到 260 字，点开再看全文。
-  const abstractText = paper === undefined ? '' : plainText(paper.abstract)
+  // 详情加载完成前也要调用（hooks 不能条件调用）；空标题时按钮并未渲染。
+  const translation = useTranslation(
+    {
+      paperId: paper?.paperId ?? '',
+      title: paper?.title ?? '',
+      abstract: paper?.abstract ?? '',
+    },
+    t,
+  )
+  // 与结果卡片一致：超长摘要默认折到 260 字，点开再看全文；译文按同样规则截断。
+  const abstractText = translation.abstract
   const canCollapseAbstract = abstractText.length > ABSTRACT_PREVIEW
   const abstractShown =
     abstractOpen || !canCollapseAbstract
@@ -336,10 +347,10 @@ export function PaperPane({
           </div>
 
           {paper.url === '' ? (
-            <span style={PAPER_TITLE_STYLE}>{paper.title}</span>
+            <span style={PAPER_TITLE_STYLE}>{translation.title}</span>
           ) : (
             <a style={PAPER_TITLE_STYLE} href={paper.url} target="_blank" rel="noreferrer noopener">
-              {paper.title}
+              {translation.title}
             </a>
           )}
           {meta !== '' && <div style={metaStyle}>{meta}</div>}
@@ -387,6 +398,11 @@ export function PaperPane({
           </div>
 
           <div style={ACTION_STYLE}>
+            <TranslationButton
+              t={t}
+              state={translation}
+              className="ls-btn ls-btn-ghost ls-btn-compact"
+            />
             <button
               type="button"
               className="ls-btn ls-btn-primary ls-btn-compact"

@@ -48,8 +48,21 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 | 筛读与批量 | 没读 / 读过 / 纳入 / 排除、研究分组与分组阅读清单、与旧任务对比整批纳入「新增」、本页全选跨页累加、批量改状态 / 分组 / 下载 / 存 Zotero / 导出；下载与同步 5 并发、逐篇进度 |
 | 全文 | PDF 预览下载到工作目录 `dsh-litsearch/`；候选按「OA 直链 → 未确认直链 → 仓储渲染页」排序，缺直链时并发反查 OpenAlex / Europe PMC / OpenAIRE；抓取按域限并发、429 冷却、`%PDF-` + `%%EOF` 双校验、`.part` 原子落盘；网页全文依次走 Europe PMC JATS → PubMed Central JATS（缺 PMCID 时按 PMID 反查）→ arXiv HTML；导出 CSV / RIS / BibTeX / Markdown |
 | 对话 | 加入对话胶囊、任务续接、一句话批量下载 / 存 Zotero（含按页取数与只读预演） |
+| 翻译 | 卡片与单篇页的「原 / 译」一键切换，只翻标题与摘要、自动中英互译；Bing 免密钥与宿主 DeepSeek 两个引擎，设置里可选 |
 
 **能力边界**：PDF 由 Host 后台直连抓取，没有浏览器会话和机构授权，订阅 / 登录 / 人机验证页拿不到，403 / 限流 / HTML 页 / 无候选分别给原因，浏览器打开卡片上的 PDF / DOI 手动另存即可；填联系邮箱启用 Unpaywall 补 OA 候选，但补出的出版商直链仍可能被拒。
+
+## 标题与摘要翻译
+
+每张文献卡片右上角、「加入对话」左边有一个小按钮：**点「译」才开始翻译**，译文会原地替换标题与摘要、按钮变成「原」；再点回到原文。翻译过程中按钮显示转圈图标，来回切换是瞬时的，不会重复请求引擎。
+
+- **只翻标题与摘要**：作者、期刊、年份、来源徽章、DOI 与按钮文案保持原文。译文标题仍是可点的外链。
+- **自动判向**：中文原文译英文，其它语种译中文简体；设置里也能手动锁定 简中 / 繁中 / 英 / 日 / 韩 / 法 / 德 / 俄。中文摘要里夹 `PCR`、`VSC` 这类缩写不会被误判成英文。
+- **两个引擎**：默认 Bing（免密钥、通常 1s 内返回）；切到 DeepSeek 走宿主当前账号模型，学术长句更顺但占额度，取不到模型或调用失败时自动回落 Bing，悬停按钮能看到实际用的引擎。
+- **缓存在内存**：译文只存在浏览器里，刷新页面即失效；同一篇在卡片与单篇页之间共用，切换 tab 不会重新翻译。切换引擎后已翻过的卡片仍显示旧译文，刷新后才会按新引擎重译。
+- 「加入对话」始终插入**原文**，翻译只作为阅读辅助，不影响模型看到的术语。
+
+> Bing 通道用的是微软网页翻译的免鉴权端点（`edge.microsoft.com/translate/translatetext`），不是正式 API，协议随时可能变；失效时会直接提示翻译失败，改切 DeepSeek 即可继续用。
 
 ## 对话里的范围怎么算
 
@@ -98,6 +111,7 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 | `pdfRoot` / `pdfMaxMb` / `autoDownloadPdf` / `pdfCacheMaxMb` | PDF 目录、单文件上限、检索后自动下载、去重缓存上限（0 关闭清理） | 工作目录 / 30 / 关 / 512 |
 | `enableEpmcFulltext` / `enablePmcFulltext` / `zoteroEnabled` / `zoteroBaseUrl` | Europe PMC 兜底 / PubMed Central 兜底 / 同步开关 / connector 地址（仅回环） | 开 / 开 / 开 / `http://127.0.0.1:23119` |
 | `zoteroAttachPdf` / `zoteroTag` | 附带 PDF / 附加标签 | 开 / `dsh-litsearch` |
+| `translateProvider` / `translateTarget` | 翻译引擎（`bing` / `deepseek`）与目标语言（`auto` = 中英互译，或锁定某门语言） | `bing` / `auto` |
 
 设置页另有逐源探活与限流冷却、PDF 目录可写性、Zotero 连接测试，以及按任务 / PDF 缓存 / 全部清理文件。
 
@@ -123,6 +137,7 @@ $DSH_HOME/storages/dsh-plugin-litsearch/
 
 - 检索词发给所选数据源的公开 API；谷歌学术（默认关闭）经第三方 SerpAPI 转发；填了 `contactEmail` 才用 DOI + 邮箱查 Unpaywall。
 - PDF 下载与 Zotero connector 只在本机（connector 仅回环）；视图快照与模型指令只在内存。API Key 存本机配置文件（明文），不回显、不写日志。
+- 点「译」翻译时，该篇的**标题与摘要**会发给所选引擎：Bing 走微软翻译端点，DeepSeek 走你当前账号的模型。不点翻译就不会发送。
 
 ## 本地开发
 

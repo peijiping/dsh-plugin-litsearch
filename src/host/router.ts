@@ -12,11 +12,16 @@ import { mkdir, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { dirname, extname, isAbsolute, resolve } from 'node:path'
 
-import { MAX_LIMIT, ROUTE_PREFIX, SESSION_HEADER, WRITE_HEADER } from '../search/config.js'
+import {
+  MAX_LIMIT,
+  ROUTE_PREFIX,
+  SESSION_HEADER,
+  WRITE_HEADER,
+} from '../search/config.js'
 import { SearchError } from '../search/errors.js'
 import { asRecord } from '../search/normalize.js'
 import { isSourceId } from '../search/providers/index.js'
-import { TASK_LANGUAGES } from '../search/types.js'
+import { TASK_LANGUAGES, TRANSLATE_ENGINES, TRANSLATE_TARGETS } from '../search/types.js'
 import type {
   AnnotationInput,
   ApiEnvelope,
@@ -32,6 +37,7 @@ import type {
   TaskGroup,
   TaskLanguage,
   TaskOrigin,
+  TranslateInput,
   ViewSnapshot,
 } from '../search/types.js'
 import type {
@@ -43,6 +49,7 @@ import type {
   TaskService,
 } from './tasks/service.js'
 import { resolvePdfRoot } from './pdf/store.js'
+import type { TranslateFn } from './translate.js'
 import { resolveSessionWorkspace } from './workspace.js'
 
 /** dsh `webServer` 的最小结构接口（类型不在已安装的 dsh 包里）。 */
@@ -309,6 +316,17 @@ function readStringArray(
     throw new SearchError('bad_request', `${name} 最多 ${maxItems} 项`)
   }
   return value.map((item) => item.trim().slice(0, maxLength)).filter((item) => item !== '')
+}
+
+/** 翻译入参：1~2 条非空文本；超长由翻译器统一报错，不在这里静默截断。 */
+function readTranslateTexts(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new SearchError('bad_request', 'texts 必须是字符串数组')
+  }
+  if (value.length === 0 || value.length > 2) {
+    throw new SearchError('bad_request', 'texts 需要 1~2 条')
+  }
+  return value.map((item) => item.trim()).filter((item) => item !== '')
 }
 
 /**
@@ -869,9 +887,15 @@ async function handleTasks(
   fail(res, 404, 'not_found', `未知 action ${action}`)
 }
 
+export interface HandlerDeps {
+  /** 翻译器；未注入时 `/translate` 直接报不可用（不影响其它端点）。 */
+  translate?: TranslateFn
+}
+
 /** 构造挂在 `webServer` 上的前缀路由处理器。 */
 export function createHandler(
   service: TaskService,
+  deps: HandlerDeps = {},
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
     try {
@@ -911,6 +935,27 @@ export function createHandler(
         const raw = url.searchParams.get('sinceRev') ?? '0'
         const sinceRev = Number(raw)
         ok(res, await service.eventsSince(Number.isFinite(sinceRev) ? sinceRev : 0))
+        return
+      }
+
+      if (head === 'translate') {
+        if (req.method !== 'POST') {
+          fail(res, 405, 'bad_request', 'translate 仅支持 POST')
+          return
+        }
+        if (deps.translate === undefined) {
+          throw new SearchError('upstream_error', '翻译服务不可用')
+        }
+        const body = await readJsonBody(req)
+        // 只接收标题 + 摘要两条；空串会被过滤，位置由 Host 侧按索引还原。
+        const texts = readTranslateTexts(body['texts'])
+        if (texts.length === 0) {
+          throw new SearchError('bad_request', '缺少 texts 参数')
+        }
+        const provider = readEnum(body['provider'], 'provider', TRANSLATE_ENGINES)
+        const target = readEnum(body['target'], 'target', TRANSLATE_TARGETS)
+        const input: TranslateInput = { texts, provider, target }
+        ok(res, await deps.translate(input))
         return
       }
 

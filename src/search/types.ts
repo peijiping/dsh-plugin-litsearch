@@ -956,6 +956,62 @@ export interface HealthInfo {
   storageDir: string
 }
 
+/** 翻译引擎：Bing 走免密钥网页端点，DeepSeek 走宿主当前账号模型。 */
+export type TranslateEngine = 'bing' | 'deepseek'
+
+export const TRANSLATE_ENGINES: readonly TranslateEngine[] = ['bing', 'deepseek']
+
+/**
+ * 目标语言。`auto` 表示按原文语种中英互译（中文→英文，其它→中文简体），
+ * 其余为手动锁定；Bing / DeepSeek 两侧共用同一套取值。
+ */
+export type TranslateTarget =
+  | 'auto'
+  | 'zh-CN'
+  | 'zh-TW'
+  | 'en'
+  | 'ja'
+  | 'ko'
+  | 'fr'
+  | 'de'
+  | 'ru'
+
+export const TRANSLATE_TARGETS: readonly TranslateTarget[] = [
+  'auto',
+  'zh-CN',
+  'zh-TW',
+  'en',
+  'ja',
+  'ko',
+  'fr',
+  'de',
+  'ru',
+]
+
+/** 翻译请求：标题与摘要成组发送，Host 统一判向、统一选引擎。 */
+export interface TranslateInput {
+  texts: string[]
+  /** 覆盖设置里的默认引擎；不传则读设置。 */
+  provider?: TranslateEngine
+  /** 覆盖设置里的目标语言；不传则读设置。 */
+  target?: TranslateTarget
+}
+
+/** 翻译结果；`texts` 与请求顺序一一对应。 */
+export interface TranslateResult {
+  texts: string[]
+  /** 实际使用的引擎（DeepSeek 失败回落时为 bing）。 */
+  provider: TranslateEngine
+  /** 判向之后的目标语言，不会是 auto。 */
+  target: Exclude<TranslateTarget, 'auto'>
+  /** 识别到的源语言（Bing 返回的 detectedLanguage，或本地判定结果）。 */
+  detected: string
+  /** DeepSeek 失败后自动回落 Bing。 */
+  fallback: boolean
+  /** 原文已是目标语言，未做翻译。 */
+  sameLanguage: boolean
+}
+
 /** Host HTTP 端点统一信封。 */
 export type ApiEnvelope<T> = { ok: true; data: T } | { ok: false; error: ApiError }
 

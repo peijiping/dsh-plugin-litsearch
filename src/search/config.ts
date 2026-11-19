@@ -5,7 +5,7 @@
  * 保存配置后无需重启即生效。
  */
 
-import type { SortMode, SourceId, TaskLanguage } from './types.js'
+import type { SortMode, SourceId, TaskLanguage, TranslateEngine, TranslateTarget } from './types.js'
 import { SOURCE_IDS } from './types.js'
 
 /**
@@ -95,6 +95,45 @@ export const DEFAULT_ZOTERO_TAG = 'dsh-litsearch'
 /** 持久化时单条摘要保留的字符数。 */
 export const MAX_ABSTRACT_CHARS = 800
 
+// ---- 翻译 -------------------------------------------------------------------
+
+/** 默认翻译引擎：Bing 免密钥、快，作为默认。 */
+export const DEFAULT_TRANSLATE_ENGINE: TranslateEngine = 'bing'
+
+/** 默认目标语言：自动判向（中文→英文，其它→中文简体）。 */
+export const DEFAULT_TRANSLATE_TARGET: TranslateTarget = 'auto'
+
+/**
+ * 微软网页翻译端点（Edge 浏览器内置翻译用的那个，免鉴权）。
+ *
+ * 微软已于 2026-07 关停 `edge.microsoft.com/translate/auth` 令牌端点，
+ * 但 `translatetext` 仍可用：POST JSON 字符串数组，`?to=` 指定目标语言，
+ * 响应按数组顺序一一对应。它是网页接口而非正式 API，协议可能再变，
+ * 因此设置里保留了 DeepSeek 作为可选引擎。
+ */
+export const BING_TRANSLATE_ENDPOINT = 'https://edge.microsoft.com/translate/translatetext'
+
+/** 偶发要求 Bearer 时的临时 token 端点（多数情况下用不到）。 */
+export const BING_TRANSLATE_AUTH_URL = 'https://edge.microsoft.com/translate/auth'
+
+/** 单次翻译超时：Bing 通常 1s 内返回，DeepSeek 走模型留足余量。 */
+export const TRANSLATE_TIMEOUT_MS = 20_000
+
+/** 单条文本的翻译字符上限；超出直接报错，不静默截断。 */
+export const TRANSLATE_MAX_CHARS = 8_000
+
+/** DeepSeek 单块字符数：块太大容易被 maxTokens 截断，块太小调用次数多。 */
+export const TRANSLATE_CHUNK_CHARS = 1_800
+
+/** DeepSeek 并发翻译的块数。 */
+export const TRANSLATE_CHUNK_CONCURRENCY = 3
+
+/** DeepSeek 精翻使用的模型；宿主 provider 没有它时退到第一个模型。 */
+export const TRANSLATE_MODEL = 'deepseek-flash'
+
+/** 进程内翻译缓存条数上限（同一篇反复点不该反复花额度）。 */
+export const TRANSLATE_CACHE_SIZE = 120
+
 /** 写端点的自定义请求头（与 JSON content-type 一起构成非简单请求）。 */
 export const WRITE_HEADER = 'x-dsh-litsearch-write'
 
@@ -159,6 +198,10 @@ export interface LitsearchSettings {
   zoteroBaseUrl: string
   zoteroAttachPdf: boolean
   zoteroTag: string
+  /** 默认翻译引擎；标题与摘要会发送给所选服务。 */
+  translateProvider: TranslateEngine
+  /** 默认目标语言；`auto` = 中文→英文、其它→中文简体。 */
+  translateTarget: TranslateTarget
 }
 
 /** 默认读取器：入口未注入时回落到常量。 */
@@ -196,6 +239,8 @@ let readSettings = (): LitsearchSettings => ({
   zoteroBaseUrl: DEFAULT_ZOTERO_BASE_URL,
   zoteroAttachPdf: DEFAULT_ZOTERO_ATTACH_PDF,
   zoteroTag: DEFAULT_ZOTERO_TAG,
+  translateProvider: DEFAULT_TRANSLATE_ENGINE,
+  translateTarget: DEFAULT_TRANSLATE_TARGET,
 })
 
 /** 由插件入口在 `apply` 时注入。 */

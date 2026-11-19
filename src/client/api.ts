@@ -30,6 +30,8 @@ import type {
   TaskLanguage,
   TaskStatsReport,
   TaskSummary,
+  TranslateInput,
+  TranslateResult,
   ViewSnapshot,
   ZoteroProbeResult,
   ZoteroDuplicateCheckResult,
@@ -174,6 +176,19 @@ export interface ResultsQuery {
 
 export function fetchHealth(signal?: AbortSignal): Promise<HealthInfo> {
   return request<HealthInfo>('/health', { signal })
+}
+
+/**
+ * 翻译标题与摘要。
+ *
+ * 引擎与目标语言默认由 Host 读设置决定（含按原文语种自动判向）；
+ * 只有需要临时覆盖时才传 provider / target。
+ */
+export function translateTexts(
+  body: TranslateInput,
+  signal?: AbortSignal,
+): Promise<TranslateResult> {
+  return request<TranslateResult>('/translate', { ...writeInit('POST', body), signal })
 }
 
 export function fetchEvents(sinceRev: number, signal?: AbortSignal): Promise<EventsPage> {

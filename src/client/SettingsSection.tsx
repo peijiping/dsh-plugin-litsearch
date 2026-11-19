@@ -36,6 +36,10 @@ import {
   SORT_FIELD,
   SORT_MODES,
   TEXT_FIELD,
+  TRANSLATE_PROVIDER_FIELD,
+  TRANSLATE_PROVIDERS,
+  TRANSLATE_TARGET_FIELD,
+  TRANSLATE_TARGET_OPTIONS,
   ZOTERO_ATTACH_FIELD,
   ZOTERO_BASE_URL_FIELD,
   ZOTERO_ENABLED_FIELD,
@@ -123,6 +127,8 @@ export function SettingsSection(props: Props): ReactElement {
     state.zoteroBaseUrl.text,
     state.zoteroAttachPdf.text,
     state.zoteroTag.text,
+    state.translateProvider.text,
+    state.translateTarget.text,
   ].join('\u0000')
 
   useEffect(() => {
@@ -167,6 +173,9 @@ export function SettingsSection(props: Props): ReactElement {
       : readSourceList(state.defaultSources.text)
   const sort = state.defaultSort.text === '' ? 'relevance' : state.defaultSort.text
   const language = state.defaultLanguage.text === '' ? 'any' : state.defaultLanguage.text
+  const translateProvider =
+    state.translateProvider.text === '' ? 'bing' : state.translateProvider.text
+  const translateTarget = state.translateTarget.text === '' ? 'auto' : state.translateTarget.text
 
   /** 逐来源运行时健康状态，供来源分组内的探活行展示。 */
   const healthById = new Map((health?.sourceHealth ?? []).map((entry) => [entry.id, entry]))
@@ -380,6 +389,51 @@ export function SettingsSection(props: Props): ReactElement {
               </Pill>
             ))}
           </div>
+        </div>
+      </section>
+
+      <section style={GROUP_STYLE}>
+        <h4 style={GROUP_HEAD_STYLE}>{t('group.translate')}</h4>
+        <div style={HINT_STYLE}>{t('settings.translateHint')}</div>
+
+        <div style={TRANSLATE_ROW_STYLE}>
+          <div style={TOGGLE_INFO_STYLE}>
+            <span style={CHOICE_LABEL_STYLE}>{t('field.translateProvider')}</span>
+            <span style={CHOICE_HINT_STYLE}>{t('field.translateProviderHint')}</span>
+          </div>
+          <select
+            style={TRANSLATE_SELECT_STYLE}
+            value={translateProvider}
+            disabled={locked}
+            aria-label={t('field.translateProvider')}
+            onChange={(event) => props.edit(TRANSLATE_PROVIDER_FIELD, event.target.value)}
+          >
+            {TRANSLATE_PROVIDERS.map((value) => (
+              <option key={value} value={value}>
+                {t(`translate.provider.${value}`)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={TRANSLATE_ROW_STYLE}>
+          <div style={TOGGLE_INFO_STYLE}>
+            <span style={CHOICE_LABEL_STYLE}>{t('field.translateTarget')}</span>
+            <span style={CHOICE_HINT_STYLE}>{t('field.translateTargetHint')}</span>
+          </div>
+          <select
+            style={TRANSLATE_SELECT_STYLE}
+            value={translateTarget}
+            disabled={locked}
+            aria-label={t('field.translateTarget')}
+            onChange={(event) => props.edit(TRANSLATE_TARGET_FIELD, event.target.value)}
+          >
+            {TRANSLATE_TARGET_OPTIONS.map((tag) => (
+              <option key={tag} value={tag}>
+                {t(`translate.target.${tag}`)}
+              </option>
+            ))}
+          </select>
         </div>
       </section>
 
@@ -874,6 +928,26 @@ const CHOICE_ROW_STYLE: CSSProperties = {
   gap: 4,
   padding: '6px 0',
   borderBottom: '1px solid var(--ls-line)',
+}
+/** 翻译分组：左侧说明 + 右侧下拉，与参考设置页一致。 */
+const TRANSLATE_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 10,
+  padding: '6px 0',
+  borderBottom: '1px solid var(--ls-line)',
+}
+/** 引擎名比语言名长，限宽免得把左侧说明挤没。 */
+const TRANSLATE_SELECT_STYLE: CSSProperties = {
+  flexShrink: 0,
+  maxWidth: '55%',
+  fontSize: 12,
+  padding: '3px 6px',
+  borderRadius: 5,
+  border: '1px solid var(--ls-line-strong)',
+  background: 'transparent',
+  color: 'inherit',
 }
 const CHOICE_LABEL_STYLE: CSSProperties = { fontSize: 12, fontWeight: 500 }
 const CHOICE_HINT_STYLE: CSSProperties = { fontSize: 11, color: 'var(--ls-ink-3)', lineHeight: 1.5 }

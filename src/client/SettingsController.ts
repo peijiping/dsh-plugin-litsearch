@@ -16,7 +16,13 @@ import {
   type SnapshotStore,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import { SOURCE_IDS, TASK_LANGUAGES, type SourceId } from '../search/types'
+import {
+  SOURCE_IDS,
+  TASK_LANGUAGES,
+  TRANSLATE_ENGINES,
+  TRANSLATE_TARGETS,
+  type SourceId,
+} from '../search/types'
 
 /** 设置命名空间 id（= cordis.patch.yml 的 insert 行 id）。 */
 export const ROW_ID = 'dsh-plugin-litsearch'
@@ -56,6 +62,8 @@ export type FieldName =
   | 'zoteroBaseUrl'
   | 'zoteroAttachPdf'
   | 'zoteroTag'
+  | 'translateProvider'
+  | 'translateTarget'
 
 export const TEXT_FIELD = 'contactEmail' as const
 export const NCBI_KEY_FIELD = 'ncbiApiKey' as const
@@ -76,6 +84,8 @@ export const ZOTERO_ENABLED_FIELD: FieldName = 'zoteroEnabled'
 export const ZOTERO_BASE_URL_FIELD: FieldName = 'zoteroBaseUrl'
 export const ZOTERO_ATTACH_FIELD: FieldName = 'zoteroAttachPdf'
 export const ZOTERO_TAG_FIELD: FieldName = 'zoteroTag'
+export const TRANSLATE_PROVIDER_FIELD: FieldName = 'translateProvider'
+export const TRANSLATE_TARGET_FIELD: FieldName = 'translateTarget'
 
 const NUMBER_FIELDS: readonly FieldName[] = [
   'defaultPageSize',
@@ -114,6 +124,10 @@ const BOOLEAN_FIELDS: readonly FieldName[] = [
 
 export const SORT_MODES = ['relevance', 'citations', 'year'] as const
 export const LANGUAGES = TASK_LANGUAGES
+/** 翻译引擎候选；与 Host `TranslateEngine` 同步。 */
+export const TRANSLATE_PROVIDERS = TRANSLATE_ENGINES
+/** 目标语言候选；首项 `auto` = 按原文语种中英互译。 */
+export const TRANSLATE_TARGET_OPTIONS = TRANSLATE_TARGETS
 
 /** 布尔字段：表单只认文本，开关以 'true' / 'false' 暂存。 */
 function booleanField(field: string): SettingsFieldSpec {
@@ -217,6 +231,8 @@ export interface SettingsState extends SettingsFormState {
   zoteroBaseUrl: SettingsFieldState
   zoteroAttachPdf: SettingsFieldState
   zoteroTag: SettingsFieldState
+  translateProvider: SettingsFieldState
+  translateTarget: SettingsFieldState
 }
 
 /** 席位注册时经 `inject()` 下发给组件的面。 */
@@ -240,6 +256,8 @@ export class LitsearchSettingsController {
       sourcesField(SOURCES_FIELD),
       enumField(SORT_FIELD, SORT_MODES, 'relevance'),
       enumField(LANGUAGE_FIELD, LANGUAGES, 'any'),
+      enumField(TRANSLATE_PROVIDER_FIELD, TRANSLATE_PROVIDERS, 'bing'),
+      enumField(TRANSLATE_TARGET_FIELD, TRANSLATE_TARGET_OPTIONS, 'auto'),
       ...BOOLEAN_FIELDS.map((field): SettingsFieldSpec => booleanField(field)),
     ])
     this.store = this.form.bind(() => this.projection())
@@ -281,6 +299,8 @@ export class LitsearchSettingsController {
       zoteroBaseUrl: this.form.field(ZOTERO_BASE_URL_FIELD),
       zoteroAttachPdf: this.form.field(ZOTERO_ATTACH_FIELD),
       zoteroTag: this.form.field(ZOTERO_TAG_FIELD),
+      translateProvider: this.form.field(TRANSLATE_PROVIDER_FIELD),
+      translateTarget: this.form.field(TRANSLATE_TARGET_FIELD),
     }
   }
 
