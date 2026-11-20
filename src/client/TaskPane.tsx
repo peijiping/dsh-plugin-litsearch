@@ -20,6 +20,7 @@ import type {
 } from '../search/types'
 import { isManualPdfFailure } from '../search/types'
 import {
+  chooseDownloadDir,
   downloadPaperPdf,
   exportUrl,
   fetchPaper,
@@ -137,6 +138,8 @@ interface BatchMeta {
   origin: 'panel' | 'model'
   scopeLabel?: string
   reason?: string
+  /** 模型点名了保存目录时直接开跑；缺省则先停在选目录阶段。 */
+  dir?: string
 }
 
 /** `ResultsQuery` 的扁平投影：只保留已生效、可序列化的筛选值。 */
@@ -183,6 +186,16 @@ export function TaskPane({
   /** 批量下载弹窗：只集中展示，真实状态仍写在 downloads / 任务详情的 states 里。 */
   const [batchItems, setBatchItems] = useState<readonly BatchDownloadItem[]>([])
   const [batchOpen, setBatchOpen] = useState(false)
+  /** 先选目录（setup）还是已开始下载（running）；下载完成仍保持 running。 */
+  const [batchPhase, setBatchPhase] = useState<'setup' | 'running'>('setup')
+  /** 本次下载的保存目录；空串表示交给 Host 用默认目录。 */
+  const [batchDir, setBatchDir] = useState('')
+  /** 任务的当前默认目录，用于占位与「默认 …」提示。 */
+  const [batchDefaultDir, setBatchDefaultDir] = useState('')
+  const [batchPicking, setBatchPicking] = useState(false)
+  /** 弹窗被占用（选目录中或下载中），模型指令排队等待，避免互相覆盖。 */
+  const [batchBusy, setBatchBusy] = useState(false)
+  const batchBusyRef = useRef(false)
   /** Zotero 同步弹窗：单篇与批量共用，先选目标目录再同步，并展示逐篇结果。 */
   const [zoteroItems, setZoteroItems] = useState<readonly BatchDownloadItem[]>([])
   const [zoteroOpen, setZoteroOpen] = useState(false)
@@ -240,6 +253,11 @@ export function TaskPane({
     setDownloads({})
     setBatchItems([])
     setBatchOpen(false)
+    setBatchPhase('setup')
+    setBatchDir('')
+    setBatchPicking(false)
+    batchBusyRef.current = false
+    setBatchBusy(false)
   }, [taskId])
 
   useEffect(() => {
@@ -329,46 +347,21 @@ export function TaskPane({
     else notify(t(outcome === 'no-editor' ? 'error.noEditor' : 'error.draftChanged'))
   }
 
+  /** 单篇下载也走批量弹窗：先确认保存目录，再开始下载。 */
   const downloadPaper = (paper: Paper): void => {
     if (taskId === null) return
-    const paperId = paper.paperId
-    setDownloads((previous) => ({ ...previous, [paperId]: { state: 'downloading' } }))
-    void (async () => {
-      try {
-        const result = await downloadPaperPdf(taskId, paperId)
-        if (result.status === 'downloaded') {
-          setDownloads((previous) => ({
-            ...previous,
-            [paperId]: { state: 'downloaded', ...(result.path === undefined ? {} : { path: result.path }) },
-          }))
-          notify(tpl(t('pdf.downloaded'), { name: result.filename ?? '' }), 'info', 6000)
-        } else {
-          setDownloads((previous) => ({
-            ...previous,
-            [paperId]: {
-              state: 'failed',
-              error: result.error ?? result.status,
-              ...(result.reason === undefined ? {} : { reason: result.reason }),
-              ...(result.links === undefined ? {} : { links: result.links }),
-            },
-          }))
-          notify(
-            result.status === 'html-only'
-              ? tpl(t('pdf.htmlFallback'), { message: result.error ?? '' })
-              : tpl(t('pdf.error'), { message: result.error ?? result.status }),
-            'error',
-            8000,
-          )
-        }
-      } catch (error) {
-        setDownloads((previous) => ({
-          ...previous,
-          [paperId]: { state: 'failed', error: messageOf(error) },
-        }))
-        notify(tpl(t('pdf.error'), { message: messageOf(error) }), 'error', 8000)
-      }
-      // 状态写回由 Host 广播的 rev 驱动；这里不再额外触发整页刷新。
-    })()
+    const source = paper.hitSources[0]?.source ?? paper.source
+    const meta = [paper.venue, paper.year === null ? '' : String(paper.year)]
+      .filter((part) => part !== '')
+      .join(' · ')
+    stageDownload([
+      {
+        paperId: paper.paperId,
+        title: paper.title,
+        source,
+        ...(meta === '' ? {} : { meta }),
+      },
+    ])
   }
 
   /** 单篇 / 批量 / 模型指令共用一个弹窗：先选 Zotero 目录，再逐篇同步。 */
@@ -430,20 +423,55 @@ export function TaskPane({
   }
 
   /**
-   * 批量下载：打开进度弹窗后按最多 5 篇并发下载。
+   * 打开下载框并先停在「选目录」阶段。
    *
-   * 已下载（含文件已删除以外的正常已下载）的文献直接略过，不再重复请求；
-   * 每篇的结果实时写入 downloads，弹窗只做集中展示。批量未结束时再次触发
-   * 只重新打开弹窗，避免两轮循环重复下载同一批文献。
+   * 单篇、批量、模型未指定目录的指令都走这里；模型指定了目录则由
+   * runBatchDownload 直接开跑。真正执行仍是最多 5 篇并发，结果实时写入
+   * downloads，弹窗只做集中展示。
    */
-  const startBatchDownload = (
+  const stageDownload = (
     entries: readonly BatchDownloadItem[],
     meta: BatchMeta = { origin: 'panel' },
   ): void => {
     if (taskId === null || entries.length === 0) return
     if (batchRunningRef.current) {
       // 上一轮还没跑完：只把弹窗叫回来，不替换清单、也不重复下载。
-      // 模型指令不会走到这里（消费 effect 在运行时不取队列），因此不会丢指令。
+      setBatchOpen(true)
+      return
+    }
+    const defaultDir = detail?.downloadDir ?? ''
+    setBatchItems(entries.map((entry) => ({ ...entry })))
+    setBatchMeta(meta)
+    setBatchDefaultDir(defaultDir)
+    setBatchDir(meta.dir ?? defaultDir)
+    setBatchCancelled(false)
+    setBatchPhase('setup')
+    // 选目录阶段也占用弹窗，模型指令先排队，避免被下一单悄悄顶掉。
+    batchBusyRef.current = true
+    setBatchBusy(true)
+    setBatchOpen(true)
+    if (meta.dir !== undefined) runBatchDownload(entries, meta, meta.dir)
+  }
+
+  /** 用户确认目录后开始下载；此后弹窗直接显示进度。 */
+  const confirmDownload = (): void => {
+    if (batchPhase !== 'setup' || taskId === null || batchRunningRef.current) return
+    const dir = batchDir.trim()
+    if (dir !== '' && !looksLikeAbsoluteDir(dir)) {
+      notify(t('batch.dirInvalid'), 'error', 6000)
+      return
+    }
+    runBatchDownload(batchItems, batchMeta, dir === '' ? undefined : dir)
+  }
+
+  /** 真正的下载循环：按最多 5 篇并发，已下载的文献直接略过。 */
+  const runBatchDownload = (
+    entries: readonly BatchDownloadItem[],
+    meta: BatchMeta,
+    dir: string | undefined,
+  ): void => {
+    if (taskId === null || entries.length === 0) return
+    if (batchRunningRef.current) {
       setBatchOpen(true)
       return
     }
@@ -452,7 +480,12 @@ export function TaskPane({
     setBatchCancelled(false)
     setBatchMeta(meta)
     setBatchItems(entries.map((entry) => ({ ...entry })))
+    setBatchDefaultDir(detail?.downloadDir ?? '')
+    setBatchDir(dir ?? (detail?.downloadDir ?? ''))
+    setBatchPhase('running')
     setBatchOpen(true)
+    batchBusyRef.current = true
+    setBatchBusy(true)
     batchRunningRef.current = true
     setBatchRunning(true)
     void (async () => {
@@ -474,7 +507,7 @@ export function TaskPane({
         changed = true
         setDownloads((previous) => ({ ...previous, [paperId]: { state: 'downloading' } }))
         try {
-          const result = await downloadPaperPdf(taskId, paperId, controller.signal)
+          const result = await downloadPaperPdf(taskId, paperId, dir, controller.signal)
           if (result.status === 'downloaded') {
             ok += 1
             setDownloads((previous) => ({
@@ -530,7 +563,9 @@ export function TaskPane({
       } finally {
         batchRunningRef.current = false
         batchAbortRef.current = null
+        batchBusyRef.current = false
         // 置回 false 会触发模型指令消费 effect，自动接着跑队列里的下一条。
+        setBatchBusy(false)
         setBatchRunning(false)
       }
       // 被取消时不报「下载完成」：弹窗里已有「已取消」说明。
@@ -549,7 +584,7 @@ export function TaskPane({
     if (taskId === null || ids.length === 0) return
     const known = new Map<string, string>()
     for (const paper of view.page?.papers ?? []) known.set(paper.paperId, paper.title)
-    startBatchDownload(ids.map((paperId) => ({ paperId, title: known.get(paperId) ?? '' })))
+    stageDownload(ids.map((paperId) => ({ paperId, title: known.get(paperId) ?? '' })))
     const missing = ids.filter((paperId) => !known.has(paperId))
     if (missing.length === 0) return
     void Promise.all(
@@ -571,6 +606,30 @@ export function TaskPane({
   const cancelBatch = (): void => {
     batchAbortRef.current?.abort()
     setBatchCancelled(true)
+  }
+
+  /** 关闭弹窗：选目录阶段直接释放占用，下载中只隐藏、后台继续跑完。 */
+  const closeBatch = (): void => {
+    setBatchOpen(false)
+    if (!batchRunningRef.current) {
+      batchBusyRef.current = false
+      setBatchBusy(false)
+    }
+  }
+
+  /** 调宿主原生选目录框；结果回填到输入框，用户仍可手动编辑。 */
+  const pickBatchDir = (): void => {
+    if (batchPicking) return
+    setBatchPicking(true)
+    void chooseDownloadDir(batchDir.trim() === '' ? batchDefaultDir : batchDir)
+      .then((result) => {
+        if (result.cancelled) return
+        if (result.path !== undefined && result.path !== '') setBatchDir(result.path)
+      })
+      .catch((error: unknown) => {
+        notify(tpl(t('batch.pickFailed'), { message: messageOf(error) }), 'error', 8000)
+      })
+      .finally(() => setBatchPicking(false))
   }
 
   // 上报当前视图快照：Host 侧的模型工具靠它算准「当前页 / 当前筛选全部」。
@@ -596,10 +655,10 @@ export function TaskPane({
     return () => clearTimeout(timer)
   }, [taskId, view.detail, view.page, view.pageIndex, view.pageSize, filters, selected])
 
-  // 消费模型下载指令：始终串行。上一轮没跑完就留在 store 队列里，
-  // 结束（setBatchRunning(false)）后自动接着跑下一条，不丢也不重复。
+  // 消费模型下载指令：始终串行。上一轮没跑完（含停在选目录）就留在 store
+  // 队列里，空闲后自动接着处理下一条，不丢也不重复。
   useEffect(() => {
-    if (taskId === null || batchRunningRef.current || batchRunning) return
+    if (taskId === null || batchBusyRef.current || batchBusy || batchRunning) return
     const command = pendingCommands[0]
     if (command === undefined) return
     if (command.paperIds.length === 0) {
@@ -618,14 +677,15 @@ export function TaskPane({
       }
     })
     markConsumed(command.commandId)
-    startBatchDownload(items, {
+    stageDownload(items, {
       origin: 'model',
       scopeLabel: command.scopeLabel,
       reason: command.reason,
+      ...(command.dir === undefined ? {} : { dir: command.dir }),
     })
-    // startBatchDownload 每次渲染都是新函数，故意不进依赖：运行中靠
-    // batchRunningRef 同步拦截，结束后靠 batchRunning 变化重新消费队列。
-  }, [taskId, pendingCommands, batchRunning])
+    // stageDownload 每次渲染都是新函数，故意不进依赖：占用状态靠
+    // batchBusyRef 同步拦截，空闲后靠 batchBusy 变化重新消费队列。
+  }, [taskId, pendingCommands, batchBusy, batchRunning])
 
   // 消费模型 Zotero 指令：同步弹窗同时只能跑一批，弹窗开着时指令留在队列里，
   // 关闭后自动接着消费下一条（与下载队列互不干扰）。tab 未挂载时由 store 暂存。
@@ -1315,7 +1375,7 @@ export function TaskPane({
           onRevealDir={onRevealLocal}
           onZotero={zoteroPaper}
           onBatchDownload={(papers) =>
-            startBatchDownload(
+            stageDownload(
               papers.map((paper) => ({ paperId: paper.paperId, title: paper.title })),
             )
           }
@@ -1376,10 +1436,15 @@ export function TaskPane({
         scopeLabel={batchMeta.scopeLabel}
         reason={batchMeta.reason}
         cancelled={batchCancelled}
+        started={batchPhase === 'running'}
+        dir={batchDir}
+        defaultDir={batchDefaultDir}
+        picking={batchPicking}
+        onDirChange={setBatchDir}
+        onPickDir={pickBatchDir}
+        onConfirm={confirmDownload}
         onCancel={batchMeta.origin === 'model' ? cancelBatch : undefined}
-        onClose={() => {
-          setBatchOpen(false)
-        }}
+        onClose={closeBatch}
       />
       <ZoteroSyncDialog
         t={t}
@@ -1797,6 +1862,17 @@ function BulkBar({
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** 下载目录只接受绝对路径或 `~/`；相对路径由 Host 拒绝，这里先在前端拦下。 */
+function looksLikeAbsoluteDir(value: string): boolean {
+  return (
+    value === '~' ||
+    value.startsWith('~/') ||
+    value.startsWith('/') ||
+    value.startsWith('\\\\') ||
+    /^[A-Za-z]:[\\/]/u.test(value)
+  )
 }
 
 /** 结果页「检索还在进行」的提示条：蓝色高亮块 + 旋转图标。 */

@@ -8,7 +8,12 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { PDF_SUBDIR, expandHomePath, resolvePdfRootPath } from '../src/host/pdf/root.ts'
+import {
+  PDF_SUBDIR,
+  expandHomePath,
+  resolveDownloadDir,
+  resolvePdfRootPath,
+} from '../src/host/pdf/root.ts'
 import { normalizeWorkspace } from '../src/host/workspace.ts'
 
 const HOME = '/tmp/litsearch-fake-home'
@@ -40,4 +45,15 @@ test('normalizeWorkspace 只接受绝对路径并去掉尾斜杠', () => {
   assert.equal(normalizeWorkspace('relative/dir'), undefined)
   assert.equal(normalizeWorkspace('   '), undefined)
   assert.equal(normalizeWorkspace(undefined), undefined)
+})
+
+test('resolveDownloadDir 只接受绝对路径，支持 ~ 展开并保留工作空间之外的目录', () => {
+  assert.equal(resolveDownloadDir('/data/papers', HOME), '/data/papers')
+  assert.equal(resolveDownloadDir('  /data/papers  ', HOME), '/data/papers')
+  assert.equal(resolveDownloadDir('~', HOME), HOME)
+  assert.equal(resolveDownloadDir('~/papers', HOME), join(HOME, 'papers'))
+  // 相对路径 / 空白不做静默回落。
+  assert.equal(resolveDownloadDir('papers', HOME), null)
+  assert.equal(resolveDownloadDir('./papers', HOME), null)
+  assert.equal(resolveDownloadDir('   ', HOME), null)
 })

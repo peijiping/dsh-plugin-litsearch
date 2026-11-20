@@ -51,6 +51,17 @@ interface Props {
   /** 模型复述的用户下载意图。 */
   reason?: string
   cancelled?: boolean
+  /** false = 还在选目录，点「开始下载」后才进入下载；true = 已开始（含已完成）。 */
+  started: boolean
+  /** 当前选择的保存目录；可编辑，空串表示交给 Host 用默认目录。 */
+  dir: string
+  /** 默认目录（任务的当前下载目录），仅用于提示与占位。 */
+  defaultDir: string
+  /** 正在等系统目录选择框。 */
+  picking?: boolean
+  onDirChange(dir: string): void
+  onPickDir(): void
+  onConfirm(): void
   onCancel?(): void
   onClose(): void
 }
@@ -91,6 +102,13 @@ export function DownloadDialog({
   scopeLabel,
   reason,
   cancelled = false,
+  started,
+  dir,
+  defaultDir,
+  picking = false,
+  onDirChange,
+  onPickDir,
+  onConfirm,
   onCancel,
   onClose,
 }: Props): ReactElement {
@@ -106,31 +124,89 @@ export function DownloadDialog({
   // 没有待下载、也没有在下载的条目时即为完成（全都已下载时立刻完成）。
   const complete = total > 0 && pending === 0 && downloading === 0
   const allSkipped = complete && downloaded === total
+  const description = tpl(
+    origin === 'model'
+      ? started
+        ? t('batch.modelDesc')
+        : t('batch.modelSetupDesc')
+      : started
+        ? t('batch.desc')
+        : t('batch.setupDesc'),
+    { n: total },
+  )
+  const dirPlaceholder =
+    defaultDir === ''
+      ? t('batch.dirPlaceholder')
+      : tpl(t('batch.dirPlaceholderDefault'), { path: defaultDir })
 
   return (
     <Modal
       open={open}
       onClose={onClose}
       title={origin === 'model' ? t('batch.modelTitle') : t('batch.title')}
-      description={tpl(origin === 'model' ? t('batch.modelDesc') : t('batch.desc'), { n: total })}
+      description={description}
       className={WIDE_MODAL_CLASS}
       footer={
-        <div style={FOOTER_STYLE}>
-          <span style={statusStyle}>{tpl(t('batch.progress'), { done, total })}</span>
-          <div style={FOOTER_ACTIONS_STYLE}>
-            {onCancel !== undefined && !cancelled && !complete && (
-              <Button variant="outline" size="sm" type="button" onClick={onCancel}>
-                {t('batch.cancel')}
+        started ? (
+          <div style={FOOTER_STYLE}>
+            <span style={statusStyle}>{tpl(t('batch.progress'), { done, total })}</span>
+            <div style={FOOTER_ACTIONS_STYLE}>
+              {onCancel !== undefined && !cancelled && !complete && (
+                <Button variant="outline" size="sm" type="button" onClick={onCancel}>
+                  {t('batch.cancel')}
+                </Button>
+              )}
+              <Button variant="outline" size="sm" type="button" onClick={onClose}>
+                {t('batch.close')}
               </Button>
-            )}
-            <Button variant="outline" size="sm" type="button" onClick={onClose}>
-              {t('batch.close')}
-            </Button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div style={FOOTER_STYLE}>
+            <span style={statusStyle}>{tpl(t('batch.total'), { n: total })}</span>
+            <div style={FOOTER_ACTIONS_STYLE}>
+              <Button variant="outline" size="sm" type="button" onClick={onClose}>
+                {t('batch.close')}
+              </Button>
+              <Button variant="primary" size="sm" type="button" onClick={onConfirm}>
+                {tpl(t('batch.start'), { n: total })}
+              </Button>
+            </div>
+          </div>
+        )
       }
     >
       <style>{WIDE_MODAL_CSS}</style>
+      <div style={DIR_ROW_STYLE}>
+        <span style={DIR_LABEL_STYLE}>{t('batch.dir')}</span>
+        <input
+          type="text"
+          value={dir}
+          placeholder={dirPlaceholder}
+          onChange={(event) => onDirChange(event.target.value)}
+          disabled={started}
+          spellCheck={false}
+          aria-label={t('batch.dir')}
+          style={{
+            ...DIR_INPUT_STYLE,
+            ...(started ? DIR_INPUT_DISABLED_STYLE : null),
+          }}
+        />
+        {!started && (
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={onPickDir}
+            disabled={picking}
+          >
+            {picking ? t('batch.picking') : t('batch.pickDir')}
+          </Button>
+        )}
+      </div>
+      {!started && defaultDir !== '' && (
+        <div style={DIR_HINT_STYLE}>{tpl(t('batch.dirHint'), { path: defaultDir })}</div>
+      )}
       <div style={OVERVIEW_STYLE} role="status" aria-live="polite">
         {origin === 'model' && (
           <div style={MODEL_BADGE_STYLE}>
@@ -226,6 +302,47 @@ const FOOTER_STYLE: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
+}
+
+const DIR_ROW_STYLE: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  marginBottom: 4,
+}
+
+const DIR_LABEL_STYLE: CSSProperties = {
+  flexShrink: 0,
+  fontSize: 11.5,
+  color: 'var(--ls-ink-2)',
+}
+
+const DIR_INPUT_STYLE: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  padding: '4px 7px',
+  borderRadius: 6,
+  border: '1px solid var(--ls-line)',
+  background: 'var(--ls-surface)',
+  color: 'var(--ls-ink-1)',
+  fontSize: 11.5,
+  fontFamily: 'inherit',
+  lineHeight: 1.5,
+}
+
+const DIR_INPUT_DISABLED_STYLE: CSSProperties = {
+  opacity: 0.75,
+  cursor: 'default',
+}
+
+const DIR_HINT_STYLE: CSSProperties = {
+  margin: '0 0 8px',
+  fontSize: 10.5,
+  lineHeight: 1.4,
+  color: 'var(--ls-ink-3)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const OVERVIEW_STYLE: CSSProperties = {

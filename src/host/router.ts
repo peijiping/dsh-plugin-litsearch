@@ -49,6 +49,7 @@ import type {
   TaskService,
 } from './tasks/service.js'
 import { resolvePdfRoot } from './pdf/store.js'
+import { pickDirectory } from './picker.js'
 import type { TranslateFn } from './translate.js'
 import { resolveSessionWorkspace } from './workspace.js'
 
@@ -774,7 +775,17 @@ async function handleTasks(
         fail(res, 405, 'bad_request', 'download 仅支持 POST')
         return
       }
-      ok(res, await service.downloadPdf(id, paperId, await resolveSessionWorkspace(sessionId)))
+      const body = await readJsonBody(req)
+      const dir = readString(body['dir'], 'dir', 4096)
+      ok(
+        res,
+        await service.downloadPdf(
+          id,
+          paperId,
+          await resolveSessionWorkspace(sessionId),
+          dir,
+        ),
+      )
       return
     }
     if (op === 'fulltext') {
@@ -972,6 +983,16 @@ export function createHandler(
       }
 
       if (head === 'files') {
+        if (seg[1] === 'choose-directory') {
+          if (req.method !== 'POST') {
+            fail(res, 405, 'bad_request', 'choose-directory 仅支持 POST')
+            return
+          }
+          const body = await readJsonBody(req)
+          const defaultPath = readString(body['defaultPath'], 'defaultPath', 4096)
+          ok(res, await pickDirectory(defaultPath))
+          return
+        }
         if (seg[1] !== 'reveal') {
           fail(res, 404, 'not_found', `未知文件操作 ${seg[1] ?? ''}`)
           return

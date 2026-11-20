@@ -58,6 +58,7 @@ import {
 } from './tasks/download.js'
 import { filterPapers, pdfStatusOf, sortPapers, type PaperFilter } from './tasks/filter.js'
 import type { QueryInput, TaskPatch, TaskService } from './tasks/service.js'
+import { resolveDownloadDir } from './pdf/root.js'
 import { describeZoteroTargets, matchZoteroTarget } from './zotero/match.js'
 import { resolveSessionWorkspace } from './workspace.js'
 
@@ -440,6 +441,21 @@ const DOWNLOAD_PARAMETERS = {
   additionalProperties: false,
 }
 
+/** 下载工具额外支持的保存目录；Zotero 同步没有文件系统目录，不共用这个字段。 */
+const DOWNLOAD_DIR_PROPERTY = {
+  type: 'string',
+  description:
+    '用户明确指定的保存目录（如「下载到 ~/Downloads/论文」「保存到 /Users/me/文献」）。必须是绝对路径，或用 ~/ 表示主目录；不要把相对路径、猜测的路径或不存在的目录传进来。省略时右侧栏会弹出下载框、默认当前目录，由用户确认或改选（也可选工作空间之外的任意目录）。',
+} as const
+
+const DOWNLOAD_TOOL_PARAMETERS = {
+  ...DOWNLOAD_PARAMETERS,
+  properties: {
+    ...DOWNLOAD_PARAMETERS.properties,
+    dir: DOWNLOAD_DIR_PROPERTY,
+  },
+}
+
 /**
  * Zotero 同步的范围字段与下载**完全一致**（同一个 schema 展开），只把文案
  * 换成同步语境；额外多一个 `collection`。这样两个工具不会各自演化出一套
@@ -509,9 +525,9 @@ const ZOTERO_PARAMETERS = {
  * 「预览的口径」和「执行的口径」两套。
  */
 const SCOPE_PARAMETERS = {
-  ...DOWNLOAD_PARAMETERS,
+  ...DOWNLOAD_TOOL_PARAMETERS,
   properties: {
-    ...DOWNLOAD_PARAMETERS.properties,
+    ...DOWNLOAD_TOOL_PARAMETERS.properties,
     reason: { type: 'string', description: '可选：一句话复述当前范围，仅用于回显。' },
   },
   required: ['scope'],
@@ -561,6 +577,8 @@ interface DownloadArgs {
   taskId?: string
   scope: DownloadScope
   reason: string
+  /** 用户点名的保存目录（绝对路径或 `~/...`）；缺省时弹窗默认当前目录。 */
+  dir?: string
   paperIds?: string[]
   /** `scope='pages'` 时 1-based 页码。 */
   pages?: number[]
@@ -716,7 +734,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
         '只读的「范围预演」：把用户的说法（当前页 / 第 2 页 / 第 4–5 页 / 当前筛选全部 / 全部 / 分组 / 条件）算成一份 paperId 清单并回显，**不下载、不同步、不修改任何数据**。' +
         '返回：范围说明、命中篇数、按面板每页 20 条算出的总页数与本次页窗口、面板当前视图（第 x/y 页、筛选条件）、清单前 10 篇（paperId + 是否有 PDF）。' +
         '适合两种情况：(1) 用户提到了页码或范围较模糊，先预演一次确认「第 2 页」到底是哪 20 篇；(2) 执行前核对命中篇数，避免下错范围。参数与 literature_download / literature_zotero 完全一致（scope + pages + pageBase + 筛选字段），核对无误后把它们原样传给下载 / 同步工具即可，不需要搬 paperId。' +
-        '注意：页码只能用 scope=pages + pages 表达（1-based，宿主按视图快照换算）；不要自己用 offset 推算页码，也不要把 ids 当页码范围。',
+        '注意：页码只能用 scope=pages + pages 表达（1-based，宿主按视图快照换算）；不要自己用 offset 推算页码，也不要把 ids 当页码范围。下载目录也从这里预演：带上 dir 会回显核对，但不会写盘。',
       parameters: SCOPE_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args, exec): Promise<{ text: string }> {
@@ -731,8 +749,9 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
         '在用户要求「帮我下载 XX 文献 / 下载当前页的所有 pdf 文献 / 下载 xx 分组下的文献 / 下载 xx 条件的文献 / 帮我下载当前全部文献」时调用：把范围算成一份已校验的 paperId 清单，下发给右侧栏，右侧栏会自动弹出批量下载框并立即逐篇下载，用户能看到每篇标题、来源与实时状态，也能点「取消下载」中止。' +
         '【范围怎么选】用户点名具体文献且你已在工具结果的「paperId:」行看到确切 id → scope=ids 并给 paperIds；「当前页/这一页」→ scope=currentPage；「第 2 页」「第 4–5 页」→ scope=pages 并给 pages（1-based，页码指面板上那一页，宿主换算，不要自己算 offset）；「当前全部/当前筛选下全部」→ scope=currentView（含跨页，不等于整个任务）；明确说「整个任务/所有文献/不管筛选」→ scope=all；「xx 分组」→ scope=group + groupId；给了年份、OA、关键词、来源、筛读状态等条件 → scope=filters 并填对应字段。pages 与 hasPdf 同时给时，默认先按面板切页、再在页内留下有 PDF 的（「第二页里有 PDF 的文献」）；要「有 PDF 的文献的第 2 页」则传 pageBase=filtered。' +
         '【重要】你看不到右侧栏界面，「当前页」「第 N 页」「当前筛选全部」由宿主用面板上报的视图快照 + 服务端筛选精确计算，不要自己猜页码或编造 paperId；页码不等于任务条件的「每源条数」（面板每页恒为 20 条）。范围不确定时先调 literature_scope 预演，再执行。scope=ids 时只能使用工具结果里出现过的 paperId，无效 id 会被忽略。hasPdf 表示「有 PDF 直链或已下载」，openAccessOnly 表示上游标记为开放获取，两者不等价，不要同时默认开启。' +
+        '【保存目录】用户点名了保存目录（如「把第一页有 PDF 的文献下载到 ~/Downloads/论文」「保存到 /Users/me/文献」）时传 dir：绝对路径或 ~/ 开头；宿主会直接开始下载到该目录（可位于工作空间之外），用户仍能在弹窗里看到实时状态并取消。没点名目录就省略 dir，右侧栏会弹出下载框、默认当前目录，等用户确认或改选后再开始；不要为了「填满参数」猜一个目录。' +
         '本工具只下发指令、不等待下载完成，也不要重复调用同一条指令或臆测下载结果；若范围为空会返回原因而不下发。需要检索后再下载时，先按检索工具的轮次约束完成检索，再由用户明确提出下载。用户要求把文献「存入 Zotero / 同步到文献库」时改用 literature_zotero，不要用本工具。',
-      parameters: DOWNLOAD_PARAMETERS,
+      parameters: DOWNLOAD_TOOL_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args, exec): Promise<{ text: string }> {
         return { text: await runDownload(service, readScopeArgs(args), exec.agent?.id) }
@@ -1160,6 +1179,14 @@ function readScopeArgs(args: unknown, requireReason = true): DownloadArgs {
   }
   const taskId = readText(record['taskId'], 'taskId')
   if (taskId !== undefined) input.taskId = taskId
+
+  const dir = readText(record['dir'], 'dir')
+  if (dir !== undefined) {
+    if (resolveDownloadDir(dir) === null) {
+      throw new Error('dir 必须是绝对路径，或用 ~/ 表示主目录；不确定时请省略，让用户在弹窗里选择')
+    }
+    input.dir = dir.slice(0, 4096)
+  }
 
   if (record['paperIds'] !== undefined) {
     const papers = record['paperIds']
@@ -1632,6 +1659,7 @@ async function runScopePreview(
     '范围预演（只读，未下发任何指令）：',
     `任务：${task.title}（id: ${task.id}）`,
     `范围：${resolved.scopeLabel}`,
+    ...(args.dir === undefined ? [] : [`保存目录：${args.dir}（执行时宿主会展开 ~）`]),
     ...describeView(snapshot, totalHint),
     pageMode
       ? `页窗口：第 ${describePages(args.pages ?? [])} 页（每页 ${size} 条，共 ${pageCount} 页）→ 与附加条件取交集后 ${resolved.paperIds.length} 篇；附加条件在全任务命中 ${matchedTotal} 篇。`
@@ -1703,21 +1731,27 @@ async function runDownload(
     scopeLabel: resolved.scopeLabel,
     paperIds: resolved.paperIds,
     items: resolved.items,
+    ...(args.dir === undefined ? {} : { dir: args.dir }),
   }
   // 先请求打开任务 tab，再下发指令；两者在同一次 /events 增量里送到客户端，
   // 面板即使原本没挂载也能被拉起后再消费指令。
   service.focusTask(task.id, task.title, sessionId)
   service.publishDownloadCommand(command)
 
+  const dirLine =
+    args.dir === undefined
+      ? '保存目录：未指定——右侧栏会弹出下载框并默认当前目录，等用户确认或改选后再开始。'
+      : `保存目录：${args.dir}（宿主会展开 ~；可位于工作空间之外）——右侧栏会直接开始下载。`
   const lines = [
     `已向右侧栏下发批量下载指令：${resolved.scopeLabel}。`,
     `任务「${task.title}」（id: ${task.id}）；范围：${args.reason}`,
     `清单已逐个校验：${resolved.paperIds.length} 篇属于该任务且满足条件${ignoredNote(resolved, args.scope)}。`,
+    dirLine,
     '',
     '清单前几篇：',
     previewItems(resolved),
     '',
-    '右侧栏会自动弹出批量下载框并立即开始，用户能看到每篇标题、来源与实时状态，也可点「取消下载」中止。本工具只下发指令、不等待下载完成；请勿重复调用，也不要替用户臆测下载结果。',
+    '右侧栏会弹出下载框；用户能看到每篇标题、来源与实时状态，也可点「取消下载」中止。本工具只下发指令、不等待下载完成；请勿重复调用，也不要替用户臆测下载结果。',
   ]
   if (resolved.paperIds.length > 200) {
     lines.push(

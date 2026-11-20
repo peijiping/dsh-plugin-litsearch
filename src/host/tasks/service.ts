@@ -71,6 +71,7 @@ import {
   resolvePdf,
   resolvePdfRoot,
 } from '../pdf/store.js'
+import { resolveDownloadDir } from '../pdf/root.js'
 import { ZoteroConnector } from '../zotero/connector.js'
 import { fetchExistingIndex, localApiBase, matchExisting, resolveTarget } from '../zotero/local.js'
 import { normalizeWorkspace } from '../workspace.js'
@@ -816,11 +817,22 @@ export class TaskService {
     id: string,
     paperId: string,
     workspace?: string,
+    dir?: string,
   ): Promise<PdfDownloadResult> {
     const task = await this.get(id)
     const paper = findPaper(task, paperId)
     const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
     if (target !== undefined) task.workspace = target
+    // 显式目录（弹窗选择 / 模型指令）允许位于工作空间之外；只要求绝对路径。
+    const rawDir = dir?.trim() ?? ''
+    let explicitDir: string | undefined
+    if (rawDir !== '') {
+      const resolved = resolveDownloadDir(rawDir)
+      if (resolved === null) {
+        throw new SearchError('bad_request', '下载目录必须是绝对路径（可用 ~ 表示主目录）')
+      }
+      explicitDir = resolved
+    }
     const settings = getSettings()
     const resolution = await resolvePdf(paper)
     if (!resolution.ok || resolution.buffer === undefined) {
@@ -845,7 +857,13 @@ export class TaskService {
       return result
     }
 
-    const saved = await persistPdf(resolution.buffer, this.store.root, paper, target)
+    const saved = await persistPdf(
+      resolution.buffer,
+      this.store.root,
+      paper,
+      target,
+      explicitDir,
+    )
     await this.setPdfState(task, paperId, {
       pdfStatus: 'downloaded',
       pdfFile: saved.filePath,

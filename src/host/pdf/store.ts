@@ -345,6 +345,8 @@ export async function persistPdf(
   storageRoot: string,
   paper: Paper,
   workspace?: string,
+  /** 本次下载显式指定的目录；缺省时按设置 / 会话工作目录解析。 */
+  targetDir?: string,
 ): Promise<{ cachePath: string; filePath: string; filename: string; reused: boolean; bytes: number }> {
   const hash = createHash('sha256').update(buffer).digest('hex')
   const cacheDir = pdfCacheDir(storageRoot)
@@ -352,7 +354,8 @@ export async function persistPdf(
   const cachePath = join(cacheDir, `${hash}.pdf`)
   if (!(await isValidPdfFile(cachePath))) await writePdfAtomic(cachePath, buffer)
 
-  const root = resolvePdfRoot(workspace)
+  const explicit = targetDir?.trim() ?? ''
+  const root = explicit === '' ? resolvePdfRoot(workspace) : explicit
   await mkdir(root, { recursive: true })
   const filename = readableFilename(paper)
   const filePath = join(root, filename)

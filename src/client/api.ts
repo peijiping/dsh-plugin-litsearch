@@ -9,6 +9,7 @@ import { SESSION_HEADER, WRITE_HEADER } from '../search/config'
 import type {
   AnnotationInput,
   AnnotationResult,
+  ChooseDirectoryResult,
   CleanupResult,
   CleanupScope,
   CompareResult,
@@ -367,15 +368,27 @@ export function fetchZoteroTargets(): Promise<ZoteroTargetsResult> {
   return request<ZoteroTargetsResult>('/settings/zotero/targets', writeInit('POST', {}))
 }
 
-/** 下载单篇 PDF 到用户目录。 */
+/** 下载单篇 PDF；`dir` 为空时由 Host 使用默认下载目录。 */
 export function downloadPaperPdf(
   taskId: string,
   paperId: string,
+  dir?: string,
   signal?: AbortSignal,
 ): Promise<PdfDownloadResult> {
+  const body = dir === undefined || dir.trim() === '' ? {} : { dir: dir.trim() }
   return request<PdfDownloadResult>(
     taskPath(taskId, `/papers/${encodeURIComponent(paperId)}/download`),
-    { ...writeInit('POST', {}), signal },
+    { ...writeInit('POST', body), signal },
+  )
+}
+
+/** 弹出宿主系统的「选择文件夹」对话框，返回绝对路径。 */
+export function chooseDownloadDir(defaultPath?: string): Promise<ChooseDirectoryResult> {
+  return request<ChooseDirectoryResult>(
+    '/files/choose-directory',
+    writeInit('POST', defaultPath === undefined || defaultPath.trim() === ''
+      ? {}
+      : { defaultPath: defaultPath.trim() }),
   )
 }
 

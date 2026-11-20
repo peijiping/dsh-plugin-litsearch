@@ -607,6 +607,12 @@ export interface PdfDownloadResult {
   attempts?: PdfAttempt[]
 }
 
+/** 原生「选择文件夹」结果；`cancelled=true` 表示用户关掉了对话框。 */
+export interface ChooseDirectoryResult {
+  path?: string
+  cancelled: boolean
+}
+
 /** Zotero connector 探测结果。 */
 export interface ZoteroProbeResult {
   ok: boolean
@@ -880,6 +886,11 @@ export interface DownloadCommand {
   scopeLabel: string
   paperIds: string[]
   items: DownloadCommandItem[]
+  /**
+   * 用户在对话里指定的保存目录（绝对路径，`~` 已由工具层保留、Host 下载时展开）。
+   * 缺省时右侧栏弹窗默认当前目录，等用户确认后再开始。
+   */
+  dir?: string
 }
 
 /**
