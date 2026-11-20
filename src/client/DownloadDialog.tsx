@@ -123,7 +123,9 @@ export function DownloadDialog({
   const rate = total === 0 ? 0 : Math.round((done / total) * 100)
   // 没有待下载、也没有在下载的条目时即为完成（全都已下载时立刻完成）。
   const complete = total > 0 && pending === 0 && downloading === 0
-  const allSkipped = complete && downloaded === total
+  // Host 返回值里的 skipped 才是真的没下载；普通成功也计为 downloaded。
+  const skipped = items.filter((item) => downloads[item.paperId]?.skipped === true).length
+  const allSkipped = complete && total > 0 && skipped === total
   const description = tpl(
     origin === 'model'
       ? started

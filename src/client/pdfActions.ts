@@ -14,6 +14,8 @@ export interface PdfDownloadUi {
   state: 'downloading' | 'downloaded' | 'failed'
   /** 下载成功后的绝对路径。 */
   path?: string
+  /** 记录中的文件已在目标目录里，本次跳过下载。 */
+  skipped?: boolean
   error?: string
   /** Host 返回的失败根因；用于区分「程序故障」与「需手动保存」。 */
   reason?: PdfFailureReason

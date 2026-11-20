@@ -11,6 +11,7 @@ import test from 'node:test'
 import {
   PDF_SUBDIR,
   expandHomePath,
+  isFileInDir,
   resolveDownloadDir,
   resolvePdfRootPath,
 } from '../src/host/pdf/root.ts'
@@ -56,4 +57,22 @@ test('resolveDownloadDir 只接受绝对路径，支持 ~ 展开并保留工作�
   assert.equal(resolveDownloadDir('papers', HOME), null)
   assert.equal(resolveDownloadDir('./papers', HOME), null)
   assert.equal(resolveDownloadDir('   ', HOME), null)
+})
+
+test('isFileInDir 只认目录内的文件，按路径段判断而非字符串前缀', () => {
+  const dir = join('/tmp', 'litsearch')
+  assert.equal(isFileInDir(join(dir, 'a.pdf'), dir), true)
+  assert.equal(isFileInDir(join(dir, 'nested', 'b.pdf'), dir), true)
+  assert.equal(isFileInDir(dir, dir), false)
+  // 同前缀的兄弟目录不算在内。
+  assert.equal(isFileInDir(join('/tmp', 'litsearch-old', 'a.pdf'), dir), false)
+  assert.equal(isFileInDir(join('/tmp', 'litsearch.pdf'), dir), false)
+  assert.equal(isFileInDir(join('/tmp', 'other', 'a.pdf'), dir), false)
+})
+
+test('isFileInDir 会先规范化路径（处理 . / .. 与尾斜杠）', () => {
+  const dir = join('/tmp', 'litsearch') + '/'
+  assert.equal(isFileInDir('/tmp/litsearch/./a.pdf', dir), true)
+  assert.equal(isFileInDir('/tmp/litsearch/sub/../a.pdf', dir), true)
+  assert.equal(isFileInDir('/tmp/litsearch/../a.pdf', dir), false)
 })

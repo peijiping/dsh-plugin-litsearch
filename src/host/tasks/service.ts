@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import { MAX_LIMIT, getSettings } from '../../search/config.js'
 import { SearchError } from '../../search/errors.js'
@@ -71,7 +71,7 @@ import {
   resolvePdf,
   resolvePdfRoot,
 } from '../pdf/store.js'
-import { resolveDownloadDir } from '../pdf/root.js'
+import { isFileInDir, resolveDownloadDir } from '../pdf/root.js'
 import { ZoteroConnector } from '../zotero/connector.js'
 import { fetchExistingIndex, localApiBase, matchExisting, resolveTarget } from '../zotero/local.js'
 import { normalizeWorkspace } from '../workspace.js'
@@ -834,51 +834,81 @@ export class TaskService {
       explicitDir = resolved
     }
     const settings = getSettings()
-    const resolution = await resolvePdf(paper)
-    if (!resolution.ok || resolution.buffer === undefined) {
-      const pmcid = await this.ensureFullTextPmcid(paper, settings)
-      const webFullText =
-        (settings.enableEpmcFulltext && epmcFullTextAvailable(paper)) ||
-        (settings.enablePmcFulltext && pmcid !== '')
-      const fallback = webFullText ? 'html-only' : resolution.status
+    // 目标目录：显式目录优先，否则沿用默认目录（配置 / 工作空间 / Downloads）。
+    // 记录里的文件已在该目录下才跳过；换了目录就重新下载，路径统一以最后一次为准。
+    const root = explicitDir ?? resolvePdfRoot(target)
+    const existing = task.states[paperId]?.pdfFile
+    if (
+      existing !== undefined &&
+      isFileInDir(existing, root) &&
+      (await pdfFileExists(existing))
+    ) {
+      const size = await stat(existing).then((info) => info.size).catch(() => 0)
+      if (task.states[paperId]?.pdfStatus !== 'downloaded') {
+        await this.setPdfState(task, paperId, { pdfStatus: 'downloaded', pdfFile: existing })
+      }
+      return {
+        paperId,
+        status: 'downloaded',
+        bytes: size,
+        filename: basename(existing),
+        path: existing,
+        skipped: true,
+      }
+    }
+
+    try {
+      const resolution = await resolvePdf(paper)
+      if (!resolution.ok || resolution.buffer === undefined) {
+        const pmcid = await this.ensureFullTextPmcid(paper, settings)
+        const webFullText =
+          (settings.enableEpmcFulltext && epmcFullTextAvailable(paper)) ||
+          (settings.enablePmcFulltext && pmcid !== '')
+        const fallback = webFullText ? 'html-only' : resolution.status
+        await this.setPdfState(task, paperId, {
+          pdfStatus: fallback,
+          pdfError: resolution.error ?? '下载失败',
+        })
+        const result: PdfDownloadResult = {
+          paperId,
+          status: fallback,
+          bytes: 0,
+          error: resolution.error ?? '下载失败',
+          ...(resolution.reason === undefined ? {} : { reason: resolution.reason }),
+          ...(resolution.links.length === 0 ? {} : { links: resolution.links }),
+          ...(resolution.attempts.length === 0 ? {} : { attempts: resolution.attempts }),
+        }
+        return result
+      }
+
+      const saved = await persistPdf(
+        resolution.buffer,
+        this.store.root,
+        paper,
+        target,
+        explicitDir,
+      )
       await this.setPdfState(task, paperId, {
-        pdfStatus: fallback,
-        pdfError: resolution.error ?? '下载失败',
+        pdfStatus: 'downloaded',
+        pdfFile: saved.filePath,
       })
       const result: PdfDownloadResult = {
         paperId,
-        status: fallback,
-        bytes: 0,
-        error: resolution.error ?? '下载失败',
-        ...(resolution.reason === undefined ? {} : { reason: resolution.reason }),
-        ...(resolution.links.length === 0 ? {} : { links: resolution.links }),
-        ...(resolution.attempts.length === 0 ? {} : { attempts: resolution.attempts }),
+        status: 'downloaded',
+        bytes: saved.bytes,
+        filename: saved.filename,
+        path: saved.filePath,
       }
+      if (resolution.url !== undefined) result.url = resolution.url
+      if (resolution.links.length > 0) result.links = resolution.links
+      if (resolution.attempts.length > 0) result.attempts = resolution.attempts
       return result
+    } catch (error) {
+      // 之前下载成功过也一样：本次抛错就按失败落库，并清掉旧路径。
+      const detail = error instanceof Error ? error.message : String(error)
+      await this.setPdfState(task, paperId, { pdfStatus: 'failed', pdfError: detail })
+      return { paperId, status: 'failed', bytes: 0, error: detail }
     }
-
-    const saved = await persistPdf(
-      resolution.buffer,
-      this.store.root,
-      paper,
-      target,
-      explicitDir,
-    )
-    await this.setPdfState(task, paperId, {
-      pdfStatus: 'downloaded',
-      pdfFile: saved.filePath,
-    })
-    const result: PdfDownloadResult = {
-      paperId,
-      status: 'downloaded',
-      bytes: saved.bytes,
-      filename: saved.filename,
-      path: saved.filePath,
-    }
-    if (resolution.url !== undefined) result.url = resolution.url
-    if (resolution.links.length > 0) result.links = resolution.links
-    if (resolution.attempts.length > 0) result.attempts = resolution.attempts
-    return result
   }
 
   /** 网页全文：Europe PMC → PubMed Central → arXiv，最终都转成安全 HTML。 */

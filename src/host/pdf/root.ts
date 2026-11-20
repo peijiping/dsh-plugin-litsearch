@@ -6,7 +6,7 @@
  */
 
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 
 /** 工作目录（或 Downloads）下的固定子目录名。 */
 export const PDF_SUBDIR = 'dsh-litsearch'
@@ -41,4 +41,13 @@ export function resolveDownloadDir(input: string, home: string = homedir()): str
   if (raw === '') return null
   const expanded = expandHomePath(raw, home)
   return isAbsolute(expanded) ? expanded : null
+}
+
+/** 文件是否直接/间接位于该目录下（用于「已在该目录则跳过下载」）。 */
+export function isFileInDir(filePath: string, dir: string): boolean {
+  const file = resolve(filePath)
+  const base = resolve(dir)
+  if (file === base) return false
+  const rel = relative(base, file)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
 }

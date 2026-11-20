@@ -445,7 +445,7 @@ const DOWNLOAD_PARAMETERS = {
 const DOWNLOAD_DIR_PROPERTY = {
   type: 'string',
   description:
-    '用户明确指定的保存目录（如「下载到 ~/Downloads/论文」「保存到 /Users/me/文献」）。必须是绝对路径，或用 ~/ 表示主目录；不要把相对路径、猜测的路径或不存在的目录传进来。省略时右侧栏会弹出下载框、默认当前目录，由用户确认或改选（也可选工作空间之外的任意目录）。',
+    '用户明确指定的保存目录（如「下载到 ~/Downloads/论文」「保存到 /Users/me/文献」）。必须是绝对路径，或用 ~/ 表示主目录；不要把相对路径、猜测的路径或不存在的目录传进来。省略时右侧栏会弹出下载框、默认当前目录，由用户确认或改选（也可选工作空间之外的任意目录）。跳过按目录判断：记录里的文件已在本次目标目录中才跳过，换到新目录会重新下载并把记录路径改为本次结果（不复制旧文件）。',
 } as const
 
 const DOWNLOAD_TOOL_PARAMETERS = {
@@ -749,7 +749,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
         '在用户要求「帮我下载 XX 文献 / 下载当前页的所有 pdf 文献 / 下载 xx 分组下的文献 / 下载 xx 条件的文献 / 帮我下载当前全部文献」时调用：把范围算成一份已校验的 paperId 清单，下发给右侧栏，右侧栏会自动弹出批量下载框并立即逐篇下载，用户能看到每篇标题、来源与实时状态，也能点「取消下载」中止。' +
         '【范围怎么选】用户点名具体文献且你已在工具结果的「paperId:」行看到确切 id → scope=ids 并给 paperIds；「当前页/这一页」→ scope=currentPage；「第 2 页」「第 4–5 页」→ scope=pages 并给 pages（1-based，页码指面板上那一页，宿主换算，不要自己算 offset）；「当前全部/当前筛选下全部」→ scope=currentView（含跨页，不等于整个任务）；明确说「整个任务/所有文献/不管筛选」→ scope=all；「xx 分组」→ scope=group + groupId；给了年份、OA、关键词、来源、筛读状态等条件 → scope=filters 并填对应字段。pages 与 hasPdf 同时给时，默认先按面板切页、再在页内留下有 PDF 的（「第二页里有 PDF 的文献」）；要「有 PDF 的文献的第 2 页」则传 pageBase=filtered。' +
         '【重要】你看不到右侧栏界面，「当前页」「第 N 页」「当前筛选全部」由宿主用面板上报的视图快照 + 服务端筛选精确计算，不要自己猜页码或编造 paperId；页码不等于任务条件的「每源条数」（面板每页恒为 20 条）。范围不确定时先调 literature_scope 预演，再执行。scope=ids 时只能使用工具结果里出现过的 paperId，无效 id 会被忽略。hasPdf 表示「有 PDF 直链或已下载」，openAccessOnly 表示上游标记为开放获取，两者不等价，不要同时默认开启。' +
-        '【保存目录】用户点名了保存目录（如「把第一页有 PDF 的文献下载到 ~/Downloads/论文」「保存到 /Users/me/文献」）时传 dir：绝对路径或 ~/ 开头；宿主会直接开始下载到该目录（可位于工作空间之外），用户仍能在弹窗里看到实时状态并取消。没点名目录就省略 dir，右侧栏会弹出下载框、默认当前目录，等用户确认或改选后再开始；不要为了「填满参数」猜一个目录。' +
+        '【保存目录】用户点名了保存目录（如「把第一页有 PDF 的文献下载到 ~/Downloads/论文」「保存到 /Users/me/文献」）时传 dir：绝对路径或 ~/ 开头；宿主会直接开始下载到该目录（可位于工作空间之外），用户仍能在弹窗里看到实时状态并取消。没点名目录就省略 dir，右侧栏会弹出下载框、默认当前目录，等用户确认或改选后再开始；不要为了「填满参数」猜一个目录。跳过按目录判断：记录中的文件已在本次目标目录里才跳过；换到新目录会重新下载，路径以最后一次下载为准。' +
         '本工具只下发指令、不等待下载完成，也不要重复调用同一条指令或臆测下载结果；若范围为空会返回原因而不下发。需要检索后再下载时，先按检索工具的轮次约束完成检索，再由用户明确提出下载。用户要求把文献「存入 Zotero / 同步到文献库」时改用 literature_zotero，不要用本工具。',
       parameters: DOWNLOAD_TOOL_PARAMETERS,
       output: TEXT_OUTPUT,
@@ -1756,7 +1756,7 @@ async function runDownload(
   if (resolved.paperIds.length > 200) {
     lines.push(
       '',
-      `注意：本次 ${resolved.paperIds.length} 篇数量较大，可能耗时较长并触发上游限流；已下载的会跳过，建议提示用户必要时收窄范围。`,
+      `注意：本次 ${resolved.paperIds.length} 篇数量较大，可能耗时较长并触发上游限流；已在目标目录中的会跳过，建议提示用户必要时收窄范围。`,
     )
   }
   return lines.join('\n')

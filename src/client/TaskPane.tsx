@@ -12,7 +12,6 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   AnnotationInput,
   Paper,
-  PaperState,
   Screening,
   SortMode,
   TaskDetail,
@@ -230,11 +229,9 @@ export function TaskPane({
   const filterActive = filterCount > 0
   // 排序只换顺序、不换结果集合，翻页更不该清空已选；只有换任务或改其它筛选条件才重置。
   const selectionScope = JSON.stringify({ ...filters, sort: undefined })
-  // 批量下载循环里要判断「当前是否已下载」，用 ref 读取最新状态避免闭包取到旧值。
+  // 批量下载循环里用 ref 读取最新下载状态，避免闭包取到旧值。
   const downloadsRef = useRef<Readonly<Record<string, PdfDownloadUi>>>(downloads)
   downloadsRef.current = downloads
-  const statesRef = useRef<Record<string, PaperState>>({})
-  statesRef.current = detail?.states ?? {}
 
   useEffect(() => {
     setSelected(new Set())
@@ -464,7 +461,7 @@ export function TaskPane({
     runBatchDownload(batchItems, batchMeta, dir === '' ? undefined : dir)
   }
 
-  /** 真正的下载循环：按最多 5 篇并发，已下载的文献直接略过。 */
+  /** 真正的下载循环：按最多 5 篇并发；已在目标目录的由 Host 跳过。 */
   const runBatchDownload = (
     entries: readonly BatchDownloadItem[],
     meta: BatchMeta,
@@ -493,17 +490,11 @@ export function TaskPane({
       let manualCount = 0
       let failedCount = 0
       let changed = false
-      /** 单篇：跳过已下载的，下载结果实时写回 downloads。 */
+      /** 单篇：交给 Host 判断目标目录里是否已有；结果实时写回 downloads。 */
       const runOne = async (paperId: string): Promise<void> => {
         const runtime = downloadsRef.current[paperId]
+        // 同一轮里重复取到才是真的跳过；换目录重下由 Host 按路径判断。
         if (runtime?.state === 'downloading') return
-        if (
-          runtime?.state === 'downloaded' ||
-          statesRef.current[paperId]?.pdfStatus === 'downloaded'
-        ) {
-          // 已经是已下载状态：直接略过，不重新下载。
-          return
-        }
         changed = true
         setDownloads((previous) => ({ ...previous, [paperId]: { state: 'downloading' } }))
         try {
@@ -515,6 +506,7 @@ export function TaskPane({
               [paperId]: {
                 state: 'downloaded',
                 ...(result.path === undefined ? {} : { path: result.path }),
+                ...(result.skipped === true ? { skipped: true } : {}),
               },
             }))
           } else {

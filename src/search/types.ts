@@ -605,6 +605,8 @@ export interface PdfDownloadResult {
   links?: OaLocation[]
   /** 逐候选的失败记录，便于解释「为什么下不到」。 */
   attempts?: PdfAttempt[]
+  /** 记录中的文件已在目标目录里，本次未重新下载。 */
+  skipped?: boolean
 }
 
 /** 原生「选择文件夹」结果；`cancelled=true` 表示用户关掉了对话框。 */
