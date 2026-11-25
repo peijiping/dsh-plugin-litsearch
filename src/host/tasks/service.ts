@@ -336,6 +336,12 @@ export class TaskService {
         s2: settings.s2ApiKey !== '',
         serpapi: settings.serpApiKey !== '',
       },
+      keyLengths: {
+        ncbi: settings.ncbiApiKey.length,
+        openalex: settings.openalexApiKey.length,
+        s2: settings.s2ApiKey.length,
+        serpapi: settings.serpApiKey.length,
+      },
       settings: {
         defaultSources: [...settings.defaultSources],
         defaultPageSize: settings.defaultPageSize,

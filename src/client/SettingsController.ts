@@ -238,6 +238,20 @@ export interface SettingsState extends SettingsFormState {
 /** 席位注册时经 `inject()` 下发给组件的面。 */
 export interface SettingsInjection extends SettingsActions {
   hooks: { litsearchSettings: SnapshotStore<SettingsState> }
+  /**
+   * 清除某个 secret 字段的覆盖值。
+   *
+   * `role('secret')` 字段读回时永远是空串（宿主脱敏），表单模型因此无法靠
+   * 「文本是否变化」生成 unset 操作，必须直接向配置 scope 提交。
+   */
+  clearSecret(field: string): Promise<boolean>
+}
+
+/** 配置表单 scope 中本页用到的最小结构（`configForms.get(ROW_ID)` 的返回）。 */
+interface ConfigFormScope {
+  getSnapshot(): { status: string; writable: boolean }
+  subscribe(listener: () => void): () => void
+  unset(field: string): Promise<boolean>
 }
 
 export class LitsearchSettingsController {
@@ -245,7 +259,10 @@ export class LitsearchSettingsController {
 
   private readonly store: SnapshotStore<SettingsState>
 
+  private readonly scope: ConfigFormScope
+
   constructor(scope: unknown) {
+    this.scope = scope as ConfigFormScope
     this.form = new SettingsFormModel(scope, [
       ...TEXT_FIELDS.map((field): SettingsFieldSpec => settingsTextField(field)),
       settingsTextField(NCBI_KEY_FIELD),
@@ -304,8 +321,18 @@ export class LitsearchSettingsController {
     }
   }
 
+  async clearSecret(field: string): Promise<boolean> {
+    const snapshot = this.scope.getSnapshot()
+    if (snapshot.status !== 'ready' || !snapshot.writable) return false
+    return this.scope.unset(field)
+  }
+
   inject(): SettingsInjection {
-    return { hooks: { litsearchSettings: this.store }, ...this.form.actions() }
+    return {
+      hooks: { litsearchSettings: this.store },
+      ...this.form.actions(),
+      clearSecret: (field: string) => this.clearSecret(field),
+    }
   }
 
   dispose(): void {

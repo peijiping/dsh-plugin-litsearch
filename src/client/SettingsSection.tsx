@@ -22,7 +22,7 @@ import {
   probeStorage,
   probeZotero,
 } from './api'
-import { getHealth, refreshHealth, useHealth } from './health'
+import { refreshHealth, useHealth } from './health'
 import { tpl, type Translate } from './locales'
 import { linkStyle } from './styles'
 import {
@@ -85,17 +85,49 @@ interface Props {
   discard(): void
   edit(field: string, text: string): void
   resetField(field: string): void
+  clearSecret(field: string): Promise<boolean>
 }
 
 const NUMBER_FIELDS: readonly NumberFieldName[] = [...NUMBER_FIELD_NAMES]
+
+/**
+ * 密钥长度的本地缓存。
+ *
+ * 密钥本身被宿主脱敏，界面只能靠长度画等长掩码。长度随 `/health` 下发，
+ * 但刚粘贴、或宿主尚未升级时拿不到，这里缓存一份，保证任何时刻掩码都不
+ * 会缩水成固定长度。
+ */
+const KEY_LENGTH_CACHE = 'dsh-litsearch.keyLengths'
+
+function readKeyLengthCache(): Record<string, number> {
+  try {
+    const raw = window.localStorage.getItem(KEY_LENGTH_CACHE)
+    const parsed: unknown = raw === null ? null : JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, number>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeKeyLengthCache(lengths: Record<string, number>): void {
+  try {
+    window.localStorage.setItem(KEY_LENGTH_CACHE, JSON.stringify(lengths))
+  } catch {
+    // 存储不可用时退化为本次会话内的记忆。
+  }
+}
 
 export function SettingsSection(props: Props): ReactElement {
   const { t } = props
   const state = props.useLitsearchSettings((snapshot) => snapshot)
   const health = useHealth()
+  const [keyLengthCache, setKeyLengthCache] = useState(readKeyLengthCache)
 
+  // 设置页打开时对齐一次：密钥是否已配置只由 /health 的布尔量表达。
   useEffect(() => {
-    if (getHealth() === null) void refreshHealth()
+    void refreshHealth()
   }, [])
 
   const locked = !state.writable
@@ -148,6 +180,19 @@ export function SettingsSection(props: Props): ReactElement {
     }
   }, [draftKey, state.dirty, state.invalid, state.saving, state.failed])
 
+  /**
+   * 保存成功后立即重拉 /health。
+   *
+   * secret 字段保存后不会回显（宿主脱敏），「是否已配置」只能从 health 的
+   * 布尔量拿到；不刷新的话，刚填的 Key 仍会显示「未配置」，来源开关也仍是
+   * 禁用状态。
+   */
+  const wasSavingRef = useRef(false)
+  useEffect(() => {
+    if (wasSavingRef.current && !state.saving && !state.failed) void refreshHealth()
+    wasSavingRef.current = state.saving
+  }, [state.saving, state.failed])
+
   /** 离开页面：合法草稿立即冲盘，非法草稿丢弃。 */
   const pendingRef = useRef({ dirty: false, invalid: false, save: () => {}, discard: () => {} })
   useEffect(() => {
@@ -187,12 +232,88 @@ export function SettingsSection(props: Props): ReactElement {
   /** 逐来源运行时健康状态，供来源分组内的探活行展示。 */
   const healthById = new Map((health?.sourceHealth ?? []).map((entry) => [entry.id, entry]))
 
+  /**
+   * 密钥是否已配置。
+   *
+   * `role('secret')` 字段跨进程读回时会被宿主脱敏成空串，表单文本永远拿不到
+   * 已保存的 Key，因此只能以 /health 的布尔量为准；暂存区里还没落盘的新 Key
+   * 也算已配置，填完即可操作来源开关。
+   */
+  const keys = health?.keys
+  const keyConfigured = {
+    ncbi: keys?.ncbi === true || state.ncbiApiKey.text.trim() !== '',
+    openalex: keys?.openalex === true || state.openalexApiKey.text.trim() !== '',
+    s2: keys?.s2 === true || state.s2ApiKey.text.trim() !== '',
+    serpapi: keys?.serpapi === true || state.serpApiKey.text.trim() !== '',
+  }
+  /**
+   * 已配置密钥的长度，用于回显等长掩码，避免空输入框被误读为未配置。
+   *
+   * 取信顺序：`/health` 的权威长度 → 本地缓存（粘贴时记下，重载后仍在）→
+   * 尚未落盘的暂存文本长度。
+   */
+  const keyMaskLength = {
+    ncbi:
+      health?.keyLengths?.ncbi ||
+      keyLengthCache[NCBI_KEY_FIELD] ||
+      state.ncbiApiKey.text.length,
+    openalex:
+      health?.keyLengths?.openalex ||
+      keyLengthCache[OPENALEX_KEY_FIELD] ||
+      state.openalexApiKey.text.length,
+    s2: health?.keyLengths?.s2 || keyLengthCache[S2_KEY_FIELD] || state.s2ApiKey.text.length,
+    serpapi:
+      health?.keyLengths?.serpapi ||
+      keyLengthCache[SERP_KEY_FIELD] ||
+      state.serpApiKey.text.length,
+  }
+
+  /** 记下刚设置的密钥长度；清除密钥时同步遗忘。 */
+  const rememberKeyLength = (field: string, length: number): void => {
+    setKeyLengthCache((prev) => {
+      if (prev[field] === length) return prev
+      const next = { ...prev, [field]: length }
+      writeKeyLengthCache(next)
+      return next
+    })
+  }
+
+  const forgetKeyLength = (field: string): void => {
+    setKeyLengthCache((prev) => {
+      if (!(field in prev)) return prev
+      const next = { ...prev }
+      delete next[field]
+      writeKeyLengthCache(next)
+      return next
+    })
+  }
+
   const toggleSource = (id: (typeof SOURCE_IDS)[number]): void => {
     const next = selectedSources.includes(id)
       ? selectedSources.filter((source) => source !== id)
       : [...selectedSources, id]
     if (next.length === 0) return
     props.edit(SOURCES_FIELD, JSON.stringify(SOURCE_IDS.filter((source) => next.includes(source))))
+  }
+
+  /** 清除密钥；谷歌学术的 Key 清掉后同步关掉该来源，避免留下无 Key 的勾选。 */
+  const clearKey = (field: FieldName): void => {
+    forgetKeyLength(field)
+    void props
+      .clearSecret(field)
+      .then(
+        (cleared) => {
+          if (!cleared) return
+          // 等 unset 落盘后再改来源：否则表单带着旧 revision 保存会冲突。
+          if (field === SERP_KEY_FIELD && selectedSources.includes('googlescholar')) {
+            toggleSource('googlescholar')
+          }
+        },
+        () => undefined,
+      )
+      .finally(() => {
+        void refreshHealth()
+      })
   }
 
   const renderNumberField = (name: NumberFieldName): ReactElement => (
@@ -258,7 +379,7 @@ export function SettingsSection(props: Props): ReactElement {
         <div style={HINT_STYLE}>{t('settings.sourcesHint')}</div>
         {SOURCE_IDS.map((id) => {
           const on = selectedSources.includes(id)
-          const needsKey = id === 'googlescholar' && state.serpApiKey.text.trim() === ''
+          const needsKey = id === 'googlescholar' && !keyConfigured.serpapi
           return (
             <section key={id} style={SOURCE_BOX_STYLE}>
               <div style={SOURCE_HEAD_STYLE}>
@@ -288,10 +409,14 @@ export function SettingsSection(props: Props): ReactElement {
                       id="plugin-config-litsearch-ncbiApiKey"
                       label={t('field.ncbiApiKey')}
                       hint={t('field.ncbiApiKeyHint')}
-                      configured={state.ncbiApiKey.text.trim() !== ''}
+                      configured={keyConfigured.ncbi}
+                      maskedLength={keyMaskLength.ncbi}
                       disabled={locked}
-                      onEdit={(value) => props.edit(NCBI_KEY_FIELD, value)}
-                      onClear={() => props.edit(NCBI_KEY_FIELD, '')}
+                      onEdit={(value) => {
+                        rememberKeyLength(NCBI_KEY_FIELD, value.length)
+                        props.edit(NCBI_KEY_FIELD, value)
+                      }}
+                      onClear={() => clearKey(NCBI_KEY_FIELD)}
                     />
                     {renderNumberField('pubmedIntervalMs')}
                     {renderToggle(PMC_FULLTEXT_FIELD)}
@@ -313,10 +438,14 @@ export function SettingsSection(props: Props): ReactElement {
                     id="plugin-config-litsearch-openalexApiKey"
                     label={t('field.openalexApiKey')}
                     hint={t('field.openalexApiKeyHint')}
-                    configured={state.openalexApiKey.text.trim() !== ''}
+                    configured={keyConfigured.openalex}
+                    maskedLength={keyMaskLength.openalex}
                     disabled={locked}
-                    onEdit={(value) => props.edit(OPENALEX_KEY_FIELD, value)}
-                    onClear={() => props.edit(OPENALEX_KEY_FIELD, '')}
+                    onEdit={(value) => {
+                      rememberKeyLength(OPENALEX_KEY_FIELD, value.length)
+                      props.edit(OPENALEX_KEY_FIELD, value)
+                    }}
+                    onClear={() => clearKey(OPENALEX_KEY_FIELD)}
                   />
                 )}
                 {id === 'europepmc' && renderToggle(EPMC_FULLTEXT_FIELD)}
@@ -327,10 +456,14 @@ export function SettingsSection(props: Props): ReactElement {
                       id="plugin-config-litsearch-s2ApiKey"
                       label={t('field.s2ApiKey')}
                       hint={t('field.s2ApiKeyHint')}
-                      configured={state.s2ApiKey.text.trim() !== ''}
+                      configured={keyConfigured.s2}
+                      maskedLength={keyMaskLength.s2}
                       disabled={locked}
-                      onEdit={(value) => props.edit(S2_KEY_FIELD, value)}
-                      onClear={() => props.edit(S2_KEY_FIELD, '')}
+                      onEdit={(value) => {
+                        rememberKeyLength(S2_KEY_FIELD, value.length)
+                        props.edit(S2_KEY_FIELD, value)
+                      }}
+                      onClear={() => clearKey(S2_KEY_FIELD)}
                     />
                     {renderNumberField('s2IntervalMs')}
                   </>
@@ -342,10 +475,14 @@ export function SettingsSection(props: Props): ReactElement {
                     id="plugin-config-litsearch-serpApiKey"
                     label={t('field.serpApiKey')}
                     hint={t('field.serpApiKeyHint')}
-                    configured={state.serpApiKey.text.trim() !== ''}
+                    configured={keyConfigured.serpapi}
+                    maskedLength={keyMaskLength.serpapi}
                     disabled={locked}
-                    onEdit={(value) => props.edit(SERP_KEY_FIELD, value)}
-                    onClear={() => props.edit(SERP_KEY_FIELD, '')}
+                    onEdit={(value) => {
+                      rememberKeyLength(SERP_KEY_FIELD, value.length)
+                      props.edit(SERP_KEY_FIELD, value)
+                    }}
+                    onClear={() => clearKey(SERP_KEY_FIELD)}
                   />
                 )}
               </div>
@@ -552,23 +689,35 @@ interface SecretFieldProps {
   label: string
   hint: string
   configured: boolean
+  /** 已配置密钥的字符数，用于回显等长掩码；未知时退回固定长度。 */
+  maskedLength: number
   disabled: boolean
   onEdit(value: string): void
   onClear(): void
 }
 
-/** 密钥输入：只显示「已配置/未配置」，从不回显当前值；失焦即保存。 */
+/**
+ * 密钥输入：从不回显真实值。
+ *
+ * 已配置且未聚焦时显示等长 `*` 掩码（用明文本显示，因为 password 输入框会把
+ * 字符再打码成圆点）；聚焦后清空为可供粘贴新值的密码框，失焦即保存。
+ */
 function SecretField({
   t,
   id,
   label,
   hint,
   configured,
+  maskedLength,
   disabled,
   onEdit,
   onClear,
 }: SecretFieldProps): ReactElement {
   const [draft, setDraft] = useState('')
+  const [focused, setFocused] = useState(false)
+
+  const showMask = configured && !focused && draft === ''
+  const mask = '*'.repeat(maskedLength > 0 ? maskedLength : 8)
 
   const commit = (): void => {
     const value = draft.trim()
@@ -586,16 +735,20 @@ function SecretField({
       <div style={INLINE_ROW_STYLE}>
         <input
           id={id}
-          type="password"
+          type={showMask ? 'text' : 'password'}
           autoComplete="new-password"
           style={{ ...SECRET_INPUT_STYLE, flex: 1 }}
-          value={draft}
+          value={showMask ? mask : draft}
           disabled={disabled}
           placeholder={
             configured ? t('field.keyConfigured') : t('field.keyEmpty')
           }
+          onFocus={() => setFocused(true)}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
+          onBlur={() => {
+            setFocused(false)
+            commit()
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault()

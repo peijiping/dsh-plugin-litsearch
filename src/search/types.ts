@@ -991,6 +991,8 @@ export interface HealthInfo {
   sourceHealth: SourceHealth[]
   /** 密钥是否已配置（只给布尔值，绝不返回密钥）。 */
   keys: { ncbi: boolean; openalex: boolean; s2: boolean; serpapi: boolean }
+  /** 已配置密钥的字符数（未配置为 0），仅供界面回显等长掩码。 */
+  keyLengths: { ncbi: number; openalex: number; s2: number; serpapi: number }
   settings: {
     defaultSources: SourceId[]
     defaultPageSize: number
