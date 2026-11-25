@@ -5,18 +5,20 @@
  *   加载时若新目录为空而旧目录有任务，会一次性复制过来；显式传入 root 时不迁移；
  * - 写盘全部串行执行，先写临时文件再 rename，避免半截 JSON；
  * - 内存里只保留摘要，任务正文按需从磁盘读；
- * - 落盘时摘要截到 {@link MAX_ABSTRACT_CHARS} 字符，任务数按保留策略裁剪。
+ * - 落盘保留已获取的完整论文摘要，任务数按保留策略裁剪。
  */
 
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-import { MAX_ABSTRACT_CHARS } from '../../search/config.js'
 import type { Paper, SearchTask, TaskSummary } from '../../search/types.js'
 import { resolveStorageRoot, storageRoot } from '../paths.js'
-import { cloneRound, roundsOf, toSummary, trimRounds } from './summary.js'
+import { roundsOf, toSummary, trimRounds } from './summary.js'
 
 const INDEX_VERSION = 1
+const TASK_FILE_VERSION = 2
+// 旧版会取前 800 个 UTF-16 码元，再追加一个省略号。
+const LEGACY_ABSTRACT_LIMIT = 800
 
 interface IndexFile {
   version: number
@@ -107,13 +109,18 @@ export class TaskStore {
     if (this.summaries.get(id) === undefined) return undefined
     try {
       const text = await readFile(this.taskFile(id), 'utf8')
-      const parsed = JSON.parse(text) as { task?: SearchTask }
+      const parsed = JSON.parse(text) as { version?: number; task?: SearchTask }
       if (parsed.task === undefined) {
         await this.remove(id)
         return undefined
       }
       // 旧版本任务文件没有 rounds；统一补齐并裁掉超限轮次，避免历史无限增长。
       parsed.task.rounds = trimRounds(roundsOf(parsed.task))
+      if (parsed.version === undefined || parsed.version === 1) {
+        for (const paper of parsed.task.result.papers) {
+          if (mayHaveLegacyTruncation(paper)) paper.abstractCompleteness = 'unknown'
+        }
+      }
       this.cache.set(id, parsed.task)
       return parsed.task
     } catch {
@@ -132,7 +139,10 @@ export class TaskStore {
     if (!this.summaries.has(task.id)) return
     this.put(task)
     const file = this.taskFile(task.id)
-    const body = JSON.stringify({ version: INDEX_VERSION, task: truncateForDisk(task) })
+    const body = JSON.stringify({
+      version: TASK_FILE_VERSION,
+      task: { ...task, rounds: trimRounds(roundsOf(task)) },
+    })
     await this.enqueue(async () => {
       await atomicWrite(file, body)
       await this.writeIndex()
@@ -276,40 +286,6 @@ function readBinding(value: unknown): { taskId: string; at: number } | undefined
   return { taskId: record.taskId, at: typeof record.at === 'number' ? record.at : 0 }
 }
 
-function truncateForDisk(task: SearchTask): SearchTask {
-  return {
-    ...task,
-    conditions: {
-      ...task.conditions,
-      queries: task.conditions.queries.map((query) => ({ ...query })),
-      sources: [...task.conditions.sources],
-    },
-    groups: task.groups.map((group) => ({ ...group })),
-    stats: {
-      perQuery: { ...task.stats.perQuery },
-      rawHits: task.stats.rawHits,
-      deduped: task.stats.deduped,
-      screening: { ...task.stats.screening },
-    },
-    states: { ...task.states },
-    // 轮次只记元数据；显式深拷贝，避免与内存任务共享条件引用。
-    rounds: trimRounds(roundsOf(task)).map(cloneRound),
-    result: {
-      ...task.result,
-      sources: task.result.sources.map((source) => ({ ...source })),
-      papers: task.result.papers.map(truncatePaper),
-    },
-  }
-}
-
-function truncatePaper(paper: Paper): Paper {
-  return {
-    ...paper,
-    abstract:
-      paper.abstract.length <= MAX_ABSTRACT_CHARS
-        ? paper.abstract
-        : `${paper.abstract.slice(0, MAX_ABSTRACT_CHARS)}…`,
-    hitSources: paper.hitSources.map((hit) => ({ ...hit })),
-    matchedQueries: [...paper.matchedQueries],
-  }
+function mayHaveLegacyTruncation(paper: Paper): boolean {
+  return paper.abstract.length === LEGACY_ABSTRACT_LIMIT + 1 && paper.abstract.endsWith('…')
 }

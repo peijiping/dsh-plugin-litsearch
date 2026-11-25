@@ -206,6 +206,7 @@ export function PaperPane({
       paperId: paper?.paperId ?? '',
       title: paper?.title ?? '',
       abstract: paper?.abstract ?? '',
+      abstractCompleteness: paper?.abstractCompleteness,
     },
     t,
   )
@@ -489,26 +490,27 @@ export function PaperPane({
           </div>
         )}
 
-        {paper.abstract !== '' && (
-          <section style={SECTION_STYLE}>
-            <h4 style={HEAD_STYLE}>{t('paperTab.abstract')}</h4>
-            <div style={ABSTRACT_TEXT_STYLE}>
-              {abstractShown}
-              {canCollapseAbstract && (
-                <>
-                  {' '}
-                  <button
-                    type="button"
-                    style={linkButtonStyle}
-                    onClick={() => setAbstractOpen((value) => !value)}
-                  >
-                    {abstractOpen ? t('result.collapseAbstract') : t('result.expandAbstract')}
-                  </button>
-                </>
-              )}
-            </div>
-          </section>
-        )}
+        <section style={SECTION_STYLE}>
+          <h4 style={HEAD_STYLE}>{t('paperTab.abstract')}</h4>
+          <div style={ABSTRACT_TEXT_STYLE}>
+            {paper.abstract === '' ? t('paperTab.abstractUnavailable') : abstractShown}
+            {canCollapseAbstract && (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  style={linkButtonStyle}
+                  onClick={() => setAbstractOpen((value) => !value)}
+                >
+                  {abstractOpen ? t('result.collapseAbstract') : t('result.expandAbstract')}
+                </button>
+              </>
+            )}
+          </div>
+          {paper.abstractCompleteness === 'unknown' && (
+            <p style={metaStyle}>{t('paperTab.abstractCompletenessUnknown')}</p>
+          )}
+        </section>
 
         <section style={SECTION_STYLE}>
           <h4 style={HEAD_STYLE}>{t('paperTab.identifiers')}</h4>

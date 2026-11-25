@@ -336,6 +336,8 @@ const zh: Record<string, string> = {
   'paperTab.notFound': '论文不存在或任务已删除',
   'paperTab.retry': '重试',
   'paperTab.abstract': '摘要',
+  'paperTab.abstractUnavailable': '来源未提供摘要',
+  'paperTab.abstractCompletenessUnknown': '旧任务保存的这段摘要可能有截断，完整性未知。',
   'paperTab.identifiers': '标识符',
   'paperTab.fromTask': '来自任务：{title}',
   'paperTab.landing': '原文链接',
@@ -1114,6 +1116,9 @@ const en: Record<string, string> = {
   'paperTab.notFound': 'Paper not found or the task was deleted',
   'paperTab.retry': 'Retry',
   'paperTab.abstract': 'Abstract',
+  'paperTab.abstractUnavailable': 'No abstract provided by the source',
+  'paperTab.abstractCompletenessUnknown':
+    'The abstract saved in this older task may have been truncated. Its completeness is unknown.',
   'paperTab.identifiers': 'Identifiers',
   'paperTab.fromTask': 'From task: {title}',
   'paperTab.landing': 'Landing page',

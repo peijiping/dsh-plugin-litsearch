@@ -92,9 +92,6 @@ export const DEFAULT_ZOTERO_BASE_URL = 'http://127.0.0.1:23119'
 export const DEFAULT_ZOTERO_ATTACH_PDF = true
 export const DEFAULT_ZOTERO_TAG = 'dsh-litsearch'
 
-/** 持久化时单条摘要保留的字符数。 */
-export const MAX_ABSTRACT_CHARS = 800
-
 // ---- 翻译 -------------------------------------------------------------------
 
 /** 默认翻译引擎：Bing 免密钥、快，作为默认。 */

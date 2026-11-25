@@ -144,6 +144,8 @@ export interface PaperHit {
 export interface Paper extends PaperRecord {
   /** 稳定身份键的散列，跨任务/跨检索一致。 */
   paperId: string
+  /** 旧任务中的摘要可能在写盘时截断，无法确认已保存文本是否完整。 */
+  abstractCompleteness?: 'unknown'
   hitSources: PaperHit[]
   /** 命中该论文的检索式 id。 */
   matchedQueries: string[]

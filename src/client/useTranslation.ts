@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { TranslateResult } from '../search/types'
+import type { Paper, TranslateResult } from '../search/types'
 import { translateTexts } from './api'
 import type { Translate } from './locales'
 import { showNotice } from './noticeStore'
@@ -56,6 +56,7 @@ export interface TranslationSource {
   paperId: string
   title: string
   abstract: string
+  abstractCompleteness?: Paper['abstractCompleteness']
 }
 
 export interface TranslationState {
@@ -77,13 +78,13 @@ export interface TranslationState {
 export function useTranslation(paper: TranslationSource, t: Translate): TranslationState {
   const srcTitle = paper.title
   const srcAbstract = plainText(paper.abstract)
-  // 落盘时长摘要尾部会补一个 …（见 host/tasks/store.ts 的 truncatePaper），它不是正文的一部分。
-  // 原文展示仍保留它（提示摘要被截短），但送进翻译会被渲染成 "......"，让人误以为译文没翻全。
-  const translateAbstract = srcAbstract.replace(/\s*…$/u, '')
+  // 旧任务疑似截断时，显示原来保存的省略号，翻译则沿用去掉截断标记的文本。
+  const translateAbstract =
+    paper.abstractCompleteness === 'unknown' ? srcAbstract.replace(/\s*…$/u, '') : srcAbstract
   const paperId = paper.paperId
 
   const [entry, setEntry] = useState<TranslationEntry | undefined>(() =>
-    readEntry(paperId, srcTitle, srcAbstract),
+    readEntry(paperId, srcTitle, translateAbstract),
   )
   const [busy, setBusy] = useState(false)
 
@@ -101,7 +102,7 @@ export function useTranslation(paper: TranslationSource, t: Translate): Translat
 
   /** 真正的请求：只在用户点按钮、且缓存未命中时调用。 */
   const load = useCallback(async (): Promise<void> => {
-    const cached = readEntry(paperId, srcTitle, srcAbstract)
+    const cached = readEntry(paperId, srcTitle, translateAbstract)
     if (cached !== undefined) {
       setEntry(cached)
       return
@@ -110,8 +111,7 @@ export function useTranslation(paper: TranslationSource, t: Translate): Translat
     const body =
       translateAbstract === '' ? { texts: [srcTitle] } : { texts: [srcTitle, translateAbstract] }
     try {
-      // 缓存键仍用带省略号的原文：它随原文变化，能保证同一篇复用、换篇失效。
-      const result = await startOnce(`${paperId}\u0000${srcTitle}\u0000${srcAbstract}`, () =>
+      const result = await startOnce(`${paperId}\u0000${srcTitle}\u0000${translateAbstract}`, () =>
         translateTexts(body),
       )
       if (result.sameLanguage) {
@@ -122,7 +122,7 @@ export function useTranslation(paper: TranslationSource, t: Translate): Translat
       }
       const next: TranslationEntry = {
         srcTitle,
-        srcAbstract,
+        srcAbstract: translateAbstract,
         title: result.texts[0] ?? srcTitle,
         abstract: result.texts[1] ?? '',
         provider: result.provider,
@@ -139,27 +139,27 @@ export function useTranslation(paper: TranslationSource, t: Translate): Translat
     } finally {
       if (alive.current) setBusy(false)
     }
-  }, [paperId, srcTitle, srcAbstract, translateAbstract, t])
+  }, [paperId, srcTitle, translateAbstract, t])
 
   // 换了一篇（列表复用组件实例）时重新读缓存；不会主动发请求。
   useEffect(() => {
-    setEntry(readEntry(paperId, srcTitle, srcAbstract))
-  }, [paperId, srcTitle, srcAbstract])
+    setEntry(readEntry(paperId, srcTitle, translateAbstract))
+  }, [paperId, srcTitle, translateAbstract])
 
   const toggle = useCallback(() => {
     if (busy) return
     // 已经翻过：只在原文 / 译文之间切换，不再请求引擎。
-    const cached = readEntry(paperId, srcTitle, srcAbstract)
+    const cached = readEntry(paperId, srcTitle, translateAbstract)
     if (cached !== undefined) {
       setEntry(patchOn(paperId, !cached.on))
       return
     }
     void load()
-  }, [busy, load, paperId, srcTitle, srcAbstract])
+  }, [busy, load, paperId, srcTitle, translateAbstract])
 
   // 组件可能被复用到另一篇（列表刷新时不带 key）：源文对不上就先按原文展示。
   const current =
-    entry !== undefined && entry.srcTitle === srcTitle && entry.srcAbstract === srcAbstract
+    entry !== undefined && entry.srcTitle === srcTitle && entry.srcAbstract === translateAbstract
       ? entry
       : undefined
 

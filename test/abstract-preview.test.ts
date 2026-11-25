@@ -28,7 +28,7 @@ test('原文不长时无需折叠，原文/译文都全文显示', () => {
 })
 
 test('译后译文远短于原文：仍可折叠，展开能看到完整译文（核心回归）', () => {
-  const source = 'a'.repeat(800) // 落盘后的英文摘要
+  const source = 'a'.repeat(800) // 英文原文
   const translated = '这是一个被完整翻译的中文摘要'.repeat(8) // 约 120 字，远小于 260
   assert.ok(translated.length < LIMIT)
 
