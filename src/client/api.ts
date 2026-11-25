@@ -175,6 +175,7 @@ export interface ResultsQuery {
   venue?: string
   author?: string
   newOnly?: boolean
+  supplementedOnly?: boolean
 }
 
 export function fetchHealth(signal?: AbortSignal): Promise<HealthInfo> {
@@ -270,6 +271,7 @@ function resultParams(query: ResultsQuery): URLSearchParams {
   if (query.venue !== undefined && query.venue !== '') params.set('venue', query.venue)
   if (query.author !== undefined && query.author !== '') params.set('author', query.author)
   if (query.newOnly === true) params.set('new', '1')
+  if (query.supplementedOnly === true) params.set('supplementedOnly', '1')
   return params
 }
 
@@ -318,8 +320,12 @@ export function annotateTask(
   })
 }
 
-export function supplementPaper(taskId: string, identifier: string): Promise<PaperSupplementResult> {
-  return request(taskPath(taskId, '/supplement'), writeInit('POST', { identifier }))
+export function supplementPaper(
+  taskId: string,
+  identifier: string,
+  signal?: AbortSignal,
+): Promise<PaperSupplementResult> {
+  return request(taskPath(taskId, '/supplement'), { ...writeInit('POST', { identifier }), signal })
 }
 
 export function associatePaperPdf(taskId: string, paperId: string, file: File): Promise<PaperDetail> {

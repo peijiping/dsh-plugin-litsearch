@@ -252,6 +252,9 @@ function collectActiveFilters(
   if (value.author !== undefined) {
     add('author', tpl(t('filter.authorChip'), { value: value.author }), { author: undefined })
   }
+  if (value.supplementedOnly === true) {
+    add('supplementedOnly', t('filter.supplementedOnly'), { supplementedOnly: undefined })
+  }
   if (value.newOnly === true) {
     add('newOnly', t('filter.newChip'), { newOnly: undefined })
   }
@@ -390,6 +393,17 @@ export function TaskFilters({
                   </button>
                 )
               })}
+            </div>
+          </div>
+
+          <div style={SUB_GROUP_STYLE}>
+            <span style={SUB_LABEL_STYLE}>{t('filter.entryMethod')}</span>
+            <div style={CHECK_ROW_STYLE}>
+              <CheckChip
+                checked={value.supplementedOnly === true}
+                label={t('filter.supplementedOnly')}
+                onChange={(next) => patch({ supplementedOnly: next ? true : undefined })}
+              />
             </div>
           </div>
 

@@ -232,6 +232,12 @@ export function PaperCard({
         </button>
       </div>
 
+      {paper.supplement !== undefined && (
+        <span style={{ ...INFO_BADGE_STYLE, color: 'var(--ls-accent)', alignSelf: 'flex-start' }}>
+          {t('supplement.badge')}
+        </span>
+      )}
+
       <div style={FIELD_ROW_STYLE}>
         <span style={FIELD_ICON_STYLE}>
           <TitleIcon />

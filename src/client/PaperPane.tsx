@@ -376,7 +376,7 @@ export function PaperPane({
 
           {sourceLine !== '' && <div style={SOURCE_LINE_STYLE}>{sourceLine}</div>}
           {paper.supplement !== undefined && (
-            <div style={metaStyle}>{t('supplement.origin')} · {paper.supplement.id}</div>
+            <div style={metaStyle}>{t('supplement.badge')} · {paper.supplement.id}</div>
           )}
         </article>
 

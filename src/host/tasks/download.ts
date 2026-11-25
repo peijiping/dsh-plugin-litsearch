@@ -95,6 +95,7 @@ export function toPaperFilter(raw: ViewSnapshot['filters']): PaperFilter {
     missingFullText: flag('missingFullText'),
     hasFullText: flag('hasFullText'),
     newOnly: flag('newOnly'),
+    supplementedOnly: flag('supplementedOnly'),
     screening: oneOf('screening', SCREENING_VALUES),
     language: oneOf('language', LANGUAGE_VALUES),
     pdfStatus: oneOf('pdfStatus', PDF_STATUS_VALUES),

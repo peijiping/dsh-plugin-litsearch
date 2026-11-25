@@ -21,3 +21,21 @@ export function applySupplements(task: SearchTask, papers: readonly Paper[]): vo
   task.stats.supplemented = supplemented.length
   task.stats.screening = countScreening(task.result.papers, task.states)
 }
+
+
+/** 早期版本会给当前已命中的题录贴标；原始补录快照保留了这些命中检索式。 */
+export function clearInvalidSupplementOrigins(task: SearchTask): boolean {
+  const entries = task.supplements
+  if (entries === undefined) return false
+  const invalid = new Set(
+    entries.filter((paper) => paper.matchedQueries.length > 0).map((paper) => paper.paperId),
+  )
+  if (invalid.size === 0) return false
+
+  task.supplements = entries.filter((paper) => !invalid.has(paper.paperId))
+  for (const paper of task.result.papers) {
+    if (invalid.has(paper.paperId)) delete paper.supplement
+  }
+  task.stats.supplemented = task.supplements.length
+  return true
+}

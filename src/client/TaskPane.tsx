@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type {
   AnnotationInput,
@@ -172,14 +172,17 @@ export function TaskPane({
   const [tab, setTab] = useState<TabKey>('results')
   const view = useTask(taskId, info.tab.signal, RESULT_PAGE_SIZE, filters)
   const bodyRef = useRef<HTMLDivElement>(null)
-  const [toast, setToastState] = useState('')
-  const [toastTone, setToastTone] = useState<'info' | 'error'>('info')
-  const [toastMs, setToastMs] = useState(4000)
-  /** 统一的底部浮层提示：tone 区分普通结果与下载失败。 */
-  const notify = (text: string, tone: 'info' | 'error' = 'info', ms = 4000): void => {
-    setToastState(text)
-    setToastTone(tone)
-    setToastMs(ms)
+  const [toast, setToast] = useState<{
+    text: string
+    tone: 'info' | 'error'
+    ms: number
+  } | null>(null)
+  const notify = (
+    text: string,
+    tone: 'info' | 'error' = 'info',
+    ms = 4000,
+  ): void => {
+    setToast({ text, tone, ms })
   }
   /** paperId → 下载状态；刷新任务后仍保留「下载中 / 已下载」的即时反馈。 */
   const [downloads, setDownloads] = useState<Readonly<Record<string, PdfDownloadUi>>>({})
@@ -292,10 +295,12 @@ export function TaskPane({
   }, [taskId])
 
   useEffect(() => {
-    if (toast === '') return undefined
-    const timer = setTimeout(() => notify(''), toastMs)
+    if (toast === null) return
+    const timer = setTimeout(() => setToast(null), toast.ms)
     return () => clearTimeout(timer)
-  }, [toast, toastMs])
+  }, [toast])
+
+  useEffect(() => setToast(null), [taskId])
 
   // 翻页或切换 tab 后回到内容顶部，避免停在上一页的滚动位置。
   useEffect(() => {
@@ -1063,14 +1068,17 @@ export function TaskPane({
         />
       )}
 
-      {(toast !== '' || risFallback !== null) && (
+      {(toast !== null || risFallback !== null) && (
         <div style={toastStackStyle}>
-          {toast !== '' && (
+          {toast !== null && (
             <div
-              role="status"
-              style={{ ...toastStyle, ...(toastTone === 'error' ? toastErrorStyle : null) }}
+              role={toast.tone === 'error' ? 'alert' : 'status'}
+              style={{
+                ...toastStyle,
+                ...(toast.tone === 'error' ? toastErrorStyle : null),
+              }}
             >
-              {toast}
+              {toast.text}
             </div>
           )}
 
@@ -1145,10 +1153,12 @@ export function TaskPane({
             key={taskId}
             t={t}
             taskId={taskId}
-            onAdded={(paper) => {
+            disabled={active}
+            onAdded={() => {
+              view.goToPage(0)
               view.reload()
-              onOpenPaper?.(taskId, paper.paperId, paper.title)
             }}
+            onViewSupplements={() => setFilters({ supplementedOnly: true })}
           />
           {!active && detail.steps?.some((step) => step.received !== undefined) && (
             <details>
@@ -1662,55 +1672,110 @@ const EXPORT_FORMATS = ['csv', 'ris', 'bibtex', 'md'] as const
 /** 批量下载的并发上限：同时下载 5 篇。 */
 const BATCH_CONCURRENCY = 5
 
-/** 「仅看新增」快捷按钮：与「筛选」按钮同排，筛读状态已收进筛选弹窗。 */
-function SupplementBox({ t, taskId, onAdded }: {
+/** 在结果页按标识补录，提交后等待用户确认结果。 */
+function SupplementBox({ t, taskId, disabled, onAdded, onViewSupplements }: {
   t: Translate
   taskId: string
-  onAdded(paper: Paper): void
+  disabled: boolean
+  onAdded(): void
+  onViewSupplements(): void
 }): ReactElement {
   const [identifier, setIdentifier] = useState('')
   const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState('')
+  const [feedback, setFeedback] = useState<{
+    status: 'added' | 'existing' | 'failed'
+    message: string
+  } | null>(null)
+  const pending = useRef<AbortController | null>(null)
+  useEffect(() => () => pending.current?.abort(), [])
+
   async function submit(): Promise<void> {
+    const controller = new AbortController()
+    pending.current = controller
     setBusy(true)
-    setMessage('')
     try {
-      const result = await supplementPaper(taskId, identifier)
+      const result = await supplementPaper(taskId, identifier, controller.signal)
+      if (controller.signal.aborted) return
       if ('paper' in result) {
         setIdentifier('')
-        setMessage(t(`supplement.${result.status}`))
-        onAdded(result.paper)
+        setFeedback({
+          status: result.status,
+          message: tpl(t(`supplement.${result.status}`), { title: result.paper.title }),
+        })
+        if (result.status === 'added') onAdded()
       } else {
-        setMessage(t(`supplement.${result.status}`))
+        setFeedback({ status: 'failed', message: t(`supplement.${result.status}`) })
       }
     } catch (error) {
-      setMessage(messageOf(error))
+      if (!controller.signal.aborted) {
+        setFeedback({ status: 'failed', message: messageOf(error) })
+      }
     } finally {
-      setBusy(false)
+      pending.current = null
+      if (!controller.signal.aborted) setBusy(false)
     }
   }
 
+  const feedbackTitle = feedback === null ? '' : t(`supplement.${feedback.status}Title`)
+
   return (
-    <form
-      style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', padding: '6px 8px' }}
-      onSubmit={(event) => { event.preventDefault(); if (!busy && identifier.trim()) void submit() }}
-    >
-      <input
-        aria-label={t('supplement.identifier')}
-        placeholder="DOI / PMID / arXiv ID"
-        maxLength={512}
-        value={identifier}
-        onChange={(event) => setIdentifier(event.target.value)}
-        disabled={busy}
-      />
-      <Button type="submit" variant="outline" size="sm" disabled={busy || identifier.trim() === ''}>
-        {t(busy ? 'supplement.working' : 'supplement.add')}
-      </Button>
-      {message !== '' && <span role="status">{message}</span>}
-    </form>
+    <>
+      <form
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', padding: '6px 8px' }}
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (!disabled && feedback === null && pending.current === null && identifier.trim() !== '') void submit()
+        }}
+      >
+        <input
+          aria-label={t('supplement.identifier')}
+          placeholder="DOI / PMID / arXiv ID"
+          maxLength={512}
+          value={identifier}
+          onChange={(event) => setIdentifier(event.target.value)}
+          disabled={disabled || busy}
+        />
+        <Button type="submit" variant="outline" size="sm" disabled={disabled || busy || identifier.trim() === ''}>
+          {t(busy ? 'supplement.working' : 'supplement.add')}
+        </Button>
+      </form>
+      {feedback !== null && (
+        <Modal
+          open
+          headless
+          title={feedbackTitle}
+          onClose={() => { /* 点击遮罩或按 Escape 时保留结果。 */ }}
+        >
+          <div style={{ padding: '20px 20px 0' }}>
+            <h2 style={{ margin: 0, fontSize: 17 }}>{feedbackTitle}</h2>
+            <p style={{ margin: '10px 0 20px', maxHeight: '50dvh', overflowY: 'auto', overflowWrap: 'anywhere' }}>
+              {feedback.message}
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8 }}>
+              {feedback.status === 'added' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setFeedback(null)
+                    onViewSupplements()
+                  }}
+                >
+                  {t('supplement.viewAll')}
+                </Button>
+              )}
+              <Button type="button" variant="primary" data-modal-autofocus onClick={() => setFeedback(null)}>
+                {t('supplement.confirm')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
   )
 }
 
+/** 「仅看新增」快捷按钮。 */
 function NewOnlyPill({
   t,
   filters,

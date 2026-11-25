@@ -15,6 +15,7 @@ import { SearchError } from '../../search/errors.js'
 import type { Paper, SearchTask, TaskSummary } from '../../search/types.js'
 import { resolveStorageRoot, storageRoot } from '../paths.js'
 import { roundsOf, toSummary, trimRounds } from './summary.js'
+import { clearInvalidSupplementOrigins } from './supplements.js'
 
 const INDEX_VERSION = 1
 const TASK_FILE_VERSION = 2
@@ -122,7 +123,11 @@ export class TaskStore {
       const loaded = this.cache.get(id)
       if (loaded !== undefined) return loaded
       if (!this.summaries.has(id)) return undefined
-      this.cache.set(id, parsed.task)
+      if (clearInvalidSupplementOrigins(parsed.task)) {
+        this.put(parsed.task)
+      } else {
+        this.cache.set(id, parsed.task)
+      }
       return parsed.task
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') {

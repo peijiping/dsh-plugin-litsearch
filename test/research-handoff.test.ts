@@ -23,6 +23,7 @@ const { getSettings, setSettingsReader, ROUTE_PREFIX, WRITE_HEADER } = await imp
 hooks.deregister()
 
 const DOI = '10.5555/test'
+const SEARCHED_DOI = '10.5555/already-in-results'
 const COLLECTION = 'AAAA2222'
 const PDF = Buffer.from('%PDF-1.4\nstartxref\n0\n%%EOF\n')
 
@@ -65,14 +66,18 @@ test('补录重跑后仍在，本地 PDF 可重新关联，Zotero 部分写入�
     const url = new URL(input instanceof Request ? input.url : input)
     if (url.hostname === 'api.crossref.org') {
       return Promise.resolve(Response.json({
-        message: url.pathname === '/works' ? { items: [] } : {
+        message: url.pathname === '/works' ? { items: [
+          { DOI: SEARCHED_DOI, title: ['Ordinary search result'], type: 'journal-article' },
+        ] } : {
           DOI: doiResponse, title: ['Synthetic test record'], type: 'journal-article',
         },
       }))
     }
     if (url.hostname === 'eutils.ncbi.nlm.nih.gov') {
+      const pmid = url.searchParams.get('id')
+      const doi = pmid === '234567' ? `<ArticleId IdType="doi">${SEARCHED_DOI}</ArticleId>` : ''
       return Promise.resolve(new Response(
-        '<PubmedArticle><PMID>123456</PMID><ArticleTitle>Synthetic PubMed record</ArticleTitle></PubmedArticle>',
+        `<PubmedArticle><PMID>${pmid}</PMID><ArticleTitle>Synthetic PubMed record</ArticleTitle>${doi}</PubmedArticle>`,
       ))
     }
     if (url.hostname === 'export.arxiv.org') {
@@ -228,6 +233,20 @@ test('补录重跑后仍在，本地 PDF 可重新关联，Zotero 部分写入�
 
   const task = await service.create({ origin: 'panel', title: 'handoff test', query: 'test', sources: ['crossref'], runNow: false })
   const path = `tasks/${task.id}`
+  await service.run(task.id)
+  const searched = (await route(`${path}/results`, 'GET')).papers[0]
+  assert.equal(searched.ids.doi, SEARCHED_DOI)
+  const before = await service.getDetail(task.id)
+  const existingDoi = await route(`${path}/supplement`, 'POST', { identifier: SEARCHED_DOI })
+  const existingPmid = await route(`${path}/supplement`, 'POST', { identifier: 'PMID:234567' })
+  for (const result of [existingDoi, existingPmid]) {
+    assert.equal(result.status, 'existing')
+    assert.equal(result.paper.paperId, searched.paperId)
+    assert.equal(result.paper.supplement, undefined)
+  }
+  assert.equal((await service.getDetail(task.id)).rev, before.rev)
+  assert.equal((await route(`${path}/results?supplementedOnly=1`, 'GET')).total, 0)
+
   assert.equal((await route(`${path}/supplement`, 'POST', { identifier: 'arXiv:2401.00123v1' })).status, 'version_mismatch')
   arxivVersion = '2401.00123v1'
   assert.equal((await route(`${path}/supplement`, 'POST', { identifier: 'arXiv:2401.00123v1' })).paper.arxivVersionId, arxivVersion)
@@ -237,16 +256,39 @@ test('补录重跑后仍在，本地 PDF 可重新关联，Zotero 部分写入�
   doiResponse = DOI
   const added = await route(`${path}/supplement`, 'POST', { identifier: DOI })
   assert.equal(added.status, 'added')
+  assert.equal(added.paper.supplement.id, DOI)
   const paperId = added.paper.paperId
   const paperPath = `${path}/papers/${paperId}`
   assert.equal((await route(`${path}/supplement`, 'POST', { identifier: DOI })).status, 'existing')
   await restart()
   await service.run(task.id)
   const rerun = await service.get(task.id)
-  assert.equal(rerun.result.papers.length, 3)
-  assert.equal(rerun.stats.rawHits, 0)
+  assert.equal(rerun.result.papers.length, 4)
+  assert.equal(rerun.stats.rawHits, 1)
   assert.equal(rerun.stats.supplemented, 3)
-  assert.equal(rerun.steps?.find((step) => step.source === 'crossref')?.received, 0)
+  assert.equal(rerun.steps?.find((step) => step.source === 'crossref')?.received, 1)
+  const filtered = await route(`${path}/results?supplementedOnly=1`, 'GET')
+  assert.equal(filtered.total, 3)
+  assert.equal(filtered.papers[0].paperId, paperId)
+  assert.ok(filtered.papers.every((paper) => paper.supplement !== undefined))
+  assert.equal((await route(`${path}/results?supplementedOnly=1&q=Ordinary`, 'GET')).total, 0)
+  const statsPath = `${path}/stats?scope=filtered`
+  assert.equal((await route(statsPath, 'GET')).loaded, 4)
+  assert.equal((await route(`${statsPath}&supplementedOnly=1`, 'GET')).loaded, 3)
+
+  // 模拟旧版把普通命中写进了补录快照。恢复后仅清除错误标签，保留原结果。
+  const taskFile = join(tasksDir, `${task.id}.json`)
+  const old = JSON.parse(await readFile(taskFile, 'utf8'))
+  const marked = old.task.result.papers.find((paper) => paper.paperId === searched.paperId)
+  assert.ok(marked.matchedQueries.length > 0)
+  marked.supplement = { kind: 'doi', id: SEARCHED_DOI, addedAt: new Date().toISOString() }
+  old.task.supplements.push(marked)
+  old.task.stats.supplemented += 1
+  await writeFile(taskFile, JSON.stringify(old))
+  await restart()
+  assert.equal((await service.getDetail(task.id)).stats.supplemented, 3)
+  assert.equal((await route(`${path}/papers/${searched.paperId}`, 'GET')).paper.supplement, undefined)
+  assert.equal((await route(`${path}/results?supplementedOnly=1`, 'GET')).total, 3)
 
   assert.equal((await route('settings/zotero/write', 'POST')).state, 'saved')
   const sync = () => route(`${path}/zotero`, 'POST', { paperIds: [paperId], targetId: 'C2' })

@@ -629,6 +629,8 @@ function readResultsFilter(params: URLSearchParams): ResultsFilter {
   if (author !== '') filter.author = author
   const newOnly = params.get('new')
   if (newOnly === '1' || newOnly === 'true') filter.newOnly = true
+  const supplementedOnly = params.get('supplementedOnly')
+  if (supplementedOnly === '1' || supplementedOnly === 'true') filter.supplementedOnly = true
   return filter
 }
 

@@ -41,6 +41,8 @@ export interface PaperFilter {
   author?: string
   /** 只保留相对 `fromTaskId` 新增的论文。 */
   newOnly?: boolean
+  /** 只保留在任务中按标识新增的论文。 */
+  supplementedOnly?: boolean
   /** 由服务层按基准任务解析出的新增集合；不参与指纹。 */
   newPaperIds?: ReadonlySet<string>
 }
@@ -51,6 +53,7 @@ export function filterPapers(task: SearchTask, filter: PaperFilter = {}): Paper[
   const venue = filter.venue?.trim().toLowerCase() ?? ''
   const author = filter.author?.trim().toLowerCase() ?? ''
   return task.result.papers.filter((paper) => {
+    if (filter.supplementedOnly === true && paper.supplement === undefined) return false
     if (filter.source !== undefined && !paper.hitSources.some((hit) => hit.source === filter.source)) {
       return false
     }
@@ -194,5 +197,6 @@ export function filterKey(filter: PaperFilter): string {
     filter.venue ?? '',
     filter.author ?? '',
     filter.newOnly === true ? '1' : '',
+    filter.supplementedOnly === true ? '1' : '',
   ].join('|')
 }

@@ -1406,7 +1406,7 @@ async function runTaskAction(
     case 'supplement': {
       const result = await service.supplement(requireId(args), args.identifier ?? '')
       if (!('paper' in result)) return `补录${result.status}：${result.error}`
-      return `${result.status === 'added' ? '已补录' : '已复用'}「${result.paper.title}」（paperId: ${result.paper.paperId}）。`
+      return `${result.status === 'added' ? '补录成功' : '当前结果已有，无需补录'}「${result.paper.title}」（paperId: ${result.paper.paperId}）。`
     }
     case 'annotate': {
       const result = await service.annotate(requireId(args), args.papers ?? [])
@@ -1603,6 +1603,7 @@ const SNAPSHOT_FILTER_LABELS: Record<string, string> = {
   missingFullText: '缺全文',
   hasFullText: '有全文',
   newOnly: '仅新增',
+  supplementedOnly: '只看手工补录',
   screening: '筛读',
   language: '语言',
   pdfStatus: '全文状态',

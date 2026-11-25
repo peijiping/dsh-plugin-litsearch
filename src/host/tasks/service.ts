@@ -10,6 +10,7 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 
 import { MAX_LIMIT, getSettings } from '../../search/config.js'
+import { makePaperId } from '../../search/identity.js'
 import { lookupPaper, matchesIdentifier, parseIdentifier } from '../../search/lookup.js'
 import { SearchError } from '../../search/errors.js'
 import { cooldownUntil, sourceHealthList } from '../../search/health.js'
@@ -999,25 +1000,45 @@ export class TaskService {
 
   async supplement(id: string, input: string): Promise<PaperSupplementResult> {
     const identifier = parseIdentifier(input)
+    const assertIdle = (task: SearchTask): void => {
+      if (this.runner.isRunning(id) || task.status === 'running' || task.status === 'queued') {
+        throw new SearchError('conflict', '检索尚未完成，请等待结果更新后再补录')
+      }
+    }
     const task = await this.get(id)
-    const findExisting = () => task.result.papers.find((paper) => matchesIdentifier(paper, identifier))
-    let existing = findExisting()
-    const outcome = existing === undefined ? await lookupPaper(identifier) : undefined
-    if (outcome !== undefined && !('paper' in outcome)) return outcome
-    await this.get(id)
-    existing ??= findExisting()
-    const paper = existing ?? (outcome !== undefined && 'paper' in outcome ? outcome.paper : undefined)
-    if (paper === undefined) throw new SearchError('not_found', '未找到该题录')
-    if (paper.supplement !== undefined) return { status: 'existing', paper }
+    assertIdle(task)
+    const findExisting = (current: SearchTask) =>
+      current.result.papers.find((paper) => matchesIdentifier(paper, identifier))
+    const existing = findExisting(task)
+    if (existing !== undefined) return { status: 'existing', paper: existing }
+
+    const outcome = await lookupPaper(identifier)
+    const current = await this.get(id)
+    assertIdle(current)
+    const concurrentMatch = findExisting(current)
+    if (concurrentMatch !== undefined) return { status: 'existing', paper: concurrentMatch }
+    if (!('paper' in outcome)) return outcome
+
+    const { paper } = outcome
+    // PMID 查到的正式题录有时还能提供 DOI，复用只有 DOI 的现有结果。
+    if (identifier.kind === 'pmid' && paper.ids.doi !== '') {
+      const sameDoi = current.result.papers.find((record) =>
+        record.ids.pmid === '' && matchesIdentifier(record, { kind: 'doi', id: paper.ids.doi }),
+      )
+      if (sameDoi !== undefined) return { status: 'existing', paper: sameDoi }
+    }
 
     const entry: Paper = {
       ...paper,
+      ...(current.result.papers.some((record) => record.paperId === paper.paperId)
+        ? { paperId: makePaperId(`supplement:${identifier.kind}:${identifier.id}`) }
+        : {}),
       supplement: { ...identifier, addedAt: new Date().toISOString() },
     }
-    task.supplements = [...(task.supplements ?? []), entry]
-    applySupplements(task, task.result.papers)
-    await this.saveResearchChange(task)
-    return { status: existing === undefined ? 'added' : 'existing', paper: findPaper(task, entry.paperId) }
+    current.supplements = [entry, ...(current.supplements ?? [])]
+    applySupplements(current, current.result.papers)
+    await this.saveResearchChange(current)
+    return { status: 'added', paper: findPaper(current, entry.paperId) }
   }
 
   async associatePdf(id: string, paperId: string, bytes: Buffer, workspace?: string): Promise<PaperDetail> {
