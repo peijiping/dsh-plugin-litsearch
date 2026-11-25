@@ -13,14 +13,14 @@ import { useEffect, useRef, useState } from 'react'
 
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { PaperState, ZoteroDuplicateMatch, ZoteroTarget } from '../search/types'
-import { checkZoteroDuplicates, fetchZoteroTargets, syncZotero } from './api'
+import type { PaperState, ZoteroTarget, ZoteroTransfer } from '../search/types'
+import { fetchZoteroTargets, syncZotero } from './api'
 import type { BatchDownloadItem } from './DownloadDialog'
 import { SpinnerIcon } from './icons'
 import { tpl, type Translate } from './locales'
 import { ACCENT, ERROR, statusStyle } from './styles'
 
-type RowPhase = 'pending' | 'syncing' | 'synced' | 'failed' | 'skipped'
+type RowPhase = 'pending' | 'syncing' | 'synced' | 'failed' | 'pendingPdf'
 
 interface Row {
   paperId: string
@@ -28,8 +28,7 @@ interface Row {
   phase: RowPhase
   error?: string
   note?: string
-  /** 目标目录里已存在时的命中依据；缺省表示未命中。 */
-  duplicate?: ZoteroDuplicateMatch
+  transfer?: ZoteroTransfer
   /** 命中数据源 / `期刊 · 年份`；模型发起时由 Host 直接带上，便于核对。 */
   source?: string
   meta?: string
@@ -56,7 +55,7 @@ const PHASE_COLOR: Record<RowPhase, string> = {
   syncing: ACCENT,
   synced: 'var(--ls-success)',
   failed: ERROR,
-  skipped: '#b8860b',
+  pendingPdf: 'var(--ls-ink-2)',
 }
 
 interface Props {
@@ -75,25 +74,26 @@ interface Props {
 function initialRows(
   items: readonly BatchDownloadItem[],
   states: Record<string, PaperState>,
+  targetId?: string,
 ): Row[] {
   return items.map((item) => {
     const state = states[item.paperId]
-    const phase: RowPhase =
-      state?.zoteroStatus === 'synced'
-        ? 'synced'
-        : state?.zoteroStatus === 'failed'
-          ? 'failed'
-          : 'pending'
+    const transfer = state?.zoteroTransfers?.slice().reverse().find((entry) => entry.targetId === targetId)
+    let phase: RowPhase = 'pending'
+    if (transfer?.parent.status === 'done' && transfer.collection === 'done') {
+      if (transfer.attachment.status === 'done' || transfer.attachment.status === 'skipped') phase = 'synced'
+      else if (transfer.attachment.status === 'pending' && transfer.error === undefined) phase = 'pendingPdf'
+      else phase = 'failed'
+    } else if (transfer !== undefined && transfer.parent.status !== 'pending') {
+      phase = 'failed'
+    }
     return {
       paperId: item.paperId,
       title: item.title,
       phase,
       ...(item.source === undefined || item.source === '' ? {} : { source: item.source }),
       ...(item.meta === undefined || item.meta === '' ? {} : { meta: item.meta }),
-      ...(state?.zoteroError === undefined ? {} : { error: state.zoteroError }),
-      ...(phase === 'synced' && state?.zoteroCollection !== undefined
-        ? { note: state.zoteroCollection }
-        : {}),
+      ...(transfer === undefined ? {} : { transfer, error: transfer.error }),
     }
   })
 }
@@ -123,6 +123,7 @@ export function ZoteroSyncDialog({
   const [targets, setTargets] = useState<ZoteroTarget[]>([])
   const [currentId, setCurrentId] = useState<string | undefined>(undefined)
   const [targetId, setTargetId] = useState<string>('')
+  const [rowTargetId, setRowTargetId] = useState('')
   const [loading, setLoading] = useState(false)
   /** 目录列表本轮是否已读完（含失败）；自动同步必须等它就绪，避免用到上一批目录。 */
   const [targetsReady, setTargetsReady] = useState(false)
@@ -130,13 +131,6 @@ export function ZoteroSyncDialog({
   const [running, setRunning] = useState(false)
   const [notice, setNotice] = useState<string | undefined>(undefined)
   const [hasRun, setHasRun] = useState(false)
-  /** 正在查目标目录里的重复文献；查重完成前不允许开跑，避免重复写入。 */
-  const [checking, setChecking] = useState(false)
-  const [checkNote, setCheckNote] = useState<string | undefined>(undefined)
-  /** 已按哪个目录完成查重；切换目录后自动重查。 */
-  const [checkedTargetId, setCheckedTargetId] = useState<string | undefined>(undefined)
-  /** 正在单篇强制同步的文献；与批量同步互斥。 */
-  const [forcingId, setForcingId] = useState<string | undefined>(undefined)
   /** 取消后停止派发剩余文献；已发出的请求仍会完成。 */
   const stopRef = useRef(false)
   /** 自动同步只跑一次；每次打开/换清单时重置。 */
@@ -152,14 +146,11 @@ export function ZoteroSyncDialog({
     setRows(initialRows(items, states))
     setHasRun(false)
     setNotice(undefined)
-    setChecking(false)
-    setCheckNote(undefined)
-    setCheckedTargetId(undefined)
-    setForcingId(undefined)
     setLoadError(undefined)
     setTargetsReady(false)
     setTargets([])
     setTargetId('')
+    setRowTargetId('')
     autoStartRef.current = false
     let cancelled = false
     setLoading(true)
@@ -200,70 +191,31 @@ export function ZoteroSyncDialog({
     // desiredId 变化时（连发两条不同目录的指令）也要重读目录并重新预选。
   }, [open, key, desiredId])
 
+  useEffect(() => {
+    if (!open || targetId === '') return
+    setRows(initialRows(items, states, targetId))
+    setRowTargetId(targetId)
+    setHasRun(false)
+    // 更新同一目标的进度由 syncRow 负责，避免事件刷新重置正在进行的操作。
+  }, [open, key, targetId])
+
   const target = targets.find((entry) => entry.id === targetId)
   const total = rows.length
   const synced = rows.filter((row) => row.phase === 'synced').length
   const failed = rows.filter((row) => row.phase === 'failed').length
-  const skipped = rows.filter((row) => row.phase === 'skipped').length
+  const pendingPdf = rows.filter((row) => row.phase === 'pendingPdf').length
   const pending = rows.filter((row) => row.phase === 'pending').length
   const syncing = rows.filter((row) => row.phase === 'syncing').length
   const done = total - pending - syncing
-  const rerunHint = rows.some((row) => row.phase === 'synced')
+  const rerunHint = rows.some((row) => row.transfer !== undefined)
 
-  // 选定目录后查一次重：命中的文献标成「已存在」，默认不再同步。
-  // 查重失败或 Local API 未开启时只给提示，照常允许同步（fail-open）。
-  useEffect(() => {
-    if (!open || !targetsReady || target === undefined || running) return
-    if (checkedTargetId === target.id) return
-    let cancelled = false
-    setChecking(true)
-    setCheckNote(undefined)
-    // 换目录后先清掉上一个目录的跳过标记，等新结果回来再标。
-    setRows((prev) =>
-      prev.map((row) =>
-        row.phase === 'skipped' ? { ...row, phase: 'pending', duplicate: undefined } : row,
-      ),
-    )
-    checkZoteroDuplicates(taskId, items.map((item) => item.paperId), {
-      id: target.id,
-      name: target.name,
-    })
-      .then((result) => {
-        if (cancelled) return
-        const found = new Map(result.duplicates.map((entry) => [entry.paperId, entry.matchedBy]))
-        setRows((prev) =>
-          prev.map((row) => {
-            if (row.phase === 'syncing') return row
-            const matchedBy = found.get(row.paperId)
-            return matchedBy === undefined
-              ? row
-              : { ...row, phase: 'skipped', duplicate: matchedBy, error: undefined, note: undefined }
-          }),
-        )
-        setCheckNote(result.note)
-        setCheckedTargetId(target.id)
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        setCheckNote(error instanceof Error ? error.message : String(error))
-        setCheckedTargetId(target.id)
-      })
-      .finally(() => {
-        if (!cancelled) setChecking(false)
-      })
-    return () => {
-      cancelled = true
-    }
-    // items 由 key 代表（同一批 paperId）；target 在同一次目录加载内引用稳定。
-  }, [open, targetsReady, target, running, checkedTargetId, taskId, key])
-
-  /** 单篇同步，供批量与「强制同步」共用；返回是否成功。 */
-  const syncRow = async (row: Row): Promise<boolean> => {
-    if (target === undefined) return false
+  /** Host 核验目标库中的父条目，并复用已保存的分类和附件。 */
+  const syncRow = async (row: Row): Promise<void> => {
+    if (target === undefined) return
     setRows((prev) =>
       prev.map((entry) =>
         entry.paperId === row.paperId
-          ? { ...entry, phase: 'syncing', error: undefined, note: undefined, duplicate: undefined }
+          ? { ...entry, phase: 'syncing', error: undefined, note: undefined }
           : entry,
       ),
     )
@@ -281,7 +233,8 @@ export function ZoteroSyncDialog({
           entry.paperId === row.paperId
             ? {
                 ...entry,
-                phase: ok ? 'synced' : 'failed',
+                phase: ok ? (item?.transfer?.attachment.status === 'pending' ? 'pendingPdf' : 'synced') : 'failed',
+                ...(item?.transfer === undefined ? {} : { transfer: item.transfer }),
                 ...(ok
                   ? note === undefined
                     ? {}
@@ -291,7 +244,6 @@ export function ZoteroSyncDialog({
             : entry,
         ),
       )
-      return ok
     } catch (error) {
       // 连接层面的错误（Zotero 没开、目录失效）：记下原因并停止派发后续文献。
       const message = error instanceof Error ? error.message : String(error)
@@ -302,52 +254,18 @@ export function ZoteroSyncDialog({
         ),
       )
       setNotice(message)
-      return false
     }
   }
 
   const run = async (): Promise<void> => {
-    if (running || checking || target === undefined) return
+    if (running || target === undefined) return
     setRunning(true)
     setNotice(undefined)
     setHasRun(true)
     stopRef.current = false
 
-    // 每次开跑前重新查重：上一轮刚存入的条目此时已在目标目录里，必须改成跳过，
-    // 否则「重新同步」会把它们再存一遍，产生重复。
-    setChecking(true)
-    let found: Map<string, ZoteroDuplicateMatch> | undefined
-    try {
-      const result = await checkZoteroDuplicates(taskId, items.map((item) => item.paperId), {
-        id: target.id,
-        name: target.name,
-      })
-      found = result.ok
-        ? new Map(result.duplicates.map((entry) => [entry.paperId, entry.matchedBy]))
-        : undefined
-      setCheckNote(result.note)
-      setCheckedTargetId(target.id)
-    } catch (error) {
-      // 查重失败不阻塞同步；已确认的跳过项保持跳过，绝不自动重存。
-      setCheckNote(error instanceof Error ? error.message : String(error))
-    } finally {
-      setChecking(false)
-    }
-
-    const list = rows.map((row): Row => {
-      const matchedBy = found?.get(row.paperId)
-      if (matchedBy !== undefined) {
-        return { ...row, phase: 'skipped', duplicate: matchedBy, error: undefined, note: undefined }
-      }
-      if (row.phase === 'skipped') {
-        // 查重确认已不在目标目录（或本轮查重失败）：恢复待同步，绝不自动重存。
-        return found === undefined ? row : { ...row, phase: 'pending', duplicate: undefined }
-      }
-      return { ...row, phase: 'pending', error: undefined, note: undefined }
-    })
-    setRows(list)
-    const failedIds: string[] = []
-    const work = list.filter((row) => row.phase !== 'skipped')
+    const work = rows.map((row): Row => ({ ...row, phase: 'pending', error: undefined, note: undefined }))
+    setRows(work)
 
     // 固定 5 个 worker 从同一个游标取任务：并发不超过 5，也不会重复同步同一篇。
     let cursor = 0
@@ -355,35 +273,21 @@ export function ZoteroSyncDialog({
       while (!stopRef.current && cursor < work.length) {
         const row = work[cursor]
         cursor += 1
-        if (row !== undefined && !(await syncRow(row))) failedIds.push(row.paperId)
+        if (row !== undefined) await syncRow(row)
       }
     }
     await Promise.all(
       Array.from({ length: Math.min(SYNC_CONCURRENCY, work.length) }, () => worker()),
     )
     setRunning(false)
-    onDone(failedIds)
-  }
-
-  /** 行内「强制同步」：忽略查重结果，立即单独同步这一篇。 */
-  const forceSync = async (paperId: string): Promise<void> => {
-    if (running || checking || forcingId !== undefined || target === undefined) return
-    const row = rows.find((entry) => entry.paperId === paperId)
-    if (row === undefined) return
-    setForcingId(paperId)
-    setNotice(undefined)
-    const ok = await syncRow(row)
-    setForcingId(undefined)
-    onDone(ok ? [] : [paperId])
+    onDone([])
   }
 
   // 模型点名了目录：等目录加载完、预选生效后自动开跑一次（ref 防重复）。
   // 目录读不到 / 指定目录不在列表里时一律退回手动，绝不猜一个目录就写入数据。
   useEffect(() => {
     if (!open || loading || !targetsReady || meta?.autoStart !== true || autoStartRef.current) return
-    if (running || checking) return
-    // 自动同步必须等查重完成，避免把目标目录已有的文献又存一遍。
-    if (target !== undefined && checkedTargetId !== target.id) return
+    if (running || rowTargetId !== targetId) return
     if (desiredId === undefined) {
       autoStartRef.current = true
       return
@@ -405,9 +309,9 @@ export function ZoteroSyncDialog({
     open,
     loading,
     targetsReady,
+    rowTargetId,
+    targetId,
     running,
-    checking,
-    checkedTargetId,
     target,
     targets,
     loadError,
@@ -421,13 +325,11 @@ export function ZoteroSyncDialog({
       ? t('zotero.dialog.running')
       : pending > 0
         ? undefined
-        : failed === 0 && skipped > 0
-          ? tpl(t('zotero.dialog.doneSkipped'), { n: synced, skipped })
+        : pendingPdf > 0 && failed === 0
+          ? tpl(t('zotero.dialog.pendingPdf'), { n: pendingPdf })
           : failed === 0
-            ? tpl(t('zotero.dialog.done'), { n: synced })
-            : skipped > 0
-              ? tpl(t('zotero.dialog.partialSkipped'), { saved: synced, failed, skipped })
-              : tpl(t('zotero.dialog.partial'), { saved: synced, failed })
+          ? tpl(t('zotero.dialog.done'), { n: synced })
+          : tpl(t('zotero.dialog.partial'), { saved: synced, failed })
 
   return (
     <Modal
@@ -469,7 +371,7 @@ export function ZoteroSyncDialog({
               size="sm"
               type="button"
               onClick={run}
-              disabled={running || checking || forcingId !== undefined || loading || target === undefined}
+              disabled={running || loading || rowTargetId !== targetId || target === undefined}
             >
               {running
                 ? t('zotero.dialog.syncing')
@@ -501,7 +403,7 @@ export function ZoteroSyncDialog({
             style={SELECT_STYLE}
             value={targetId}
             onChange={(event) => setTargetId(event.target.value)}
-            disabled={running || forcingId !== undefined}
+            disabled={running}
           >
             {targets.map((entry) => (
               <option key={entry.id} value={entry.id}>
@@ -530,17 +432,6 @@ export function ZoteroSyncDialog({
             )}
           </div>
         )}
-        {checking && (
-          <div style={CHECKING_STYLE}>
-            <SpinnerIcon />
-            {t('zotero.dialog.checking')}
-          </div>
-        )}
-        {checkNote !== undefined && checkNote !== '' && (
-          <div style={HINT_STYLE} title={checkNote}>
-            {checkNote}
-          </div>
-        )}
         <div style={COUNTS_STYLE}>
           <span>{tpl(t('zotero.dialog.total'), { n: total })}</span>
           <span style={{ color: PHASE_COLOR.synced }}>
@@ -550,11 +441,6 @@ export function ZoteroSyncDialog({
             {tpl(t('zotero.dialog.syncingCount'), { n: syncing })}
           </span>
           <span>{tpl(t('zotero.dialog.pending'), { n: pending })}</span>
-          {skipped > 0 && (
-            <span style={{ color: PHASE_COLOR.skipped }}>
-              {tpl(t('zotero.dialog.skipped'), { n: skipped })}
-            </span>
-          )}
           <span style={{ color: PHASE_COLOR.failed }}>
             {tpl(t('zotero.dialog.failed'), { n: failed })}
           </span>
@@ -573,7 +459,9 @@ export function ZoteroSyncDialog({
       </div>
 
       <ul style={LIST_STYLE}>
-        {rows.map((row, index) => (
+        {rows.map((row, index) => {
+          const transfer = row.transfer
+          return (
           <li key={row.paperId} style={ROW_STYLE}>
             <span style={INDEX_STYLE}>{index + 1}</span>
             <div style={ROW_MAIN_STYLE}>
@@ -603,26 +491,15 @@ export function ZoteroSyncDialog({
                   {row.note}
                 </span>
               )}
-              {row.phase === 'skipped' && row.duplicate !== undefined && (
+              {transfer !== undefined && (
                 <span style={ROW_NOTE_STYLE}>
-                  {tpl(t('zotero.dialog.duplicateNote'), {
-                    by: t(`zotero.dialog.duplicateBy.${row.duplicate}`),
+                  {tpl(t('zotero.dialog.steps'), {
+                    parent: t(`zotero.step.${transfer.parent.status}`),
+                    collection: t(`zotero.step.${transfer.collection}`),
+                    pdf: t(`zotero.step.${transfer.attachment.status}`),
                   })}
+                  {transfer.parent.key && ` · ${transfer.library}/${transfer.parent.key}`}
                 </span>
-              )}
-              {row.phase === 'skipped' && (
-                <button
-                  type="button"
-                  style={LINK_BUTTON_STYLE}
-                  disabled={running || checking || forcingId !== undefined}
-                  onClick={() => {
-                    void forceSync(row.paperId)
-                  }}
-                >
-                  {forcingId === row.paperId
-                    ? t('zotero.dialog.forcing')
-                    : t('zotero.dialog.force')}
-                </button>
               )}
             </div>
             <span style={{ ...STATUS_CHIP_STYLE, color: PHASE_COLOR[row.phase] }}>
@@ -630,7 +507,8 @@ export function ZoteroSyncDialog({
               {t(`zotero.dialog.status.${row.phase}`)}
             </span>
           </li>
-        ))}
+          )
+        })}
       </ul>
     </Modal>
   )
@@ -685,28 +563,6 @@ const HINT_STYLE: CSSProperties = {
   fontSize: 11,
   lineHeight: 1.5,
   color: 'var(--ls-ink-2)',
-}
-
-const CHECKING_STYLE: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  fontSize: 11.5,
-  lineHeight: 1.5,
-  color: 'var(--ls-ink-2)',
-}
-
-const LINK_BUTTON_STYLE: CSSProperties = {
-  alignSelf: 'flex-start',
-  padding: 0,
-  border: 'none',
-  background: 'none',
-  color: 'var(--ls-accent-ink)',
-  font: 'inherit',
-  fontSize: 11,
-  lineHeight: 1.5,
-  textDecoration: 'underline',
-  cursor: 'pointer',
 }
 
 const OVERVIEW_STYLE: CSSProperties = {

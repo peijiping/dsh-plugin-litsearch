@@ -347,7 +347,8 @@ export async function persistPdf(
   workspace?: string,
   /** 本次下载显式指定的目录；缺省时按设置 / 会话工作目录解析。 */
   targetDir?: string,
-): Promise<{ cachePath: string; filePath: string; filename: string; reused: boolean; bytes: number }> {
+  contentAddressed = false,
+): Promise<{ sha256: string; cachePath: string; filePath: string; filename: string; reused: boolean; bytes: number }> {
   const hash = createHash('sha256').update(buffer).digest('hex')
   const cacheDir = pdfCacheDir(storageRoot)
   await mkdir(cacheDir, { recursive: true })
@@ -357,13 +358,15 @@ export async function persistPdf(
   const explicit = targetDir?.trim() ?? ''
   const root = explicit === '' ? resolvePdfRoot(workspace) : explicit
   await mkdir(root, { recursive: true })
-  const filename = readableFilename(paper)
+  const filename = contentAddressed ? `${hash}.pdf` : readableFilename(paper)
   const filePath = join(root, filename)
   // 同名文件已存在且是合法 PDF 时直接复用：坏文件才会被原子替换。
-  const reused = await isValidPdfFile(filePath)
+  const reused = contentAddressed
+    ? await readFile(filePath).then((data) => data.equals(buffer), () => false)
+    : await isValidPdfFile(filePath)
   if (!reused) await writePdfAtomic(filePath, buffer)
   const size = await stat(filePath).then((info) => info.size).catch(() => buffer.length)
-  return { cachePath, filePath, filename, reused, bytes: size }
+  return { sha256: hash, cachePath, filePath, filename, reused, bytes: size }
 }
 
 /** 原子写：同目录 `.part` 临时文件 → rename；任何失败都清理临时文件。 */

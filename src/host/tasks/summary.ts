@@ -57,6 +57,7 @@ function cloneStats(stats: TaskStats): TaskSummary['stats'] {
     perQuery: { ...stats.perQuery },
     rawHits: stats.rawHits,
     deduped: stats.deduped,
+    ...(stats.supplemented === undefined ? {} : { supplemented: stats.supplemented }),
     screening: { ...stats.screening },
   }
 }

@@ -93,6 +93,7 @@ export function finishRound(
     rawHits: task.stats.rawHits,
     deduped: task.stats.deduped,
     loaded: task.result.papers.length,
+    ...(task.stats.supplemented === undefined ? {} : { supplemented: task.stats.supplemented }),
     perQuery: { ...task.stats.perQuery },
   }
   const skipped = task.result.sources.filter((source) => source.skipped === true)

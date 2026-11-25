@@ -8,7 +8,7 @@
 
 import { asNumber, asString, normalizeDoi } from '../normalize.js'
 import { limitedText } from '../rate-limit.js'
-import type { PaperRecord, Provider } from '../types.js'
+import type { PaperRecord, Provider, ProviderSearchOptions } from '../types.js'
 import { xmlAttr, xmlBlocks, xmlTag, xmlText, xmlTexts } from '../xml.js'
 
 const ENDPOINT = 'https://export.arxiv.org/api/query'
@@ -24,6 +24,10 @@ export const arxiv: Provider = {
     optionalKey: false,
   },
 
+  lookup(id, options) {
+    return fetchEntries(new URLSearchParams({ id_list: id, max_results: '1' }), options)
+  },
+
   async search(query, options): Promise<PaperRecord[]> {
     const params = new URLSearchParams({
       search_query: query,
@@ -33,22 +37,26 @@ export const arxiv: Provider = {
       sortOrder: 'descending',
     })
 
-    const xml = await limitedText('arxiv', `${ENDPOINT}?${params.toString()}`, {
-      timeoutMs: options.timeoutMs,
-      signal: options.signal,
-      bypassCooldown: options.bypassCooldown === true,
-      headers: { accept: 'application/atom+xml' },
-    })
-
-    const papers = xmlBlocks(xml, 'entry')
-      .map(mapEntry)
-      .filter((paper) => paper.title !== '')
-    return filterByYear(papers, options)
+    return filterByYear(await fetchEntries(params, options), options)
   },
 }
 
+async function fetchEntries(params: URLSearchParams, options: ProviderSearchOptions): Promise<PaperRecord[]> {
+  const xml = await limitedText('arxiv', `${ENDPOINT}?${params}`, {
+    timeoutMs: options.timeoutMs,
+    signal: options.signal,
+    bypassCooldown: options.bypassCooldown === true,
+    headers: { accept: 'application/atom+xml' },
+  })
+  return xmlBlocks(xml, 'entry')
+    .filter((entry) => normalizeArxiv(xmlText(entry, 'id')) !== '')
+    .map(mapEntry)
+    .filter((paper) => paper.title !== '')
+}
+
 function mapEntry(entry: string): PaperRecord {
-  const arxivId = normalizeArxiv(xmlText(entry, 'id'))
+  const entryId = normalizeArxiv(xmlText(entry, 'id'))
+  const arxivId = entryId.replace(/v\d+$/u, '')
   const doi = normalizeDoi(xmlText(entry, 'arxiv:doi'))
   const published = xmlText(entry, 'published')
   const pdfUrl = findPdfUrl(entry)
@@ -59,6 +67,7 @@ function mapEntry(entry: string): PaperRecord {
     source: 'arxiv',
     sourceId: arxivId,
     ids: { doi, pmid: '', pmcid: '', arxivId },
+    ...(arxivId === entryId ? {} : { arxivVersionId: entryId }),
     title: xmlText(entry, 'title'),
     authors: xmlTexts(entry, 'name').filter((name) => name !== ''),
     year: readYear(published),
@@ -88,8 +97,7 @@ function findPdfUrl(entry: string): string {
 function normalizeArxiv(value: string): string {
   const trimmed = asString(value).trim().replace(/\/+$/u, '')
   if (trimmed === '') return ''
-  const segment = trimmed.split('/').pop() ?? ''
-  return segment.replace(/v\d+$/u, '')
+  return (trimmed.includes('/abs/') ? trimmed.split('/abs/')[1] ?? '' : trimmed).toLowerCase()
 }
 
 function readYear(value: string): number | null {

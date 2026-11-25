@@ -122,6 +122,8 @@ export interface PaperRecord {
   doi: string
   url: string
   abstract: string
+  /** arXiv Atom 返回的具体版本号（含论文编号）。 */
+  arxivVersionId?: string
   /** 上游给出的语言标记（如 eng / chi），未知时缺省。 */
   language?: string
   citedBy: number | null
@@ -149,7 +151,14 @@ export interface Paper extends PaperRecord {
   hitSources: PaperHit[]
   /** 命中该论文的检索式 id。 */
   matchedQueries: string[]
+  supplement?: { kind: PaperIdentifierKind; id: string; addedAt: string }
 }
+
+export type PaperIdentifierKind = 'doi' | 'pmid' | 'arxiv'
+
+export type PaperSupplementResult =
+  | { status: 'added' | 'existing'; paper: Paper }
+  | { status: 'not_found' | 'version_mismatch' | 'unavailable'; error: string }
 
 export interface ProviderCapabilities {
   abstract: boolean
@@ -213,6 +222,7 @@ export interface ProviderSearchOptions {
 export interface Provider {
   info: ProviderInfo
   search(query: string, options: ProviderSearchOptions): Promise<PaperRecord[]>
+  lookup?(id: string, options: ProviderSearchOptions): Promise<PaperRecord[]>
 }
 
 /** 单个数据源在一次检索中的结果状态。 */
@@ -286,7 +296,7 @@ export function isManualPdfFailure(reason: PdfFailureReason | undefined): boolea
 }
 
 /** 文献 → Zotero 的同步状态；缺省表示尚未同步。 */
-export type ZoteroSyncStatus = 'synced' | 'failed'
+export type ZoteroSyncStatus = 'synced' | 'partial' | 'failed'
 
 /** 论文级人工筛选状态。 */
 export interface PaperState {
@@ -297,7 +307,9 @@ export interface PaperState {
   pdfError?: string
   /** 已下载到用户目录的绝对路径。 */
   pdfFile?: string
+  pdfMaterial?: { sha256: string; path: string; acquiredAt: string; source: 'local'; role: 'main'; previousPath?: string }
   /** 最近一次 Zotero 同步结果；缺省为未同步。 */
+  zoteroTransfers?: ZoteroTransfer[]
   zoteroStatus?: ZoteroSyncStatus
   /** 同步到的 Zotero 目录名，便于列表直接展示。 */
   zoteroCollection?: string
@@ -339,6 +351,9 @@ export interface TaskStep {
   /** 仅 source 步骤有，用于 `source.<id>` 中文名映射。 */
   source?: SourceId
   status: TaskStepStatus
+  requestedLimit?: number
+  received?: number
+  hasMore?: boolean
   /** 该步条数：源=过滤后条数；检索式=其下各源之和；去重=merged.length。 */
   count?: number
   /** failed 的报错 / skipped 的中性原因。 */
@@ -359,6 +374,7 @@ export interface TaskStats {
   perQuery: Record<string, number>
   rawHits: number
   deduped: number
+  supplemented?: number
   screening: Record<Screening, number>
 }
 
@@ -393,6 +409,7 @@ export interface SearchRound {
     rawHits: number
     deduped: number
     loaded: number
+    supplemented?: number
     perQuery: Record<string, number>
   }
   /** 因遵守上游限流而跳过的数据源数量。 */
@@ -434,6 +451,7 @@ export interface SearchTask {
   steps?: TaskStep[]
   stats: TaskStats
   result: TaskResult
+  supplements?: Paper[]
   /** paperId → 筛选状态。 */
   states: Record<string, PaperState>
   /**
@@ -630,6 +648,11 @@ export interface ZoteroProbeResult {
   error?: string
 }
 
+/** 设置页只接收授权状态，凭证留在 Host。 */
+export interface ZoteroWriteAuthorization {
+  state: 'required' | 'saved' | 'once'
+}
+
 /** Zotero 可写入的目标（库或分类），id 为 connector 的 treeViewID。 */
 export interface ZoteroTarget {
   id: string
@@ -648,11 +671,37 @@ export interface ZoteroTargetsResult {
   error?: string
 }
 
+export type ZoteroStepStatus = 'pending' | 'done' | 'check' | 'failed' | 'skipped'
+
+export interface ZoteroTransfer {
+  baseUrl: string
+  serverId?: string
+  targetId: string
+  targetName: string
+  library?: string
+  collectionKey?: string
+  parent: { status: ZoteroStepStatus; key?: string }
+  collection: ZoteroStepStatus
+  attachment: ZoteroAttachmentStep
+  attachments?: Record<string, ZoteroAttachmentStep>
+  legacy?: boolean
+  error?: string
+}
+
+export interface ZoteroAttachmentStep {
+  status: ZoteroStepStatus
+  sha256?: string
+  key?: string
+  path?: string
+}
+
 /** 单篇同步结果。 */
 export interface ZoteroSyncItemResult {
   paperId: string
   ok: boolean
   attached: boolean
+  transfer?: ZoteroTransfer
+  parentSaved?: boolean
   error?: string
 }
 

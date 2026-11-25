@@ -17,6 +17,7 @@ import type {
   ExportFormat,
   HealthInfo,
   PaperDetail,
+  PaperSupplementResult,
   PaperEntities,
   PdfDownloadResult,
   PdfStatus,
@@ -38,6 +39,7 @@ import type {
   ZoteroDuplicateCheckResult,
   ZoteroSyncResult,
   ZoteroTargetsResult,
+  ZoteroWriteAuthorization,
 } from '../search/types'
 
 const BASE = '/dsh-litsearch/api'
@@ -316,6 +318,22 @@ export function annotateTask(
   })
 }
 
+export function supplementPaper(taskId: string, identifier: string): Promise<PaperSupplementResult> {
+  return request(taskPath(taskId, '/supplement'), writeInit('POST', { identifier }))
+}
+
+export function associatePaperPdf(taskId: string, paperId: string, file: File): Promise<PaperDetail> {
+  return request(taskPath(taskId, `/papers/${encodeURIComponent(paperId)}/material`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/pdf', [WRITE_HEADER]: '1' },
+    body: file,
+  })
+}
+
+export function detachPaperPdf(taskId: string, paperId: string): Promise<PaperDetail> {
+  return request(taskPath(taskId, `/papers/${encodeURIComponent(paperId)}/material`), writeInit('DELETE', {}))
+}
+
 /** 单篇论文详情（独立论文页）。 */
 export function fetchPaper(
   taskId: string,
@@ -361,6 +379,14 @@ export function probeStorage(): Promise<StorageProbeResult> {
 /** 测试 Zotero connector 连通性。 */
 export function probeZotero(): Promise<ZoteroProbeResult> {
   return request<ZoteroProbeResult>('/settings/zotero', writeInit('POST', {}))
+}
+
+export function fetchZoteroWriteAuthorization(signal?: AbortSignal): Promise<ZoteroWriteAuthorization> {
+  return request<ZoteroWriteAuthorization>('/settings/zotero/write', { signal, cache: 'no-store' })
+}
+
+export function authorizeZoteroWrite(): Promise<ZoteroWriteAuthorization> {
+  return request<ZoteroWriteAuthorization>('/settings/zotero/write', writeInit('POST', {}))
 }
 
 /** 读取可写入的 Zotero 库与分类。 */

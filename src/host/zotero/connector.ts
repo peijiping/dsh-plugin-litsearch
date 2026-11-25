@@ -31,6 +31,7 @@ export interface ZoteroConnectorOptions {
   targetId?: string
   /** 目标目录名，仅用于失败提示。 */
   targetName?: string
+  onCheckpoint?(stage: 'parent' | 'collection' | 'attachment', paperId: string): Promise<void>
 }
 
 export interface ZoteroSyncInput {
@@ -162,6 +163,8 @@ export class ZoteroConnector {
         continue
       }
 
+      await options.onCheckpoint?.('parent', input.paper.paperId)
+
       // 条目先落到 Zotero 当前选中的目录，再用 updateSession 搬到用户选的目录。
       if (options.targetId !== undefined) {
         try {
@@ -174,12 +177,14 @@ export class ZoteroConnector {
           result.items.push({
             paperId: input.paper.paperId,
             ok: false,
+            parentSaved: true,
             attached: false,
             error: reason,
           })
           continue
         }
       }
+      await options.onCheckpoint?.('collection', input.paper.paperId)
       result.saved += 1
 
       let attached = false
@@ -199,7 +204,8 @@ export class ZoteroConnector {
         }
       }
 
-      result.items.push({ paperId: input.paper.paperId, ok: true, attached })
+      if (attached) await options.onCheckpoint?.('attachment', input.paper.paperId)
+      result.items.push({ paperId: input.paper.paperId, ok: true, parentSaved: true, attached })
     }
 
     result.ok = result.failed === 0
@@ -268,7 +274,7 @@ export class ZoteroConnector {
       },
       body: Uint8Array.from(buffer),
     })
-    if (!response.ok) throw new Error(`connector 返回 HTTP ${response.status}`)
+    if (response.status !== 201) throw new Error(`connector 未确认 PDF 附件已保存（HTTP ${response.status}）`)
   }
 
   private async request(
@@ -365,7 +371,7 @@ function isTargetId(value: string): boolean {
   return /^[LC]\d+$/u.test(value)
 }
 
-function toZoteroItem(
+export function toZoteroItem(
   paper: Paper,
   tags: readonly string[],
   defaultTag: string,
@@ -385,7 +391,11 @@ function toZoteroItem(
     DOI: paper.doi,
     url: paper.url,
     abstractNote: paper.abstract,
-    extra: `dsh-litsearch:${paper.paperId}`,
+    extra: [
+      `dsh-litsearch:${paper.paperId}`,
+      paper.ids.pmid === '' ? '' : `PMID: ${paper.ids.pmid}`,
+      paper.ids.arxivId === '' ? '' : `arXiv: ${paper.supplement?.kind === 'arxiv' ? paper.supplement.id : paper.ids.arxivId}`,
+    ].filter(Boolean).join('\n'),
   }
   const merged = new Set<string>()
   for (const tag of [...tags, defaultTag]) {
@@ -399,7 +409,7 @@ function toZoteroItem(
 function mapItemType(type: string): string {
   const value = type.toLowerCase()
   if (value.includes('review')) return 'journalArticle'
-  if (value.includes('preprint') || value.includes('arxiv')) return 'preprint'
+  if (value.includes('preprint') || value.includes('arxiv') || value === 'posted-content') return 'preprint'
   if (value.includes('conference') || value.includes('proceedings')) return 'conferencePaper'
   if (value.includes('book')) return 'book'
   if (value.includes('dataset')) return 'dataset'

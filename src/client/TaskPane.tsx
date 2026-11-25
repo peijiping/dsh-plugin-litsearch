@@ -23,6 +23,7 @@ import {
   downloadPaperPdf,
   exportUrl,
   fetchPaper,
+  supplementPaper,
   fetchStats,
   postViewSnapshot,
   type ResultsQuery,
@@ -1140,8 +1141,26 @@ export function TaskPane({
       <div ref={bodyRef} style={SCROLL_BODY_STYLE}>
         {tab === 'results' ? (
         <>
+          <SupplementBox
+            key={taskId}
+            t={t}
+            taskId={taskId}
+            onAdded={(paper) => {
+              view.reload()
+              onOpenPaper?.(taskId, paper.paperId, paper.title)
+            }}
+          />
+          {!active && detail.steps?.some((step) => step.received !== undefined) && (
+            <details>
+              <summary>{t('task.progress.fetchDetails')}</summary>
+              <RunProgressPanel t={t} steps={detail.steps} />
+            </details>
+          )}
           <div style={COVERAGE_WRAP_STYLE}>
             <div style={COVERAGE_ROW_STYLE}>
+              {(detail.stats.supplemented ?? 0) > 0 && (
+                <span>{tpl(t('supplement.count'), { n: detail.stats.supplemented ?? 0 })}</span>
+              )}
               {overview !== null && (
                 <span>
                   {tpl(t('fulltext.coverageBar'), {
@@ -1644,6 +1663,54 @@ const EXPORT_FORMATS = ['csv', 'ris', 'bibtex', 'md'] as const
 const BATCH_CONCURRENCY = 5
 
 /** 「仅看新增」快捷按钮：与「筛选」按钮同排，筛读状态已收进筛选弹窗。 */
+function SupplementBox({ t, taskId, onAdded }: {
+  t: Translate
+  taskId: string
+  onAdded(paper: Paper): void
+}): ReactElement {
+  const [identifier, setIdentifier] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  async function submit(): Promise<void> {
+    setBusy(true)
+    setMessage('')
+    try {
+      const result = await supplementPaper(taskId, identifier)
+      if ('paper' in result) {
+        setIdentifier('')
+        setMessage(t(`supplement.${result.status}`))
+        onAdded(result.paper)
+      } else {
+        setMessage(t(`supplement.${result.status}`))
+      }
+    } catch (error) {
+      setMessage(messageOf(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form
+      style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', padding: '6px 8px' }}
+      onSubmit={(event) => { event.preventDefault(); if (!busy && identifier.trim()) void submit() }}
+    >
+      <input
+        aria-label={t('supplement.identifier')}
+        placeholder="DOI / PMID / arXiv ID"
+        maxLength={512}
+        value={identifier}
+        onChange={(event) => setIdentifier(event.target.value)}
+        disabled={busy}
+      />
+      <Button type="submit" variant="outline" size="sm" disabled={busy || identifier.trim() === ''}>
+        {t(busy ? 'supplement.working' : 'supplement.add')}
+      </Button>
+      {message !== '' && <span role="status">{message}</span>}
+    </form>
+  )
+}
+
 function NewOnlyPill({
   t,
   filters,

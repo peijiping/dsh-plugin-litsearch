@@ -10,6 +10,7 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 
 import { MAX_LIMIT, getSettings } from '../../search/config.js'
+import { lookupPaper, matchesIdentifier, parseIdentifier } from '../../search/lookup.js'
 import { SearchError } from '../../search/errors.js'
 import { cooldownUntil, sourceHealthList } from '../../search/health.js'
 import { PROVIDER_INFOS } from '../../search/providers/index.js'
@@ -32,6 +33,7 @@ import type {
   PaperDetail,
   PaperEntities,
   PaperState,
+  PaperSupplementResult,
   PdfDownloadResult,
   PdfStatus,
   ProbeResult,
@@ -54,7 +56,8 @@ import type {
   ZoteroDuplicateCheckResult,
   ZoteroProbeResult,
   ZoteroSyncResult,
-  ZoteroSyncStatus,
+  ZoteroTransfer,
+  ZoteroSyncItemResult,
   ZoteroTargetsResult,
 } from '../../search/types.js'
 import { SOURCE_IDS } from '../../search/types.js'
@@ -71,7 +74,12 @@ import {
   resolvePdf,
   resolvePdfRoot,
 } from '../pdf/store.js'
+import { hasPdfTrailer, looksLikePdf } from '../pdf/guard.js'
+import { applySupplements } from './supplements.js'
 import { isFileInDir, resolveDownloadDir } from '../pdf/root.js'
+import { storageRoot } from '../paths.js'
+import { ZoteroWriteAccess } from '../zotero/write.js'
+import { ZoteroResume } from '../zotero/resume.js'
 import { ZoteroConnector } from '../zotero/connector.js'
 import { fetchExistingIndex, localApiBase, matchExisting, resolveTarget } from '../zotero/local.js'
 import { normalizeWorkspace } from '../workspace.js'
@@ -205,6 +213,16 @@ export class TaskService {
   private readonly events = new TaskEvents()
 
   private readonly runner = new TaskRunner()
+  private readonly zoteroWrite = new ZoteroWriteAccess(storageRoot())
+  private readonly zoteroSyncQueue = new Map<string, Promise<unknown>>()
+
+  zoteroAuthorization(authorize = false) {
+    const settings = getSettings()
+    if (!settings.zoteroEnabled) throw new SearchError('bad_request', 'Zotero 同步已在设置中关闭')
+    return authorize
+      ? this.zoteroWrite.authorize(settings.zoteroBaseUrl)
+      : this.zoteroWrite.status(settings.zoteroBaseUrl)
+  }
 
   /**
    * 每个会话最近一次的右侧栏视图快照（内存、不落盘）。
@@ -973,6 +991,85 @@ export class TaskService {
     return html
   }
 
+  async supplement(id: string, input: string): Promise<PaperSupplementResult> {
+    const identifier = parseIdentifier(input)
+    const task = await this.get(id)
+    const findExisting = () => task.result.papers.find((paper) => matchesIdentifier(paper, identifier))
+    let existing = findExisting()
+    const outcome = existing === undefined ? await lookupPaper(identifier) : undefined
+    if (outcome !== undefined && !('paper' in outcome)) return outcome
+    await this.get(id)
+    existing ??= findExisting()
+    const paper = existing ?? (outcome !== undefined && 'paper' in outcome ? outcome.paper : undefined)
+    if (paper === undefined) throw new SearchError('not_found', '未找到该题录')
+    if (paper.supplement !== undefined) return { status: 'existing', paper }
+
+    const entry: Paper = {
+      ...paper,
+      supplement: { ...identifier, addedAt: new Date().toISOString() },
+    }
+    task.supplements = [...(task.supplements ?? []), entry]
+    applySupplements(task, task.result.papers)
+    await this.saveResearchChange(task)
+    return { status: existing === undefined ? 'added' : 'existing', paper: findPaper(task, entry.paperId) }
+  }
+
+  async associatePdf(id: string, paperId: string, bytes: Buffer, workspace?: string): Promise<PaperDetail> {
+    if (bytes.length > getSettings().pdfMaxMb * 1024 * 1024 ||
+        !looksLikePdf(bytes.subarray(0, 1_024)) || !hasPdfTrailer(bytes.subarray(-2_048))) {
+      throw new SearchError('bad_request', '文件不是完整 PDF，或超过设置中的 PDF 大小上限')
+    }
+    const task = await this.get(id)
+    const paper = findPaper(task, paperId)
+    const dir = join(resolvePdfRoot(normalizeWorkspace(workspace) ?? task.workspace), 'attachments', paperId)
+    const saved = await persistPdf(bytes, this.store.root, paper, workspace, dir, true)
+    await this.get(id)
+    findPaper(task, paperId)
+    const current = task.states[paperId] ?? emptyState()
+    const existing = current.pdfMaterial
+    const previousPath = existing?.previousPath ??
+      (existing === undefined && current.pdfFile !== saved.filePath ? current.pdfFile : undefined)
+    const material = existing?.sha256 === saved.sha256 && existing.path === saved.filePath ? existing : {
+      sha256: saved.sha256, path: saved.filePath, acquiredAt: new Date().toISOString(),
+      source: 'local' as const, role: 'main' as const,
+      ...(previousPath === undefined ? {} : { previousPath }),
+    }
+    const next: PaperState = { ...current, pdfFile: saved.filePath, pdfStatus: 'downloaded', pdfMaterial: material }
+    delete next.pdfError
+    task.states[paperId] = next
+    pdfExistsCache.set(saved.filePath, { exists: true, at: Date.now() })
+    await this.saveResearchChange(task)
+    return this.paperDetail(id, paperId, workspace)
+  }
+
+  async detachPdf(id: string, paperId: string, workspace?: string): Promise<PaperDetail> {
+    const task = await this.get(id)
+    findPaper(task, paperId)
+    const state = task.states[paperId]
+    if (state?.pdfMaterial !== undefined) {
+      const next = { ...state }
+      if (next.pdfFile === state.pdfMaterial.path) {
+        delete next.pdfFile
+        delete next.pdfStatus
+        if (state.pdfMaterial.previousPath !== undefined) {
+          next.pdfFile = state.pdfMaterial.previousPath
+          next.pdfStatus = 'downloaded'
+        }
+      }
+      delete next.pdfMaterial
+      task.states[paperId] = next
+      await this.saveResearchChange(task)
+    }
+    return this.paperDetail(id, paperId, workspace)
+  }
+
+  private async saveResearchChange(task: SearchTask): Promise<void> {
+    task.rev += 1
+    task.updatedAt = new Date().toISOString()
+    await this.store.save(task, true)
+    this.events.publish(toSummary(task))
+  }
+
   /** 单篇论文详情：独立论文页使用，含任务标题与分组。 */
   async paperDetail(id: string, paperId: string, workspace?: string): Promise<PaperDetail> {
     const task = await this.get(id)
@@ -1102,93 +1199,152 @@ export class TaskService {
         : paperIds.map((paperId) => findPaper(task, paperId))
     if (wanted.length === 0) throw new SearchError('bad_request', '没有可同步的文献')
 
-    const connector = new ZoteroConnector(settings.zoteroBaseUrl)
-    const probe = await connector.probe()
-    if (!probe.ok) {
-      throw new SearchError(
-        'network_error',
-        `Zotero 未运行或 connector 不可达：${probe.error ?? settings.zoteroBaseUrl}`,
-      )
+    const baseUrl = settings.zoteroBaseUrl
+    const connector = new ZoteroConnector(baseUrl)
+    const listed = await connector.listTargets()
+    if (!listed.ok) throw new SearchError('network_error', listed.error ?? '无法读取 Zotero 的目标分类')
+    const selected = listed.targets.find((entry) => entry.id === (target?.id ?? listed.current?.id))
+    if (selected === undefined) throw new SearchError('bad_request', '请重新选择可写的 Zotero 目标分类')
+
+    const serverId = await this.zoteroWrite.serverId(baseUrl).catch(() => undefined)
+    const targetScope = await resolveTarget(localApiBase(baseUrl), listed.targets, selected.id).catch(() => undefined)
+    const scope = targetScope?.ok === true ? targetScope : undefined
+    if (serverId !== undefined && scope === undefined) {
+      throw new SearchError('bad_request', '无法唯一确定 Zotero 的目标库或分类，请刷新并核对目标')
     }
-
-    // 目标目录优先：用户选定的分类可能是另一个库，不能只看当前选中的分类。
-    const filesEditable = target?.filesEditable ?? probe.collection?.filesEditable
-    const readOnlyAttachments = settings.zoteroAttachPdf && filesEditable === false
-    const attachPdf = settings.zoteroAttachPdf && !readOnlyAttachments
-    const inputs: { paper: Paper; tags: string[]; pdfPath?: string }[] = []
-    for (const paper of wanted) {
-      const state = task.states[paper.paperId]
-      // 标签已移除，用任务内的分组名承载 Zotero 侧的分类信息。
-      const group = task.groups.find((entry) => entry.id === state?.groupId)
-      const tags = group === undefined ? [] : [group.name]
-      const pdfPath = attachPdf
-        ? await this.ensureLocalPdf(paper, workspaceDir, state?.pdfFile)
-        : undefined
-      inputs.push({ paper, tags, ...(pdfPath === undefined ? {} : { pdfPath }) })
-    }
-
-    try {
-      const result = await connector.sync(inputs, {
-        baseUrl: settings.zoteroBaseUrl,
-        attachPdf,
-        tag: settings.zoteroTag,
-        ...(target === undefined
-          ? {}
-          : {
-              targetId: target.id,
-              ...(target.name === undefined ? {} : { targetName: target.name }),
-            }),
-      })
-      if (target === undefined && probe.collection === undefined) {
-        result.messages.unshift('Zotero 当前未选择分类，条目已保存到「我的文库」')
-      } else if (readOnlyAttachments) {
-        const label = target === undefined ? '当前分类' : `「${target.name ?? target.id}」`
-        result.messages.unshift(`${label}不可写附件，已只保存条目；可换一个可写目录后重试`)
-      }
-
-      const collectionName = target === undefined ? probe.collection?.name : target.name
-      for (const item of result.items) {
-        await this.setZoteroState(
-          task,
-          item.paperId,
-          item.ok
-            ? {
-                zoteroStatus: 'synced',
-                ...(collectionName === undefined ? {} : { zoteroCollection: collectionName }),
-              }
-            : {
-                zoteroStatus: 'failed',
-                zoteroError: item.error ?? result.messages[0] ?? '同步失败',
-              },
+    const queueKey = serverId === undefined ? baseUrl : `${serverId}:${scope?.prefix ?? ''}`
+    const items = await Promise.all(wanted.map((paper) => {
+      const previous = this.zoteroSyncQueue.get(queueKey) ?? Promise.resolve()
+      const next = previous.catch(() => {}).then(async (): Promise<ZoteroSyncItemResult> => {
+        await this.get(id)
+        const state = task.states[paper.paperId] ?? emptyState()
+        const matching = state.zoteroTransfers?.find((entry) =>
+          entry.targetId === selected.id && (
+            (entry.serverId !== undefined && entry.serverId === serverId) ||
+            (entry.serverId === undefined && entry.baseUrl === baseUrl)
+          ),
         )
-      }
-      return result
-    } catch (error) {
-      throw new SearchError(
-        'upstream_error',
-        error instanceof Error ? error.message : String(error),
-      )
+        const transfer: ZoteroTransfer = matching === undefined ? {
+          baseUrl, serverId, targetId: selected.id, targetName: selected.name,
+          library: scope?.prefix, collectionKey: scope?.collectionKey,
+          parent: { status: 'pending' }, collection: 'pending', attachment: { status: 'pending' },
+          legacy: (state.zoteroTransfers?.length ?? 0) === 0 && state.zoteroStatus !== undefined,
+        } : {
+          ...structuredClone(matching), baseUrl, serverId, targetName: selected.name,
+          library: scope?.prefix, collectionKey: scope?.collectionKey,
+        }
+        if (transfer.legacy && transfer.parent.key === undefined &&
+            scope?.prefix !== undefined && matching?.library !== undefined && matching.library !== scope.prefix) {
+          throw new SearchError('conflict', 'Zotero 目标库已发生变化，请在 Zotero 中核对原条目')
+        }
+        const group = task.groups.find((entry) => entry.id === state.groupId)
+        const tags = group === undefined ? [] : [group.name]
+        const attach = settings.zoteroAttachPdf
+        const recordedPdf = state.pdfMaterial?.path ?? state.pdfFile
+        const pdfPath = attach && selected.filesEditable !== false
+          ? await this.ensureLocalPdf(paper, workspaceDir, recordedPdf)
+          : recordedPdf
+        const save = (progress: ZoteroTransfer) => this.setZoteroTransfer(task, paper.paperId, progress)
+        if (scope !== undefined && serverId !== undefined) {
+          const material = state.pdfMaterial
+          const expectedSha256 = material?.path === pdfPath ? material?.sha256 : undefined
+          await new ZoteroResume(this.zoteroWrite, baseUrl, serverId, scope.prefix).sync(
+            transfer, paper, tags, settings.zoteroTag, attach && selected.filesEditable !== false,
+            pdfPath, save, expectedSha256,
+          )
+        } else if (scope !== undefined && matching === undefined && !transfer.legacy &&
+                   !state.zoteroTransfers?.some((entry) => entry.baseUrl === baseUrl)) {
+          // 老版 Connector 首次导入。先保存待核对状态，失联后禁止盲目再次创建。
+          let blocked = false
+          try {
+            const index = await fetchExistingIndex(localApiBase(baseUrl), scope.prefix)
+            blocked = matchExisting(paper, index) !== undefined
+          } catch {
+            blocked = true
+          }
+          transfer.parent.status = 'check'
+          transfer.legacy = true
+          await save(transfer)
+          if (blocked) {
+            transfer.error = '目标分类已有候选题录，请在 Zotero 中核对原条目并按需补附件'
+          } else {
+            const result = await connector.sync([{ paper, tags, pdfPath }], {
+              baseUrl, attachPdf: attach && selected.filesEditable !== false, tag: settings.zoteroTag,
+              targetId: selected.id, targetName: selected.name,
+              onCheckpoint: async (stage) => {
+                if (stage === 'attachment') {
+                  transfer.attachment = { status: 'done', path: pdfPath, sha256: state.pdfMaterial?.sha256 }
+                } else if (stage === 'parent') {
+                  transfer.parent.status = 'done'
+                } else {
+                  transfer.collection = 'done'
+                }
+                await save(transfer)
+              },
+            })
+            const item = result.items[0]
+            transfer.parent.status = item?.parentSaved === true ? 'done' : 'check'
+            transfer.collection = item?.ok === true ? 'done' : 'check'
+            if (!item?.attached) {
+              transfer.attachment = { status: attach ? 'pending' : 'skipped', path: pdfPath }
+            }
+            transfer.error = item?.error ?? (result.messages.length > 0 ? result.messages.join('；') : undefined)
+          }
+        } else {
+          transfer.error = '目前无法核验 Zotero 中的题录，请在目标分类按标题或标识核对；如需自动补传，请开启 Zotero 10 的本地 API 和写权限'
+          if (pdfPath !== undefined) transfer.error += `（本地 PDF：${pdfPath}）`
+        }
+        if (attach && selected.filesEditable === false && transfer.parent.status === 'done' &&
+            transfer.attachment.status !== 'done') {
+          transfer.attachment = { status: 'pending', path: pdfPath }
+          transfer.error ??= `目标分类不可写入附件，请在 Zotero 中补传${pdfPath ? `（本地 PDF：${pdfPath}）` : ''}`
+        }
+        await save(transfer)
+        const attached = transfer.attachment.status === 'done'
+        const ok = transfer.parent.status === 'done' && transfer.collection === 'done' &&
+          (attached || transfer.attachment.status === 'skipped' ||
+            (transfer.attachment.status === 'pending' && pdfPath === undefined)) && transfer.error === undefined
+        return { paperId: paper.paperId, ok, attached, parentSaved: transfer.parent.status === 'done',
+          transfer, ...(ok ? {} : { error: transfer.error ?? '题录已处理，PDF 尚待获取或补传' }),
+        }
+      }).finally(() => {
+        if (this.zoteroSyncQueue.get(queueKey) === next) this.zoteroSyncQueue.delete(queueKey)
+      })
+      this.zoteroSyncQueue.set(queueKey, next)
+      return next
+    }))
+    const failed = items.filter((item) => !item.ok)
+    return {
+      ok: failed.length === 0, items, failed: failed.length,
+      saved: items.filter((item) => item.parentSaved).length,
+      attached: items.filter((item) => item.attached).length,
+      messages: failed.map((item) => item.error ?? 'Zotero 同步待核对'),
     }
   }
 
-  /** 记录单篇文献的 Zotero 同步状态；与 PDF 状态一样写回任务并广播。 */
-  private async setZoteroState(
-    task: SearchTask,
-    paperId: string,
-    patch: { zoteroStatus: ZoteroSyncStatus; zoteroCollection?: string; zoteroError?: string },
-  ): Promise<void> {
-    if (this.store.summary(task.id) === undefined) return
-    const current = task.states[paperId] ?? emptyState()
-    const next: PaperState = { ...current, zoteroStatus: patch.zoteroStatus }
-    if (patch.zoteroCollection === undefined) delete next.zoteroCollection
-    else next.zoteroCollection = patch.zoteroCollection.slice(0, 200)
-    if (patch.zoteroError === undefined) delete next.zoteroError
-    else next.zoteroError = patch.zoteroError.slice(0, 300)
-    task.states[paperId] = next
-    task.rev += 1
-    task.updatedAt = new Date().toISOString()
-    await this.store.save(task)
-    this.events.publish(toSummary(task))
+  private async setZoteroTransfer(task: SearchTask, paperId: string, transfer: ZoteroTransfer): Promise<void> {
+    if (this.store.summary(task.id) === undefined) throw new SearchError('not_found', '任务已删除')
+    const state = task.states[paperId] ?? emptyState()
+    const previous = state.zoteroTransfers ?? []
+    const { sha256 } = transfer.attachment
+    if (sha256 !== undefined) {
+      transfer.attachments = { ...transfer.attachments, [sha256]: { ...transfer.attachment } }
+    }
+    const error = transfer.error ?? (transfer.attachment.status === 'pending' ? 'PDF 尚待获取或补传' : undefined)
+    const complete = transfer.parent.status === 'done' && transfer.collection === 'done' &&
+      ['done', 'skipped'].includes(transfer.attachment.status) && error === undefined
+    task.states[paperId] = {
+      ...state,
+      zoteroTransfers: [
+        ...previous.filter((entry) => entry.targetId !== transfer.targetId ||
+          (entry.serverId !== undefined ? entry.serverId !== transfer.serverId : entry.baseUrl !== transfer.baseUrl)),
+        structuredClone(transfer),
+      ],
+      zoteroCollection: transfer.targetName,
+      zoteroStatus: complete ? 'synced' : transfer.parent.status === 'done' ? 'partial' : 'failed',
+      zoteroError: error,
+    }
+    await this.saveResearchChange(task)
   }
 
   /** 下载目录可写性测试（设置页）。 */

@@ -127,6 +127,9 @@ export function zoteroActionUi(t: Translate, state?: PaperState): ZoteroActionUi
   if (state?.zoteroStatus === 'synced') {
     return { label: t('pdf.zoteroSynced'), hint: state.zoteroCollection, color: 'var(--ls-success)' }
   }
+  if (state?.zoteroStatus === 'partial') {
+    return { label: t('pdf.zoteroPending'), hint: state.zoteroError }
+  }
   if (state?.zoteroStatus === 'failed') {
     return { label: t('pdf.zoteroRetry'), hint: state.zoteroError, color: 'var(--ls-error)' }
   }

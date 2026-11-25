@@ -53,6 +53,18 @@ export const crossref: Provider = {
     optionalKey: false,
   },
 
+  async lookup(id, options) {
+    const params = new URLSearchParams()
+    if (options.contactEmail !== '') params.set('mailto', options.contactEmail)
+    const payload = await limitedJson('crossref', `${ENDPOINT}/${encodeURIComponent(id)}?${params}`, {
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+      headers: { accept: 'application/json', 'user-agent': userAgent(options.contactEmail) },
+    })
+    const paper = mapItem(asRecord(payload)['message'])
+    return paper.title === '' ? [] : [paper]
+  },
+
   async search(query, options): Promise<PaperRecord[]> {
     const params = new URLSearchParams({
       query,

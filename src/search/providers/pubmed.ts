@@ -41,14 +41,15 @@ export const pubmed: Provider = {
     optionalKey: true,
   },
 
+  async lookup(id, options) {
+    return articles(await fetchArticles([id], options))
+  },
+
   async search(query, options): Promise<PaperRecord[]> {
     const term = buildTerm(query, options)
     const ids = await searchIds(term, options)
     if (ids.length === 0) return []
-    const xml = await fetchArticles(ids, options)
-    return xmlBlocks(xml, 'PubmedArticle')
-      .map(mapArticle)
-      .filter((paper) => paper.title !== '')
+    return articles(await fetchArticles(ids, options))
   },
 }
 
@@ -95,6 +96,10 @@ async function fetchArticles(ids: string[], options: ProviderSearchOptions): Pro
   })
   throwIfUpstreamError(parseJsonObject(text))
   return text
+}
+
+function articles(xml: string): PaperRecord[] {
+  return xmlBlocks(xml, 'PubmedArticle').map(mapArticle).filter((paper) => paper.title !== '')
 }
 
 function mapArticle(block: string): PaperRecord {

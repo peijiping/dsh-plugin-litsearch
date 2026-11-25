@@ -82,6 +82,16 @@ export function RunProgressPanel({ t, steps }: Props): ReactElement {
                       {sourceText(t, step)}
                     </span>
                   </div>
+                  {step.requestedLimit !== undefined && (
+                    <div style={SKIP_REASON_STYLE}>
+                      {tpl(t('task.progress.fetchBounds'), {
+                        limit: step.requestedLimit,
+                        received: step.received ?? t('task.progress.unknown'),
+                        next: t(step.hasMore === undefined ? 'task.progress.unknown' :
+                          step.hasMore ? 'task.progress.more' : 'task.progress.exhausted'),
+                      })}
+                    </div>
+                  )}
                   {step.status === 'skipped' && step.error !== undefined && step.error !== '' && (
                     <div style={SKIP_REASON_STYLE}>{step.error}</div>
                   )}

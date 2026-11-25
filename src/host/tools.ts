@@ -106,6 +106,7 @@ const TASK_ACTIONS = [
   'run',
   'rounds',
   'annotate',
+  'supplement',
   'compare',
   'stats',
 ] as const
@@ -242,10 +243,11 @@ const TASK_PARAMETERS = {
       type: 'string',
       enum: [...TASK_ACTIONS],
       description:
-        'current 读「当前任务」（推荐在执行检索/任务操作前先调用，确认这个对话正在用哪个任务，无需 id）；list 列任务；activate 切换「当前任务」并在右侧栏打开/聚焦该任务 tab（只切换、不检索，id 必填）；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/分组；compare 与旧任务对比；stats 读语料统计。',
+        'current 读「当前任务」（推荐在执行检索/任务操作前先调用，确认这个对话正在用哪个任务，无需 id）；list 列任务；activate 切换「当前任务」并在右侧栏打开/聚焦该任务 tab（只切换、不检索，id 必填）；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/分组；supplement 按用户提供的 DOI、PMID 或 arXiv ID 逐项核对后补录；compare 与旧任务对比；stats 读语料统计。',
     },
     id: { type: 'string', description: '任务 id；除 current / list 外必填。' },
     withTaskId: { type: 'string', description: 'compare 时的基准任务 id。' },
+    identifier: { type: 'string', description: 'supplement 时用户提供的 DOI、PMID 或 arXiv ID，可含版本。' },
     limit: {
       type: 'integer',
       minimum: 1,
@@ -537,6 +539,7 @@ const SCOPE_PARAMETERS = {
 interface TaskArgs {
   action: (typeof TASK_ACTIONS)[number]
   id?: string
+  identifier?: string
   withTaskId?: string
   limit?: number
   offset?: number
@@ -949,6 +952,12 @@ function readTaskArgs(args: unknown): TaskArgs {
   if (id !== undefined) input.id = id
   if (input.action !== 'list' && input.action !== 'current' && input.id === undefined) {
     throw new Error(`action=${input.action} 需要 id`)
+  }
+
+  if (input.action === 'supplement') {
+    const identifier = readText(record['identifier'], 'identifier')
+    if (identifier === undefined || identifier.length > 512) throw new Error('supplement 需要有效的 identifier')
+    input.identifier = identifier
   }
 
   const withTaskId = readText(record['withTaskId'], 'withTaskId')
@@ -1393,6 +1402,11 @@ async function runTaskAction(
       const id = requireId(args)
       const task = await service.get(id)
       return formatRounds(task.title, id, await service.getRounds(id), args.limit ?? 30)
+    }
+    case 'supplement': {
+      const result = await service.supplement(requireId(args), args.identifier ?? '')
+      if (!('paper' in result)) return `补录${result.status}：${result.error}`
+      return `${result.status === 'added' ? '已补录' : '已复用'}「${result.paper.title}」（paperId: ${result.paper.paperId}）。`
     }
     case 'annotate': {
       const result = await service.annotate(requireId(args), args.papers ?? [])

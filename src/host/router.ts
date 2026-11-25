@@ -13,6 +13,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { dirname, extname, isAbsolute, resolve } from 'node:path'
 
 import {
+  getSettings,
   MAX_LIMIT,
   ROUTE_PREFIX,
   SESSION_HEADER,
@@ -104,10 +105,11 @@ function readSessionId(req: IncomingMessage, params: URLSearchParams): string | 
 }
 
 /** 写端点要求自定义头 + JSON：跨站请求无法在不触发预检的情况下伪造。 */
-function hasWriteIntent(req: IncomingMessage): boolean {
+function hasWriteIntent(req: IncomingMessage, pdfUpload = false): boolean {
   if (req.headers[WRITE_HEADER] !== '1') return false
   const type = req.headers['content-type']
-  return typeof type === 'string' && type.toLowerCase().includes('application/json')
+  return typeof type === 'string' &&
+    (pdfUpload ? type === 'application/pdf' : type.toLowerCase().includes('application/json'))
 }
 
 function sendJson(res: ServerResponse, status: number, payload: ApiEnvelope<unknown>): void {
@@ -243,26 +245,26 @@ function toApiError(error: unknown): { status: number; error: ApiError } {
   return { status: 500, error: { code: 'internal_error', message } }
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
     req.on('data', (chunk: Buffer) => {
       size += chunk.length
-      if (size > MAX_BODY_BYTES) {
+      if (size > max) {
         reject(new SearchError('bad_request', '请求体过大'))
         req.destroy()
         return
       }
       chunks.push(chunk)
     })
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('end', () => resolve(Buffer.concat(chunks)))
     req.on('error', reject)
   })
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const raw = await readBody(req)
+  const raw = (await readBody(req)).toString('utf8')
   if (raw.trim() === '') return {}
   let parsed: unknown
   try {
@@ -742,6 +744,13 @@ async function handleTasks(
     return
   }
 
+  if (action === 'supplement' && seg.length === 3 && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    const identifier = readString(body['identifier'], 'identifier', 512) ?? ''
+    ok(res, await service.supplement(id, identifier))
+    return
+  }
+
   if (action === 'papers') {
     const paperId = seg[3] ?? ''
     const op = seg[4] ?? ''
@@ -768,6 +777,21 @@ async function handleTasks(
         return
       }
       ok(res, await service.recheckPdf(id, paperId))
+      return
+    }
+    if (op === 'material' && seg.length === 5) {
+      const workspace = await resolveSessionWorkspace(sessionId)
+      if (req.method === 'POST') {
+        const max = getSettings().pdfMaxMb * 1024 * 1024
+        if (Number(req.headers['content-length']) > max) {
+          throw new SearchError('bad_request', 'PDF 超过设置中的大小上限')
+        }
+        ok(res, await service.associatePdf(id, paperId, await readBody(req, max), workspace))
+      } else if (req.method === 'DELETE') {
+        ok(res, await service.detachPdf(id, paperId, workspace))
+      } else {
+        fail(res, 405, 'bad_request', 'material 仅支持 POST 和 DELETE')
+      }
       return
     }
     if (op === 'download') {
@@ -921,12 +945,14 @@ export function createHandler(
         return
       }
 
-      if (req.method !== 'GET' && !hasWriteIntent(req)) {
+      const seg = parseSegments(url.pathname)
+      const pdfUpload = req.method === 'POST' && seg.length === 5 && seg[0] === 'tasks' &&
+        seg[2] === 'papers' && seg[4] === 'material'
+      if (req.method !== 'GET' && !hasWriteIntent(req, pdfUpload)) {
         fail(res, 403, 'bad_request', '写请求缺少自定义标识头')
         return
       }
 
-      const seg = parseSegments(url.pathname)
       const head = seg[0]
 
       if (head === 'health') {
@@ -1025,6 +1051,17 @@ export function createHandler(
           const scope =
             readEnum((await readJsonBody(req))['scope'], 'scope', CLEANUP_SCOPES) ?? 'tasks'
           ok(res, await service.cleanup(scope))
+          return
+        }
+        if (seg[1] === 'zotero' && seg[2] === 'write' && seg.length === 3) {
+          if (req.method === 'GET') {
+            ok(res, await service.zoteroAuthorization())
+          } else if (req.method === 'POST') {
+            await readJsonBody(req)
+            ok(res, await service.zoteroAuthorization(true))
+          } else {
+            fail(res, 405, 'bad_request', 'Zotero 写权限仅支持 GET 和 POST')
+          }
           return
         }
         if (seg[1] === 'zotero' && seg[2] === 'targets' && req.method === 'POST') {

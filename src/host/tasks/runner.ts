@@ -1,3 +1,4 @@
+import { applySupplements } from './supplements.js'
 /**
  * 任务执行器。
  *
@@ -118,6 +119,7 @@ export class TaskRunner {
       deduped: 0,
       screening: { unread: 0, read: 0, included: 0, excluded: 0 },
     }
+    applySupplements(task, [])
     task.progress = { queryIndex: 0, queryTotal: queries.length }
     touch(task, hooks)
     await hooks.persist(task)
@@ -145,7 +147,7 @@ export class TaskRunner {
           timeoutMs: 0,
           signal: controller.signal,
           onSourceStart: (source) => {
-            setStep(`q${queryNo}:${source}`, { status: 'running' })
+            setStep(`q${queryNo}:${source}`, { status: 'running', requestedLimit: perSourceLimit })
           },
           onSourceDone: (outcome: SourceOutcome) => {
             const status: TaskStepStatus = controller.signal.aborted
@@ -158,6 +160,7 @@ export class TaskRunner {
             setStep(`q${queryNo}:${outcome.source}`, {
               status,
               count: outcome.count,
+              ...(outcome.ok && outcome.skipped !== true ? { received: outcome.count } : {}),
               ...(outcome.error === undefined ? {} : { error: outcome.error }),
             })
           },
@@ -218,7 +221,7 @@ export class TaskRunner {
       task.result.fetchedAt = new Date().toISOString()
       task.stats.rawHits = hits.length
       task.stats.deduped = merged.length
-      task.stats.screening = countScreening(papers, task.states)
+      applySupplements(task, papers)
 
       const failed = task.result.sources.filter((source) => !source.ok && !source.skipped)
       const succeeded = task.result.sources.filter((source) => source.ok && !source.skipped)

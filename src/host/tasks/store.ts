@@ -11,6 +11,7 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
+import { SearchError } from '../../search/errors.js'
 import type { Paper, SearchTask, TaskSummary } from '../../search/types.js'
 import { resolveStorageRoot, storageRoot } from '../paths.js'
 import { roundsOf, toSummary, trimRounds } from './summary.js'
@@ -110,10 +111,7 @@ export class TaskStore {
     try {
       const text = await readFile(this.taskFile(id), 'utf8')
       const parsed = JSON.parse(text) as { version?: number; task?: SearchTask }
-      if (parsed.task === undefined) {
-        await this.remove(id)
-        return undefined
-      }
+      if (parsed.task === undefined) throw new Error('缺少任务正文')
       // 旧版本任务文件没有 rounds；统一补齐并裁掉超限轮次，避免历史无限增长。
       parsed.task.rounds = trimRounds(roundsOf(parsed.task))
       if (parsed.version === undefined || parsed.version === 1) {
@@ -121,11 +119,17 @@ export class TaskStore {
           if (mayHaveLegacyTruncation(paper)) paper.abstractCompleteness = 'unknown'
         }
       }
+      const loaded = this.cache.get(id)
+      if (loaded !== undefined) return loaded
+      if (!this.summaries.has(id)) return undefined
       this.cache.set(id, parsed.task)
       return parsed.task
-    } catch {
-      await this.remove(id)
-      return undefined
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
+        await this.remove(id)
+        return undefined
+      }
+      throw new SearchError('upstream_error', '无法读取任务文件，原文件已保留，请检查数据目录')
     }
   }
 
@@ -134,9 +138,12 @@ export class TaskStore {
     this.summaries.set(task.id, toSummary(task))
   }
 
-  async save(task: SearchTask): Promise<void> {
+  async save(task: SearchTask, requirePersistence = false): Promise<void> {
     // 运行中的任务可能被用户删除：删除后的迟到落盘会重建文件与索引，这里直接丢弃。
-    if (!this.summaries.has(task.id)) return
+    if (!this.summaries.has(task.id)) {
+      if (requirePersistence) throw new Error('任务已删除，无法保存')
+      return
+    }
     this.put(task)
     const file = this.taskFile(task.id)
     const body = JSON.stringify({
@@ -146,7 +153,7 @@ export class TaskStore {
     await this.enqueue(async () => {
       await atomicWrite(file, body)
       await this.writeIndex()
-    })
+    }, requirePersistence)
   }
 
   async remove(id: string): Promise<void> {
@@ -263,12 +270,12 @@ export class TaskStore {
     await atomicWrite(this.indexFile, JSON.stringify(index))
   }
 
-  private enqueue(operation: () => Promise<void>): Promise<void> {
+  private enqueue(operation: () => Promise<void>, requirePersistence = false): Promise<void> {
     const next = this.chain.then(operation, operation)
     this.chain = next.catch((error: unknown) => {
       console.warn('[dsh-plugin-litsearch] 任务写盘失败：', error)
     })
-    return this.chain
+    return requirePersistence ? next : this.chain
   }
 }
 

@@ -19,6 +19,8 @@ import type {
 } from '../search/types'
 import {
   annotateTask,
+  associatePaperPdf,
+  detachPaperPdf,
   downloadPaperPdf,
   exportUrl,
   fetchPaper,
@@ -128,6 +130,8 @@ export function PaperPane({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [pdfCandidate, setPdfCandidate] = useState<File | null>(null)
+  const [changingMaterial, setChangingMaterial] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [nonce, setNonce] = useState(0)
   const [failedLinks, setFailedLinks] = useState<OaLocation[]>([])
@@ -147,6 +151,20 @@ export function PaperPane({
 
   const taskId = ref?.taskId ?? ''
   const paperId = ref?.paperId ?? ''
+  useEffect(() => setPdfCandidate(null), [taskId, paperId])
+
+  const updateMaterial = async (file?: File): Promise<void> => {
+    setChangingMaterial(true)
+    try {
+      await (file === undefined ? detachPaperPdf(taskId, paperId) : associatePaperPdf(taskId, paperId, file))
+      setPdfCandidate(null)
+      setNonce((value) => value + 1)
+    } catch (error) {
+      notify(messageOf(error), 'error')
+    } finally {
+      setChangingMaterial(false)
+    }
+  }
 
   useEffect(() => {
     if (ref === null) {
@@ -357,6 +375,9 @@ export function PaperPane({
           {meta !== '' && <div style={metaStyle}>{meta}</div>}
 
           {sourceLine !== '' && <div style={SOURCE_LINE_STYLE}>{sourceLine}</div>}
+          {paper.supplement !== undefined && (
+            <div style={metaStyle}>{t('supplement.origin')} · {paper.supplement.id}</div>
+          )}
         </article>
 
         <div style={CONTROL_STYLE}>
@@ -463,6 +484,38 @@ export function PaperPane({
           </div>
         </div>
 
+        <section style={SECTION_STYLE}>
+          <h4 style={HEAD_STYLE}>{t('material.title')}</h4>
+          <label style={metaStyle}>
+            {t('material.select')}
+            {' '}
+            <input type="file" accept="application/pdf,.pdf" disabled={changingMaterial}
+              onChange={(event) => {
+                setPdfCandidate(event.target.files?.[0] ?? null)
+                event.target.value = ''
+              }}
+            />
+          </label>
+          {pdfCandidate !== null && (
+            <div style={metaStyle}>
+              {tpl(t('material.confirm'), { name: pdfCandidate.name })}
+              {' '}
+              <Button type="button" variant="outline" size="sm" disabled={changingMaterial}
+                onClick={() => { void updateMaterial(pdfCandidate) }}
+              >{t('material.attach')}</Button>
+            </div>
+          )}
+          {state?.pdfMaterial !== undefined && (
+            <div style={metaStyle} title={state.pdfMaterial.path}>
+              {tpl(t('material.linked'), { date: new Date(state.pdfMaterial.acquiredAt).toLocaleDateString() })}
+              {' '}
+              <Button type="button" variant="outline" size="sm" disabled={changingMaterial}
+                onClick={() => { void updateMaterial() }}
+              >{t('material.detach')}</Button>
+            </div>
+          )}
+        </section>
+
         {showLinkBar && (
           <div style={LINK_BAR_STYLE}>
             {pdfLinks.map((link) => (
@@ -536,7 +589,7 @@ export function PaperPane({
               <IdRow
                 label="arXiv"
                 value={paper.ids.arxivId}
-                href={`https://arxiv.org/abs/${paper.ids.arxivId}`}
+                href={`https://arxiv.org/abs/${paper.arxivVersionId ?? paper.ids.arxivId}`}
               />
             )}
             {paper.url !== '' && (

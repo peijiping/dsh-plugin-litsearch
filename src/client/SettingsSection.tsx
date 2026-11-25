@@ -13,8 +13,15 @@ import {
   Switch,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import { SOURCE_IDS, type ProbeResult, type SourceId } from '../search/types'
-import { cleanupSettings, probeSource, probeStorage, probeZotero } from './api'
+import { SOURCE_IDS, type ProbeResult, type SourceId, type ZoteroWriteAuthorization } from '../search/types'
+import {
+  authorizeZoteroWrite,
+  cleanupSettings,
+  fetchZoteroWriteAuthorization,
+  probeSource,
+  probeStorage,
+  probeZotero,
+} from './api'
 import { getHealth, refreshHealth, useHealth } from './health'
 import { tpl, type Translate } from './locales'
 import { linkStyle } from './styles'
@@ -517,6 +524,13 @@ export function SettingsSection(props: Props): ReactElement {
         {renderToggle(ZOTERO_ATTACH_FIELD)}
         {renderText(ZOTERO_TAG_FIELD)}
         <ZoteroProbeRow t={t} disabled={locked} />
+        {state.zoteroEnabled.text === 'true' && (
+          <ZoteroWriteRow
+            key={state.zoteroBaseUrl.text}
+            t={t}
+            disabled={locked || state.dirty || state.saving}
+          />
+        )}
       </section>
     </div>
   )
@@ -781,6 +795,69 @@ function ZoteroProbeRow({ t, disabled }: { t: Translate; disabled: boolean }): R
         {text !== '' && (
           <span style={failed ? RESULT_ERROR_STYLE : RESULT_STYLE}>{text}</span>
         )}
+      </div>
+    </div>
+  )
+}
+
+function ZoteroWriteRow({ t, disabled }: { t: Translate; disabled: boolean }): ReactElement {
+  const [status, setStatus] = useState<ZoteroWriteAuthorization | null>(null)
+  const [error, setError] = useState('')
+  const [checking, setChecking] = useState(!disabled)
+  const [authorizing, setAuthorizing] = useState(false)
+
+  useEffect(() => {
+    if (disabled) return
+    const controller = new AbortController()
+    setChecking(true)
+    setError('')
+    void fetchZoteroWriteAuthorization(controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) setStatus(result)
+      })
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return
+        setStatus(null)
+        setError(reason instanceof Error ? reason.message : String(reason))
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setChecking(false)
+      })
+    return () => controller.abort()
+  }, [disabled])
+
+  const authorize = async (): Promise<void> => {
+    setAuthorizing(true)
+    setError('')
+    try {
+      setStatus(await authorizeZoteroWrite())
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setAuthorizing(false)
+    }
+  }
+
+  return (
+    <div style={CHOICE_ROW_STYLE}>
+      <div style={TOGGLE_INFO_STYLE}>
+        <span style={CHOICE_LABEL_STYLE}>{t('zotero.write.label')}</span>
+        <span style={CHOICE_HINT_STYLE}>{t('zotero.write.hint')}</span>
+      </div>
+      <div style={INLINE_ROW_STYLE}>
+        {status?.state !== 'saved' && (
+          <button
+            type="button"
+            style={SMALL_BUTTON_STYLE}
+            disabled={disabled || checking || authorizing}
+            onClick={() => { void authorize() }}
+          >
+            {t(authorizing ? 'zotero.write.waiting' : 'zotero.write.authorize')}
+          </button>
+        )}
+        <span aria-live="polite" style={error === '' ? RESULT_STYLE : RESULT_ERROR_STYLE}>
+          {error || (status === null ? '' : t(`zotero.write.${status.state}`))}
+        </span>
       </div>
     </div>
   )
