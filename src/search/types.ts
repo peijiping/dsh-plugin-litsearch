@@ -1,3 +1,4 @@
+import type { Alias, Evidence, ProviderPage, ResumePosition } from './evidence.js'
 /**
  * 检索层公共类型：数据源无关的论文记录、任务模型与请求响应信封。
  *
@@ -222,6 +223,8 @@ export interface ProviderSearchOptions {
 export interface Provider {
   info: ProviderInfo
   search(query: string, options: ProviderSearchOptions): Promise<PaperRecord[]>
+  firstPageOnly?: boolean
+  searchPage?(query: string, options: ProviderSearchOptions, position: ResumePosition | null): Promise<ProviderPage>
   lookup?(id: string, options: ProviderSearchOptions): Promise<PaperRecord[]>
 }
 
@@ -387,11 +390,13 @@ export interface TaskResult {
 /**
  * 任务内一次检索（一轮）的元数据快照。
  *
- * 只留「这一轮用什么条件、什么时候跑、跑出多少、结果如何」，**不保存文献列表**：
- * 当前结果永远是最新一轮的 `result.papers`，筛读状态按 paperId 跨轮保留。
- * 历史轮次用于时间轴回看与「回填条件重跑」。
+ * 当前阅读列表使用最新轮次的 `result.papers`，筛读状态按 paperId 跨轮保留。
+ * v3 轮次还保存逐页取回明细与来源题录引用。
  */
 export interface SearchRound {
+  evidence?: Evidence
+  /** 明细另行按轮次读取。 */
+  hasEvidence?: boolean
   /** 任务内稳定 id，形如 `r3`。 */
   id: string
   /** 从 1 开始递增的序号（轮次被裁剪后仍保持递增，不复用旧号）。 */
@@ -425,6 +430,10 @@ export interface SearchRound {
 }
 
 export interface SearchTask {
+  /** v1/v2 最新合并题录的身份线索，仅用于安全衔接旧 paperId。 */
+  legacyPaperIdentities?: Record<string, Pick<PaperRecord, 'ids' | 'source' | 'sourceId' | 'title' | 'url'>>
+  records?: Record<string, PaperRecord>
+  paperAliases?: Alias[]
   id: string
   title: string
   conditions: TaskConditions

@@ -28,6 +28,7 @@ import {
   recordSourceOk,
 } from './health.js'
 import { fetchJson, fetchText, type HttpRequest } from './http.js'
+import { traceRequest } from './request-trace.js'
 import type { SourceId } from './types.js'
 
 interface QueueState {
@@ -57,7 +58,6 @@ const COOLDOWN_FALLBACK_MS = 10_000
 /** 单次请求愿意为遵守冷却等待的上限；超过则优雅跳过。 */
 const MAX_COOLDOWN_WAIT_MS = 20_000
 /** 429 / 临时故障的退避与重试次数。 */
-const RATE_LIMIT_RETRY_MS = 2_000
 const TRANSIENT_RETRY_MS = 1_000
 const MAX_RETRIES = 1
 /** 等待期间冷却被反复刷新时的循环上限，避免活锁。 */
@@ -119,7 +119,10 @@ export function limitedJson(
   url: string,
   request: LimitedRequest,
 ): Promise<unknown> {
-  return runLimited(source, request, () => fetchJson(url, request))
+  return runLimited(source, request, async () => {
+    await traceRequest(source, url)
+    return fetchJson(url, request)
+  })
 }
 
 export function limitedText(
@@ -127,7 +130,10 @@ export function limitedText(
   url: string,
   request: LimitedRequest,
 ): Promise<string> {
-  return runLimited(source, request, () => fetchText(url, request))
+  return runLimited(source, request, async () => {
+    await traceRequest(source, url)
+    return fetchText(url, request)
+  })
 }
 
 async function runLimited<T>(
@@ -144,8 +150,6 @@ async function runLimited<T>(
 
   const bypass = request.bypassCooldown === true
   let retries = 0
-  // 本请求 429 后自己退避重试时不再被刚写入的冷却拦下；其它排队请求仍遵守。
-  let ignoreCooldown = false
   let waitRounds = 0
 
   try {
@@ -153,7 +157,7 @@ async function runLimited<T>(
     for (;;) {
       throwIfAborted(request.signal)
 
-      const cooling = coolingWait(source, bypass, ignoreCooldown)
+      const cooling = coolingWait(source, bypass)
       if (cooling > MAX_COOLDOWN_WAIT_MS) {
         throw skippedTooLong(source, cooling, request.skipHint)
       }
@@ -165,7 +169,7 @@ async function runLimited<T>(
       if (wait > 0) await sleep(wait, request.signal)
 
       // 等待期间别的请求可能刚触发 429 并刷新冷却；补足等待，但有次数上限。
-      const refreshed = coolingWait(source, bypass, ignoreCooldown)
+      const refreshed = coolingWait(source, bypass)
       if (refreshed > 0) {
         if (refreshed > MAX_COOLDOWN_WAIT_MS || waitRounds >= MAX_WAIT_ROUNDS) {
           throw skippedTooLong(source, refreshed, request.skipHint)
@@ -196,8 +200,8 @@ async function runLimited<T>(
             throw skippedByRateLimit(source, request.skipHint)
           }
           retries += 1
-          ignoreCooldown = true
-          await sleep(Math.min(cooldown, RATE_LIMIT_RETRY_MS), request.signal)
+          if (cooldown > MAX_COOLDOWN_WAIT_MS) throw skippedTooLong(source, cooldown, request.skipHint)
+          await sleep(cooldown, request.signal)
           continue
         }
         if (isTransient(error) && retries < MAX_RETRIES) {
@@ -214,8 +218,8 @@ async function runLimited<T>(
   }
 }
 
-function coolingWait(source: SourceId, bypass: boolean, ignoreCooldown: boolean): number {
-  if (bypass || ignoreCooldown) return 0
+function coolingWait(source: SourceId, bypass: boolean): number {
+  if (bypass) return 0
   return Math.max(0, cooldownUntil(source) - Date.now())
 }
 

@@ -37,8 +37,11 @@ export function cloneConditions(conditions: TaskConditions): TaskConditions {
 
 /** 轮次深拷贝，避免投影对象与内存任务共享条件引用。 */
 export function cloneRound(round: SearchRound): SearchRound {
+  // 详情轮询只发送摘要。游标和题录明细由专门端点投影。
+  const { evidence, ...metadata } = round
   return {
-    ...round,
+    ...metadata,
+    ...(evidence ? { hasEvidence: true } : {}),
     conditions: cloneConditions(round.conditions),
     ...(round.stats === undefined
       ? {}

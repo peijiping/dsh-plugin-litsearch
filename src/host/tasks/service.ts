@@ -86,10 +86,15 @@ import { fetchExistingIndex, localApiBase, matchExisting, resolveTarget } from '
 import { normalizeWorkspace } from '../workspace.js'
 import { compareTasks } from './compare.js'
 import { filterPapers, sortPapers, type PaperFilter } from './filter.js'
-import { TaskRunner } from './runner.js'
+import type { Review, RoundReport } from '../../search/evidence.js'
+import { digest, sameConditions } from './page-evidence.js'
+import { rebuildRound, resolvePaperId } from './paper-groups.js'
+import { finishRound } from './rounds.js'
+import { TaskRunner, type PageTarget } from './runner.js'
 import { computeStats } from './stats.js'
 import { applyAnnotations, countScreening, emptyState, normalizeGroups } from './states.js'
 import { TaskStore } from './store.js'
+import { reportRecord } from './task-migration.js'
 import { cloneRound, roundsOf, toDetail, toSummary } from './summary.js'
 
 const MAX_QUERIES = 20
@@ -408,6 +413,82 @@ export class TaskService {
   /** 任务内轮次历史（时间升序、深拷贝）。 */
   async getRounds(id: string): Promise<SearchRound[]> {
     return roundsOf(await this.get(id)).map(cloneRound)
+  }
+
+  async roundReport(id: string, roundId: string): Promise<RoundReport> {
+    const task = await this.get(id)
+    const original = task.rounds.find(r => r.id === roundId)
+    if (!original) throw new SearchError('not_found','轮次不存在')
+    const round = structuredClone(original)
+    const records: RoundReport['records'] = {}
+    for (const run of round.evidence?.runs ?? []) {
+      run.progress.next = null
+      for (const page of run.pages) {
+        page.input = null
+        if (!page.committed) continue
+        page.committed.next = null
+        for (const hit of page.committed.hits) {
+          if (hit.status === 'invalid' || records[hit.recordId]) continue
+          const record = task.records?.[hit.recordId]
+          if (record) records[hit.recordId] = reportRecord(record)
+        }
+      }
+    }
+    for (const review of round.evidence?.reviews ?? []) {
+      review.stateCandidates = review.stateCandidates?.map(({ originalPaperId, state }) => ({
+        originalPaperId,
+        state: { screening: state.screening },
+      }))
+    }
+    const aliases = (task.paperAliases ?? []).filter(a => a.recordIds.some(key => records[key]) &&
+      Number(a.sinceRound.slice(1)) <= original.index)
+    return { taskId:id, rev:task.rev, round, records, aliases,
+      isCurrent:original.id === task.rounds.at(-1)?.id,
+      canContinue:!!original.evidence && original.id === task.rounds.at(-1)?.id && !this.isRunning(id) && sameConditions(original,task) }
+  }
+
+  async continuePage(id: string, target: PageTarget): Promise<void> {
+    const task = await this.get(id)
+    await this.begin(task,'more','panel',undefined,target)
+  }
+
+  async reviewIdentity(id: string, roundId: string, subject: string, action: 'split' | 'keepSeparate' | 'linkVersions' | 'resolveScreening', rev: number, choice?: string): Promise<void> {
+    const task = await this.get(id)
+    await this.store.checkpoint(task,draft => {
+      if (this.isRunning(id) || draft.rev !== rev) throw new SearchError('conflict','任务已更新，请重新打开明细')
+      const round = draft.rounds.at(-1)
+      if (round?.id !== roundId || !round.evidence) throw new SearchError('conflict','仅当前轮次可复核')
+      const ev = round.evidence
+      let item = ev.reviews.find(r => r.id === subject)
+      const decision: Review['decisions'][number] = { at:new Date().toISOString(),action,note:'' }
+      if (action === 'split') {
+        const group = ev.groups.find(g => g.paperId === subject)
+        if (!group || group.members.length < 2) throw new SearchError('conflict','此题录没有可拆分的来源成员')
+        const members = [...group.members].sort()
+        item = { id:digest(['manualSplit',members]), reason:'manualSplit',paperIds:[subject],
+          recordIds:members,evidence:['用户将来源成员分别保留'],decisions:[] }
+        decision.recordGroups = members.map(id => [id])
+        decision.originalPaperId = subject
+        const paper = draft.result.papers.find(p => p.paperId === subject)
+        decision.anchorRecordId = members.find(id => draft.records?.[id]?.source === paper?.source &&
+          draft.records?.[id]?.sourceId === paper?.sourceId) ?? members[0]
+        ev.reviews.push(item)
+      }
+      if (!item || item.decisions.length) throw new SearchError('conflict','复核项不存在或已处理')
+      if (action === 'resolveScreening') {
+        const candidate = item.stateCandidates?.find(c => c.originalPaperId === choice)
+        if (!candidate || item.reason !== 'screeningConflict') throw new SearchError('bad_request','请选择原有筛读结论')
+        const paperId = item.paperIds[0]
+        decision.chosenState = { screening:candidate.state.screening }
+        draft.states[paperId] = { ...draft.states[paperId], screening:candidate.state.screening }
+      } else if (item.reason === 'screeningConflict') throw new SearchError('bad_request','请确认筛读结论')
+      item.decisions.push(decision)
+      rebuildRound(draft,round)
+      const finishedAt = round.finishedAt
+      finishRound(round,draft)
+      round.finishedAt = finishedAt
+    })
+    this.events.publish(toSummary(task))
   }
 
   /**
@@ -736,7 +817,7 @@ export class TaskService {
     if (expectedRev !== undefined && expectedRev !== task.rev) {
       throw new SearchError('conflict', `任务已被更新（当前 rev=${task.rev}），请刷新后重试`)
     }
-    const outcome = applyAnnotations(task, inputs)
+    const outcome = applyAnnotations(task, inputs.map(input => ({ ...input, paperId:resolvePaperId(task,input.paperId.trim()) })))
     task.states = outcome.states
     task.stats.screening = countScreening(task.result.papers, task.states)
     task.rev += 1
@@ -823,6 +904,7 @@ export class TaskService {
    */
   async recheckPdf(id: string, paperId: string): Promise<{ exists: boolean }> {
     const task = await this.get(id)
+    paperId = resolvePaperId(task,paperId)
     findPaper(task, paperId)
     const state = task.states[paperId]
     const filePath = state?.pdfFile
@@ -845,6 +927,7 @@ export class TaskService {
     dir?: string,
   ): Promise<PdfDownloadResult> {
     const task = await this.get(id)
+    paperId = resolvePaperId(task,paperId)
     const paper = findPaper(task, paperId)
     const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
     if (target !== undefined) task.workspace = target
@@ -939,6 +1022,7 @@ export class TaskService {
   /** 网页全文：Europe PMC → PubMed Central → arXiv，最终都转成安全 HTML。 */
   async fullText(id: string, paperId: string): Promise<string> {
     const task = await this.get(id)
+    paperId = resolvePaperId(task,paperId)
     const paper = findPaper(task, paperId)
     const settings = getSettings()
     // EPMC 与 PMC 都需要 PMCID；缺 PMCID 时用一次 ELink 按 PMID 反查。
@@ -1047,6 +1131,7 @@ export class TaskService {
       throw new SearchError('bad_request', '文件不是完整 PDF，或超过设置中的 PDF 大小上限')
     }
     const task = await this.get(id)
+    paperId = resolvePaperId(task,paperId)
     const paper = findPaper(task, paperId)
     const dir = join(resolvePdfRoot(normalizeWorkspace(workspace) ?? task.workspace), 'attachments', paperId)
     const saved = await persistPdf(bytes, this.store.root, paper, workspace, dir, true)
@@ -1071,6 +1156,7 @@ export class TaskService {
 
   async detachPdf(id: string, paperId: string, workspace?: string): Promise<PaperDetail> {
     const task = await this.get(id)
+    paperId = resolvePaperId(task,paperId)
     findPaper(task, paperId)
     const state = task.states[paperId]
     if (state?.pdfMaterial !== undefined) {
@@ -1100,6 +1186,7 @@ export class TaskService {
   /** 单篇论文详情：独立论文页使用，含任务标题与分组。 */
   async paperDetail(id: string, paperId: string, workspace?: string): Promise<PaperDetail> {
     const task = await this.get(id)
+    paperId = resolvePaperId(task,paperId)
     if (await reconcilePdfFiles(task)) await this.store.save(task)
     const paper = findPaper(task, paperId)
     const target = normalizeWorkspace(workspace) ?? normalizeWorkspace(task.workspace)
@@ -1119,6 +1206,7 @@ export class TaskService {
   /** PubTator3 实体标注；无 PMID 时明确告知不可标注。 */
   async entities(id: string, paperId: string, signal?: AbortSignal): Promise<PaperEntities> {
     const task = await this.get(id)
+    paperId = resolvePaperId(task,paperId)
     const paper = findPaper(task, paperId)
     const pmid = paper.ids.pmid
     if (pmid === '') {
@@ -1530,6 +1618,7 @@ export class TaskService {
     mode: 'new' | 'more',
     origin: TaskOrigin = task.origin,
     workspace?: string,
+    target?: PageTarget,
   ): Promise<SearchTask> {
     if (this.runner.isRunning(task.id)) {
       throw new SearchError('conflict', '任务正在运行')
@@ -1539,8 +1628,12 @@ export class TaskService {
       task.workspace = nextWorkspace
       void this.store.save(task)
     }
-    if (mode === 'more') {
-      throw new SearchError('bad_request', '续页加载将在后续版本提供，请先重跑任务')
+    if (mode === 'more' && !target) {
+      const round = task.rounds.at(-1)
+      const eligible = round?.evidence?.runs.filter(r => ['ready','error','rateLimited','timeout','canceled'].includes(r.progress.stopReason))
+      if (!round || eligible?.length !== 1) throw new SearchError('bad_request','请在轮次执行明细中选择可继续的来源')
+      const run = eligible[0]
+      target = { roundId:round.id,queryId:run.queryId,source:run.source,pageNo:run.progress.lastCommittedPage+1 }
     }
     const queries = task.conditions.queries.filter(
       (query) => query.enabled && query.text.trim() !== '',
@@ -1550,7 +1643,7 @@ export class TaskService {
     const done = this.runner.start(
       task,
       {
-        persist: (current) => this.store.save(current),
+        checkpoint: (current, change) => this.store.checkpoint(current,change),
         publish: (current) => {
           // 删除后这一轮收尾仍会 publish，跳过已删除任务，避免客户端又去打开它。
           if (this.store.summary(current.id) !== undefined) {
@@ -1558,7 +1651,7 @@ export class TaskService {
           }
         },
       },
-      origin,
+      origin,target,
     )
     return done.then(() => {
       if (getSettings().autoDownloadPdf) {
@@ -1725,7 +1818,8 @@ function clampInt(value: number, min: number, max: number): number {
 }
 
 function findPaper(task: SearchTask, paperId: string): Paper {
-  const paper = task.result.papers.find((entry) => entry.paperId === paperId)
+  const resolved = resolvePaperId(task,paperId)
+  const paper = task.result.papers.find((entry) => entry.paperId === resolved)
   if (paper === undefined) throw new SearchError('not_found', `任务里没有这篇文献：${paperId}`)
   return paper
 }

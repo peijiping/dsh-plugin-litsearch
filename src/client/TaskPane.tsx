@@ -1493,6 +1493,7 @@ export function TaskPane({
         taskId={taskId}
         detail={detail}
         busy={active}
+        onChange={() => view.reload()}
         onRerun={() => {
           view.reload()
           notify(t('rounds.rerunStarted'))

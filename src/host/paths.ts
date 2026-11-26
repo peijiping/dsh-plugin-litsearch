@@ -14,7 +14,8 @@
  * 随数据目录一起搬迁。
  */
 
-import { copyFile, mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { copyFile, link, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
@@ -24,6 +25,8 @@ export const PLUGIN_ID = 'dsh-plugin-litsearch'
 export const LEGACY_DIR = 'dsh-litsearch'
 
 /** 允许搬迁的条目：任务正文与索引、导出文件、PDF 去重缓存、当前任务快照。 */
+const LEGACY_MIGRATION_MARKER = '.legacy-storage-migrated'
+const LEGACY_MIGRATION_IN_PROGRESS = '.legacy-storage-copying'
 const MIGRATABLE_ENTRIES = ['tasks', 'out', 'pdfs', 'current.json'] as const
 
 /** 解析宿主数据根目录；支持绝对路径、`~/...` 与空值回落。 */
@@ -80,14 +83,26 @@ export async function resolveStorageRoot(
   home: string = homedir(),
 ): Promise<StorageResolution> {
   const root = storageRoot(env, home)
-  if (await hasTaskFiles(root)) return { root, copied: 0 }
+  const complete = join(root, LEGACY_MIGRATION_MARKER)
+  const pending = join(root, LEGACY_MIGRATION_IN_PROGRESS)
+  if ((await readFile(complete, 'utf8').catch(() => '')) === 'done') return { root, copied: 0 }
+  const inProgress = await readFile(pending, 'utf8').catch(() => '')
+  if (!inProgress && (await hasTaskFiles(root))) {
+    // 已使用统一目录的用户清空历史后，旧目录不能重新覆盖其选择。
+    await writeFile(complete, 'done').catch(() => {})
+    return { root, copied: 0 }
+  }
 
   for (const legacy of legacyRoots(env, home)) {
-    if (!(await hasTaskFiles(legacy))) continue
+    if ((inProgress && inProgress !== legacy) || !(await hasTaskFiles(legacy))) continue
     const copied: string[] = []
     try {
+      await mkdir(root, { recursive: true })
+      await writeFile(pending, legacy)
       await copyLegacyStorage(legacy, root, copied)
       if (await hasTaskFiles(root)) {
+        await writeFile(complete, 'done')
+        await rm(pending, { force: true }).catch(() => {})
         console.info(
           `[dsh-plugin-litsearch] 任务数据已迁移：${legacy} → ${root}（${copied.length} 个文件，原目录保留）`,
         )
@@ -137,8 +152,17 @@ async function copyDirIfAbsent(source: string, target: string, copied: string[])
 async function copyFileIfAbsent(source: string, target: string, copied: string[]): Promise<void> {
   if ((await stat(target).catch(() => null)) !== null) return
   await mkdir(dirname(target), { recursive: true })
-  await copyFile(source, target)
-  copied.push(target)
+  const staging = target + '.' + randomUUID() + '.tmp'
+  try {
+    await copyFile(source, staging)
+    // 发布完整文件，避免启动中断让下次把半份副本当成迁移成功。
+    await link(staging, target)
+    copied.push(target)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  } finally {
+    await rm(staging, { force: true }).catch(() => {})
+  }
 }
 
 /** 迁移未完成时清掉本次副本，让下次启动可以重新迁移（源文件始终不动）。 */

@@ -1,79 +1,92 @@
-import { applySupplements } from './supplements.js'
-/**
- * 任务执行器。
- *
- * 多检索式按「先 query 后 source」串行扇出（每条式内部并发各源），每完成一条
- * 式就自增 rev 并持久化，客户端据此显示 i/N 进度。取消通过 AbortSignal 透传到
- * 每个上游请求；已拿到的结果保留，状态标 `canceled`。
- */
-
-import { DEFAULT_TASK_MAX_ROUNDS, MAX_LIMIT, getSettings } from '../../search/config.js'
-import { searchSources } from '../../search/aggregate.js'
-import { mergeHits, type RankedHit } from '../../search/identity.js'
-import { resolveSources } from '../../search/providers/index.js'
-import type {
-  PaperRecord,
-  SearchTask,
-  SourceId,
-  SourceOutcome,
-  SourceStatus,
-  TaskOrigin,
-  TaskStep,
-  TaskStepStatus,
-  TaskConditions,
-} from '../../search/types.js'
-import { matchesLanguage } from './filter.js'
+import { DEFAULT_TASK_MAX_ROUNDS } from '../../search/config.js'
+import { SearchError } from '../../search/errors.js'
+import { cooldownUntil } from '../../search/health.js'
+import { SourceSkipped } from '../../search/rate-limit.js'
+import { requestTrace } from '../../search/request-trace.js'
+import type { Attempt, ProviderPage, SourceRun } from '../../search/evidence.js'
+import type { SearchRound, SearchTask, TaskOrigin, TaskStatus } from '../../search/types.js'
+import { acceptPage, fetchPage, newEvidence, sameConditions } from './page-evidence.js'
+import { rebuildRound } from './paper-groups.js'
 import { finishRound, startRound } from './rounds.js'
 import { buildSteps, finalizeSteps } from './steps.js'
-import { countScreening } from './states.js'
 
 export interface RunnerHooks {
-  persist(task: SearchTask): Promise<void>
+  checkpoint(task: SearchTask, change: (draft: SearchTask) => void): Promise<void>
   publish(task: SearchTask): void
 }
+export interface PageTarget {
+  roundId: string
+  source: string
+  queryId: string
+  pageNo: number
+}
 
-class RunCanceled extends Error {
-  constructor() {
-    super('检索已取消')
-    this.name = 'RunCanceled'
+function findRun(round: SearchRound, target: Pick<PageTarget, 'queryId' | 'source'>): SourceRun {
+  const run = round.evidence?.runs.find((r) => r.queryId === target.queryId && r.source === target.source)
+  if (!run) throw new SearchError('not_found', '没有找到该检索块的来源记录')
+  return run
+}
+
+export function checkResume(task: SearchTask, target: PageTarget): void {
+  const round = task.rounds.at(-1)
+  if (!round?.evidence || round.id !== target.roundId || !sameConditions(round, task)) {
+    throw new SearchError('conflict', '轮次或检索条件已变更，请按当前条件开新轮')
   }
+  const run = findRun(round, target)
+  if (
+    run.progress.lastCommittedPage + 1 !== target.pageNo ||
+    !['ready', 'rateLimited', 'canceled', 'error', 'timeout'].includes(run.progress.stopReason)
+  ) {
+    throw new SearchError('conflict', '该页进度已改变或来源不能继续，请刷新执行明细')
+  }
+  if (run.progress.retryAfter && Date.parse(run.progress.retryAfter) > Date.now()) {
+    throw new SearchError('conflict', '来源仍在限流冷却中，请稍后重试')
+  }
+}
+
+function statusOf(runs: SourceRun[]): TaskStatus {
+  const failed = runs.filter((r) =>
+    ['error', 'cursorExpired', 'timeout', 'duplicatePage'].includes(r.progress.stopReason),
+  )
+  if (
+    failed.length &&
+    runs.every((r) => r.progress.lastCommittedPage === 0) &&
+    runs.every((r) => failed.includes(r) || r.progress.stopReason === 'rateLimited')
+  )
+    return 'error'
+  if (
+    failed.length ||
+    runs.every((r) => r.progress.stopReason === 'rateLimited') ||
+    runs.some((r) => r.progress.stopReason === 'canceled' || !r.pages.length)
+  )
+    return 'partial'
+  return 'done'
 }
 
 export class TaskRunner {
   private readonly controllers = new Map<string, AbortController>()
-
-  /** 正在执行的那一轮的完成 Promise，供「等待上一轮结束」使用。 */
   private readonly running = new Map<string, Promise<void>>()
-
   isRunning(id: string): boolean {
     return this.controllers.has(id)
   }
-
-  /** 返回当前这一轮的完成 Promise；空闲时立即 resolve。 */
   wait(id: string): Promise<void> {
     return this.running.get(id) ?? Promise.resolve()
   }
-
-  /** 中止运行；返回是否确实有任务在跑。 */
   cancel(id: string): boolean {
     const controller = this.controllers.get(id)
-    if (controller === undefined) return false
-    controller.abort()
-    return true
+    controller?.abort()
+    return !!controller
   }
-
   cancelAll(): void {
     for (const controller of this.controllers.values()) controller.abort()
   }
 
-  /**
-   * 启动一次执行（= 任务内新开一轮）；controller 同步登记，因此调用方返回时
-   * `isRunning` 已为 true。`origin` 记录这一轮是谁发起的，用于历史时间轴。
-   */
-  start(task: SearchTask, hooks: RunnerHooks, origin: TaskOrigin = task.origin): Promise<void> {
+  start(task: SearchTask, hooks: RunnerHooks, origin: TaskOrigin, target?: PageTarget): Promise<void> {
+    if (this.isRunning(task.id)) throw new SearchError('conflict', '任务正在运行')
+    if (target) checkResume(task, target)
     const controller = new AbortController()
     this.controllers.set(task.id, controller)
-    const done = this.execute(task, hooks, controller, origin).finally(() => {
+    const done = this.execute(task, hooks, origin, controller.signal, target).finally(() => {
       this.controllers.delete(task.id)
       this.running.delete(task.id)
     })
@@ -84,206 +97,180 @@ export class TaskRunner {
   private async execute(
     task: SearchTask,
     hooks: RunnerHooks,
-    controller: AbortController,
     origin: TaskOrigin,
+    signal: AbortSignal,
+    target?: PageTarget,
   ): Promise<void> {
-    const queries = task.conditions.queries.filter(
-      (query) => query.enabled && query.text.trim() !== '',
-    )
-    if (queries.length === 0) throw new Error('没有启用的检索式')
-
-    // 预生成当前轮的步骤清单：分母固定，执行中只改状态，不追加条目。
-    // 数据源口径与 aggregate.searchSources 内部一致（resolveSources 为纯函数）。
-    const sources = resolveSources(task.conditions.sources)
-    const steps = buildSteps(queries, sources)
-    task.steps = steps
-    const stepById = new Map(steps.map((step) => [step.id, step]))
-    const setStep = (id: string, patch: Partial<TaskStep>): void => {
-      const step = stepById.get(id)
-      if (step === undefined) return
-      Object.assign(step, patch)
-      touch(task, hooks) // 只推进 rev + 发布，不写盘
+    const commit = async (change: (draft: SearchTask) => void): Promise<void> => {
+      await hooks.checkpoint(task, change)
+      hooks.publish(task)
     }
-
-    // 开跑前先落一条轮次快照：条件是深拷贝，之后改条件不会影响历史。
-    const round = startRound(task, origin, DEFAULT_TASK_MAX_ROUNDS)
-
-    task.status = 'running'
-    task.error = undefined
-    task.result.papers = []
-    task.result.sources = []
-    task.result.fetchedAt = undefined
-    task.stats = {
-      perQuery: {},
-      rawHits: 0,
-      deduped: 0,
-      screening: { unread: 0, read: 0, included: 0, excluded: 0 },
-    }
-    applySupplements(task, [])
-    task.progress = { queryIndex: 0, queryTotal: queries.length }
-    touch(task, hooks)
-    await hooks.persist(task)
-
-    const hits: RankedHit[] = []
-    const statusById = new Map<SourceId, SourceStatus>()
-    const perSourceLimit = clampRequestLimit(task.conditions.pageSize)
-
+    await commit((draft) => {
+      let round = draft.rounds.at(-1)
+      if (!target) {
+        round = startRound(draft, origin, DEFAULT_TASK_MAX_ROUNDS)
+        round.evidence = newEvidence(round.conditions)
+        const queries = round.conditions.queries.filter((q) => q.enabled && q.text.trim())
+        const sources = [...new Set(round.evidence.runs.map((r) => r.source))]
+        draft.steps = buildSteps(queries, sources)
+        // 删除已淘汰轮次独占的题录快照。
+        const retained = new Set(
+          draft.rounds.flatMap(
+            (r) =>
+              r.evidence?.runs.flatMap((run) =>
+                run.pages.flatMap(
+                  (p) => p.committed?.hits.flatMap((h) => (h.status === 'invalid' ? [] : [h.recordId])) ?? [],
+                ),
+              ) ?? [],
+          ),
+        )
+        draft.records = Object.fromEntries(
+          Object.entries(draft.records ?? {}).filter(([id]) => retained.has(id)),
+        )
+        draft.paperAliases ??= []
+        draft.result.fetchedAt = undefined
+        rebuildRound(draft, round)
+      }
+      if (!round?.evidence) throw new SearchError('conflict', '缺少本轮执行明细')
+      round.finishedAt = undefined
+      round.status = undefined
+      round.error = undefined
+      draft.error = undefined
+      draft.status = 'running'
+      draft.progress = { queryIndex: 0, queryTotal: new Set(round.evidence.runs.map((r) => r.queryId)).size }
+    })
+    const latest = () => task.rounds.at(-1)!
+    const queryIds = [...new Set(latest().evidence!.runs.map((r) => r.queryId))]
     try {
-      for (const [index, query] of queries.entries()) {
-        const queryNo = index + 1
-        task.progress = { queryIndex: queryNo, queryTotal: queries.length }
-        setStep(`q${queryNo}`, { status: 'running' })
-        await hooks.persist(task)
-
-        const results = await searchSources({
-          query: query.text,
-          perSource: query.perSource,
-          sources,
-          limit: perSourceLimit,
-          yearFrom: task.conditions.yearFrom,
-          yearTo: task.conditions.yearTo,
-          openAccessOnly: task.conditions.openAccessOnly,
-          contactEmail: '',
-          timeoutMs: 0,
-          signal: controller.signal,
-          onSourceStart: (source) => {
-            setStep(`q${queryNo}:${source}`, { status: 'running', requestedLimit: perSourceLimit })
-          },
-          onSourceDone: (outcome: SourceOutcome) => {
-            const status: TaskStepStatus = controller.signal.aborted
-              ? 'skipped'
-              : outcome.skipped === true
-                ? 'skipped'
-                : outcome.ok
-                  ? 'done'
-                  : 'failed'
-            setStep(`q${queryNo}:${outcome.source}`, {
-              status,
-              count: outcome.count,
-              ...(outcome.ok && outcome.skipped !== true ? { received: outcome.count } : {}),
-              ...(outcome.error === undefined ? {} : { error: outcome.error }),
-            })
-          },
+      for (const [index, queryId] of queryIds.entries()) {
+        if (signal.aborted) break
+        if (target && target.queryId !== queryId) continue
+        const pending = latest().evidence!.runs.filter(
+          (r) => r.queryId === queryId && (!target || r.source === target.source),
+        )
+        const queryStep = 'q' + (index + 1)
+        await commit((draft) => {
+          const round = draft.rounds.at(-1)!
+          draft.progress = { queryIndex: index + 1, queryTotal: queryIds.length }
+          const group = draft.steps?.find((s) => s.id === queryStep)
+          if (group) group.status = 'running'
+          for (const source of pending) {
+            const run = findRun(round, source)
+            const pageNo = run.progress.lastCommittedPage + 1
+            const page = run.pages.find((p) => p.pageNo === pageNo) ?? {
+              pageNo,
+              input: run.progress.next,
+              attempts: [],
+            }
+            if (!run.pages.includes(page)) run.pages.push(page)
+            page.attempts.push({ startedAt: new Date().toISOString(), outcome: 'started', requests: [] })
+            const step = draft.steps?.find((s) => s.id === queryStep + ':' + source.source)
+            if (step)
+              Object.assign(step, { status: 'running', requestedLimit: run.pageSize, error: undefined })
+          }
         })
-        if (controller.signal.aborted) throw new RunCanceled()
-
-        let queryCount = 0
-        for (const result of results) {
-          const records = result.records.filter((record) =>
-            matchesConditions(record, task.conditions),
-          )
-          queryCount += records.length
-          // 与 stats.perQuery 同口径：直接改，稍后检索式 done 时统一 touch。
-          const sourceStep = stepById.get(`q${queryNo}:${result.source}`)
-          if (sourceStep !== undefined) sourceStep.count = records.length
-          const status = statusById.get(result.source) ?? {
-            id: result.source,
-            ok: true,
-            count: 0,
-          }
-          if (records.length < result.records.length) status.filtered = true
-          status.count += records.length
-          if (result.skipped === true) {
-            // 限流跳过不是故障：不标 failed、不进 partial，只留中性说明。
-            status.skipped = true
-            status.note = result.error
-          } else if (!result.ok) {
-            status.ok = false
-            status.error = result.error
-          }
-          statusById.set(result.source, status)
-
-          task.stats.perQuery[query.id] =
-            (task.stats.perQuery[query.id] ?? 0) + records.length
-          records.forEach((record, position) => {
-            hits.push({
-              record,
-              source: result.source,
-              rank: position + 1,
-              queryId: query.id,
+        const outcomes = await Promise.allSettled(
+          pending.map(async (descriptor) => {
+            const run = findRun(latest(), descriptor)
+            const input = run.pages.at(-1)!.input
+            let result: ProviderPage | undefined
+            let failure: Attempt['outcome'] = 'error'
+            let detail: string | undefined
+            let retryAfter: string | undefined
+            try {
+              result = await requestTrace.run(
+                async (request) => {
+                  await commit((draft) => {
+                    findRun(draft.rounds.at(-1)!, descriptor)
+                      .pages.at(-1)!
+                      .attempts.at(-1)!
+                      .requests.push(request)
+                  })
+                },
+                () => fetchPage(run, latest().conditions, input, signal),
+              )
+            } catch (error) {
+              if (signal.aborted) failure = 'canceled'
+              else if (error instanceof SourceSkipped) {
+                failure = 'rateLimited'
+                const until = cooldownUntil(run.source)
+                if (until > 0) retryAfter = new Date(until).toISOString()
+              } else if (error instanceof SearchError && error.code === 'timeout') failure = 'timeout'
+              else if (input && error instanceof SearchError && [400, 410].includes(error.status ?? 0))
+                failure = 'cursorExpired'
+              detail =
+                error instanceof SearchError || error instanceof SourceSkipped
+                  ? error.message
+                  : '来源请求未成功'
+            }
+            await commit((draft) => {
+              const round = draft.rounds.at(-1)!
+              const live = findRun(round, descriptor)
+              const page = live.pages.at(-1)!
+              const attempt = page.attempts.at(-1)!
+              attempt.endedAt = new Date().toISOString()
+              if (result) acceptPage(draft, round, live, page, attempt, result)
+              else {
+                Object.assign(attempt, { outcome: failure, detail, retryAfter })
+                Object.assign(live.progress, { stopReason: failure, retryAfter })
+              }
+              rebuildRound(draft, round)
+              if (page.committed) draft.result.fetchedAt = attempt.endedAt
+              const step = draft.steps?.find((s) => s.id === queryStep + ':' + descriptor.source)
+              const success = attempt.outcome === 'committed'
+              if (step)
+                Object.assign(step, {
+                  status: success
+                    ? 'done'
+                    : ['rateLimited', 'canceled'].includes(attempt.outcome)
+                      ? 'skipped'
+                      : 'failed',
+                  error: success ? undefined : (detail ?? attempt.outcome),
+                  count: live.pages.reduce((n, p) => n + (p.committed?.kept ?? 0), 0),
+                  received: live.pages.reduce((n, p) => n + (p.committed?.observedEntries ?? 0), 0),
+                  hasMore: live.capability === 'pageable' && success ? !!live.progress.next : undefined,
+                })
+              const group = draft.steps?.find((s) => s.id === queryStep)
+              if (group) group.count = draft.stats.perQuery[queryId] ?? 0
             })
-          })
-        }
-        setStep(`q${queryNo}`, { status: 'done', count: queryCount })
+          }),
+        )
+        const failed = outcomes.find((outcome) => outcome.status === 'rejected')
+        if (failed?.status === 'rejected') throw failed.reason
+        await commit((draft) => {
+          const group = draft.steps?.find((s) => s.id === queryStep)
+          if (group) group.status = 'done'
+        })
       }
-
-      // 去重：让出一轮事件循环，让 1.5s 轮询有机会读到「去重中」。
-      setStep('dedup', { status: 'running' })
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      const merged = mergeHits(hits)
-      setStep('dedup', { status: 'done', count: merged.length })
-      const papers = merged
-        .filter((paper) => matchesConditions(paper, task.conditions))
-        .slice(0, getSettings().taskMaxPapers)
-
-      task.result.papers = papers
-      task.result.sources = [...statusById.values()]
-      task.result.fetchedAt = new Date().toISOString()
-      task.stats.rawHits = hits.length
-      task.stats.deduped = merged.length
-      applySupplements(task, papers)
-
-      const failed = task.result.sources.filter((source) => !source.ok && !source.skipped)
-      const succeeded = task.result.sources.filter((source) => source.ok && !source.skipped)
-      const skipped = task.result.sources.filter((source) => source.skipped)
-      // 全被限流跳过且结果为空时仍标 partial 提示重跑，但不显示任何红色失败。
-      task.status =
-        succeeded.length === 0 && failed.length > 0
-          ? 'error'
-          : failed.length > 0 || (succeeded.length === 0 && skipped.length > 0)
-            ? 'partial'
-            : 'done'
-      task.progress = undefined
-    } catch (error) {
-      if (controller.signal.aborted || error instanceof RunCanceled) {
-        task.status = 'canceled'
-        task.error = '检索已取消'
-      } else {
-        task.status = 'error'
-        task.error = error instanceof Error ? error.message : String(error)
-      }
-      task.result.sources = [...statusById.values()]
-      task.stats.screening = countScreening(task.result.papers, task.states)
-      task.progress = undefined
     } finally {
-      // 无论成功 / 取消 / 异常都回填本轮元数据，时间轴不会留下「永远运行中」的轮次。
-      finalizeSteps(steps, task.status, task.error)
-      finishRound(round, task)
-      touch(task, hooks)
-      await hooks.persist(task)
+      await commit((draft) => {
+        const round = draft.rounds.at(-1)!
+        const evidence = round.evidence!
+        for (const run of evidence.runs) {
+          if (signal.aborted && !run.pages.length) run.progress.stopReason = 'canceled'
+          if (
+            run.progress.stopReason === 'ready' &&
+            run.progress.next &&
+            evidence.counts.savedFromSearch >= evidence.taskMaxPapers
+          ) {
+            run.progress.stopReason = 'taskLimit'
+          }
+          const attempt = run.pages.at(-1)?.attempts.at(-1)
+          if (attempt?.outcome === 'started') {
+            attempt.outcome = 'error'
+            attempt.detail = '本页未能保存，请重试'
+            run.progress.stopReason = 'error'
+          }
+        }
+        draft.status = signal.aborted ? 'canceled' : statusOf(evidence.runs)
+        draft.error = signal.aborted ? '检索已取消' : undefined
+        draft.progress = undefined
+        const dedup = draft.steps?.find((s) => s.id === 'dedup')
+        if (dedup) Object.assign(dedup, { status: 'done', count: evidence.counts.merged })
+        finalizeSteps(draft.steps ?? [], draft.status, draft.error)
+        rebuildRound(draft, round)
+        finishRound(round, draft)
+      })
     }
   }
-}
-
-function touch(task: SearchTask, hooks: RunnerHooks): void {
-  task.rev += 1
-  task.updatedAt = new Date().toISOString()
-  hooks.publish(task)
-}
-
-
-/** 每个源多取一些给跨源/跨式去重留余量，但不放大到打爆上游。 */
-function clampRequestLimit(pageSize: number): number {
-  const base = Number.isFinite(pageSize) ? pageSize : 20
-  return Math.min(Math.max(Math.floor(base) * 2, 10), MAX_LIMIT)
-}
-
-function matchesConditions(
-  paper: PaperRecord,
-  conditions: TaskConditions,
-): boolean {
-  if (conditions.yearFrom !== undefined && (paper.year ?? 0) < conditions.yearFrom) return false
-  if (
-    conditions.yearTo !== undefined &&
-    (paper.year ?? Number.MAX_SAFE_INTEGER) > conditions.yearTo
-  ) {
-    return false
-  }
-  if (conditions.openAccessOnly && !paper.openAccess) return false
-  if (!matchesLanguage(paper, conditions.language)) return false
-  if (conditions.types !== undefined && conditions.types.length > 0) {
-    const type = paper.type.toLowerCase()
-    if (!conditions.types.some((wanted) => wanted.toLowerCase() === type)) return false
-  }
-  return true
 }

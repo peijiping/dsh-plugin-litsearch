@@ -5,9 +5,12 @@
  * 无需密钥；自限约 5 req/s（队列里按 200ms 间隔）。
  */
 
+import type { ProviderPage, ResumePosition } from '../evidence.js'
+import { SearchError } from '../errors.js'
 import { asArray, asNumber, asRecord, asString, normalizeDoi } from '../normalize.js'
 import { epmcFullTextLocations } from '../oa.js'
 import { bestPdfUrl } from '../oa.js'
+import { europePmcTitle } from '../paper-title.js'
 import { limitedJson } from '../rate-limit.js'
 import type { PaperRecord, Provider, ProviderSearchOptions } from '../types.js'
 
@@ -32,23 +35,51 @@ export const europepmc: Provider = {
   },
 
   async search(query, options): Promise<PaperRecord[]> {
-    const params = new URLSearchParams({
-      query: buildQuery(query, options),
-      format: 'json',
-      pageSize: String(options.limit),
-      resultType: 'core',
-    })
-
-    const payload = await limitedJson('europepmc', `${ENDPOINT}?${params.toString()}`, {
-      timeoutMs: Math.max(options.timeoutMs, SEARCH_TIMEOUT_FLOOR_MS),
-      signal: options.signal,
-      bypassCooldown: options.bypassCooldown === true,
-      headers: { accept: 'application/json' },
-    })
-
-    const results = asArray(asRecord(asRecord(payload)['resultList'])['result'])
-    return results.map(mapResult).filter((paper) => paper.title !== '')
+    const page = await searchPage(query, options, null)
+    return page.entries.flatMap((entry) => ('record' in entry ? [entry.record] : []))
   },
+  searchPage,
+}
+
+async function searchPage(
+  query: string,
+  options: ProviderSearchOptions,
+  position: ResumePosition | null,
+): Promise<ProviderPage> {
+  const params = new URLSearchParams({
+    cursorMark: position?.kind === 'cursor' ? position.value : '*',
+    query: buildQuery(query, options),
+    format: 'json',
+    pageSize: String(options.limit),
+    resultType: 'core',
+  })
+
+  const payload = await limitedJson('europepmc', `${ENDPOINT}?${params.toString()}`, {
+    timeoutMs: Math.max(options.timeoutMs, SEARCH_TIMEOUT_FLOOR_MS),
+    signal: options.signal,
+    bypassCooldown: options.bypassCooldown === true,
+    headers: { accept: 'application/json' },
+  })
+
+  const response = asRecord(payload)
+  const total = asNumber(response.hitCount)
+  const raw = asRecord(response.resultList).result
+  if (!Array.isArray(raw) && !(total === 0 && raw === undefined)) {
+    throw new SearchError('upstream_error', 'Europe PMC 返回了无法识别的检索结果')
+  }
+  const results = asArray(raw)
+  const entries = results.map((item) => {
+    const record = mapResult(item)
+    return record.title ? { record } : { sourceId: record.sourceId, reason: 'missingTitle' }
+  })
+  const cursor = asString(response.nextCursorMark)
+  return {
+    entries,
+    returned: results.length,
+    normalized: entries.filter((entry) => 'record' in entry).length,
+    reportedTotal: total,
+    next: results.length && cursor ? { kind: 'cursor', value: cursor } : null,
+  }
 }
 
 function buildQuery(query: string, options: ProviderSearchOptions): string {
@@ -80,7 +111,7 @@ function mapResult(raw: unknown): PaperRecord {
     source: 'europepmc',
     sourceId: id,
     ids: { doi, pmid, pmcid, arxivId: '' },
-    title: asString(result['title']),
+    title: europePmcTitle(asString(result['title'])),
     authors,
     year: readYear(result['pubYear']),
     venue: asString(journal['title']),

@@ -8,8 +8,10 @@ export function applySupplements(task: SearchTask, papers: readonly Paper[]): vo
   const supplemented = (task.supplements ?? []).map((entry) => {
     const identifier = entry.supplement
     const same = remaining.filter((paper) =>
-      paper.paperId === entry.paperId || (identifier !== undefined && matchesIdentifier(paper, identifier)),
+      paper.paperId === entry.paperId || (identifier !== undefined && matchesIdentifier(paper, identifier) &&
+        (['doi','pmid','pmcid','arxivId'] as const).every(key => !paper.ids[key] || !entry.ids[key] || paper.ids[key] === entry.ids[key])),
     )
+    if (same.length > 1) return entry
     remaining = remaining.filter((paper) => !same.includes(paper))
     return {
       ...entry,

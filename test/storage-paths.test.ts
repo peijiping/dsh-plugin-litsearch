@@ -184,3 +184,24 @@ test('迁移失败：回滚副本并回退到旧目录读取', async () => {
     await rm(home, { recursive: true, force: true })
   }
 })
+
+
+test('迁移过程中退出可继续复制，主动清空新目录后旧任务不会再次出现', async (t) => {
+  const home = await makeHome()
+  t.after(() => rm(home, { recursive:true,force:true }))
+  const env: NodeJS.ProcessEnv = { DSH_HOME:join(home,'custom-home') }
+  const legacy = join(home,'.dsh',LEGACY_DIR)
+  const target = storageRoot(env,home)
+  await seedLegacy(legacy)
+  await mkdir(join(target,'tasks'),{recursive:true})
+  await writeFile(join(target,'.legacy-storage-copying'),legacy)
+  await writeFile(join(target,'tasks','t1.json'),await readFile(join(legacy,'tasks','t1.json')))
+  const resumed = await quiet(() => resolveStorageRoot(env,home))
+  assert.equal(resumed.migratedFrom,legacy)
+  assert.equal(await readFile(join(target,'pdfs','abc.pdf'),'utf8'),'%PDF-1.4')
+  await rm(join(target,'tasks','t1.json'))
+  const afterCleanup = await quiet(() => resolveStorageRoot(env,home))
+  assert.equal(afterCleanup.copied,0)
+  assert.equal(await hasTaskFiles(target),false)
+  assert.equal(await hasTaskFiles(legacy),true)
+})

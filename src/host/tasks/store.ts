@@ -8,19 +8,16 @@
  * - 落盘保留已获取的完整论文摘要，任务数按保留策略裁剪。
  */
 
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { SearchError } from '../../search/errors.js'
-import type { Paper, SearchTask, TaskSummary } from '../../search/types.js'
+import type { SearchTask, TaskSummary } from '../../search/types.js'
 import { resolveStorageRoot, storageRoot } from '../paths.js'
 import { roundsOf, toSummary, trimRounds } from './summary.js'
-import { clearInvalidSupplementOrigins } from './supplements.js'
+import { migrateTask, readTaskFile, recoverInterruptedTask, TASK_FILE_VERSION } from './task-migration.js'
 
 const INDEX_VERSION = 1
-const TASK_FILE_VERSION = 2
-// 旧版会取前 800 个 UTF-16 码元，再追加一个省略号。
-const LEGACY_ABSTRACT_LIMIT = 800
 
 interface IndexFile {
   version: number
@@ -50,6 +47,7 @@ export class TaskStore {
   private readonly summaries = new Map<string, TaskSummary>()
 
   private readonly cache = new Map<string, SearchTask>()
+  private readonly legacyFiles = new Set<string>()
 
   private chain: Promise<void> = Promise.resolve()
 
@@ -111,24 +109,18 @@ export class TaskStore {
     if (this.summaries.get(id) === undefined) return undefined
     try {
       const text = await readFile(this.taskFile(id), 'utf8')
-      const parsed = JSON.parse(text) as { version?: number; task?: SearchTask }
-      if (parsed.task === undefined) throw new Error('缺少任务正文')
-      // 旧版本任务文件没有 rounds；统一补齐并裁掉超限轮次，避免历史无限增长。
-      parsed.task.rounds = trimRounds(roundsOf(parsed.task))
-      if (parsed.version === undefined || parsed.version === 1) {
-        for (const paper of parsed.task.result.papers) {
-          if (mayHaveLegacyTruncation(paper)) paper.abstractCompleteness = 'unknown'
-        }
-      }
+      const { version, task } = readTaskFile(text)
+      if (task.id !== id) throw new Error('任务文件名与 ID 不一致')
+      migrateTask(task, version)
+      task.rounds = trimRounds(roundsOf(task))
       const loaded = this.cache.get(id)
       if (loaded !== undefined) return loaded
       if (!this.summaries.has(id)) return undefined
-      if (clearInvalidSupplementOrigins(parsed.task)) {
-        this.put(parsed.task)
-      } else {
-        this.cache.set(id, parsed.task)
-      }
-      return parsed.task
+      if (version < TASK_FILE_VERSION) this.legacyFiles.add(id)
+      const interrupted = recoverInterruptedTask(task)
+      this.put(task)
+      if (interrupted && version === TASK_FILE_VERSION) await this.save(task)
+      return task
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
         await this.remove(id)
@@ -151,14 +143,41 @@ export class TaskStore {
     }
     this.put(task)
     const file = this.taskFile(task.id)
-    const body = JSON.stringify({
-      version: TASK_FILE_VERSION,
-      task: { ...task, rounds: trimRounds(roundsOf(task)) },
-    })
     await this.enqueue(async () => {
-      await atomicWrite(file, body)
+      if (!this.summaries.has(task.id)) return
+      await this.backupLegacyFile(task.id)
+      await atomicWrite(file, serialize(task))
+      this.legacyFiles.delete(task.id)
       await this.writeIndex()
     }, requirePersistence)
+  }
+
+  /** 页记录与游标同次替换；对可见状态只发布成功写入的版本。 */
+  async checkpoint(task: SearchTask, change: (draft: SearchTask) => void): Promise<void> {
+    await this.enqueue(async () => {
+      for (;;) {
+        if (this.cached(task.id) !== task) throw new Error('任务已删除或替换')
+        const rev = task.rev
+        const draft = structuredClone(task)
+        change(draft)
+        draft.rev++
+        draft.updatedAt = new Date().toISOString()
+        await this.backupLegacyFile(task.id)
+        await atomicWrite(this.taskFile(task.id), serialize(draft))
+        this.legacyFiles.delete(task.id)
+        // 下载、批注等可能在写盘期间修改 live 对象，按最新状态重新应用页变更。
+        if (task.rev !== rev) continue
+        Object.assign(task, draft)
+        task.progress = draft.progress
+        task.error = draft.error
+        this.put(task)
+        break
+      }
+      // 任务正文是事实源；索引失败不能导致调用方重复提交已保存的页。
+      await this.writeIndex().catch((error: unknown) => {
+        console.warn('[dsh-plugin-litsearch] 任务索引更新失败', error)
+      })
+    }, true)
   }
 
   async remove(id: string): Promise<void> {
@@ -166,6 +185,8 @@ export class TaskStore {
     this.summaries.delete(id)
     await this.enqueue(async () => {
       await rm(this.taskFile(id), { force: true })
+      await rm(this.legacyBackup(id), { force: true })
+      this.legacyFiles.delete(id)
       await this.writeIndex()
     })
   }
@@ -220,10 +241,38 @@ export class TaskStore {
     return join(this.tasksDir, `${id}.json`)
   }
 
+  private legacyBackup(id: string): string {
+    return join(this.root, 'task-backups-v3', `${id}.json`)
+  }
+
+  private async backupLegacyFile(id: string): Promise<void> {
+    if (!this.legacyFiles.has(id)) return
+    const backup = this.legacyBackup(id)
+    await mkdir(dirname(backup), { recursive: true })
+    try {
+      // 原文件后续通过 rename 替换；硬链接保留原内容且不会产生半写的备份。
+      await link(this.taskFile(id), backup)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EEXIST') return
+      if (!['EPERM', 'ENOTSUP', 'EXDEV', 'EMLINK'].includes(code ?? '')) throw error
+      // 不支持硬链接的卷仍可通过原子写保存原文件。
+      await atomicWrite(backup, await readFile(this.taskFile(id), 'utf8'))
+    }
+  }
+
   private async readIndex(): Promise<IndexFile | null> {
     try {
       const parsed = JSON.parse(await readFile(this.indexFile, 'utf8')) as Partial<IndexFile>
       if (!Array.isArray(parsed.tasks)) return null
+      const files = new Set(
+        (await readdir(this.tasksDir)).filter((name) => name.endsWith('.json') && name !== 'index.json'),
+      )
+      if (
+        files.size !== parsed.tasks.length ||
+        parsed.tasks.some((task) => typeof task?.id !== 'string' || !files.delete(`${task.id}.json`))
+      )
+        return null
       return { version: INDEX_VERSION, tasks: parsed.tasks }
     } catch {
       return null
@@ -243,10 +292,8 @@ export class TaskStore {
       const id = name.slice(0, -'.json'.length)
       if (this.summaries.has(id)) continue
       try {
-        const parsed = JSON.parse(await readFile(join(this.tasksDir, name), 'utf8')) as {
-          task?: SearchTask
-        }
-        if (parsed.task !== undefined) this.summaries.set(parsed.task.id, toSummary(parsed.task))
+        const { task } = readTaskFile(await readFile(join(this.tasksDir, name), 'utf8'))
+        if (task.id === id) this.summaries.set(id, toSummary(task))
       } catch {
         // 损坏的任务文件直接跳过，索引里不再保留它。
       }
@@ -284,11 +331,20 @@ export class TaskStore {
   }
 }
 
+function serialize(task: SearchTask): string {
+  return JSON.stringify({ version: TASK_FILE_VERSION, task: { ...task, rounds: trimRounds(roundsOf(task)) } })
+}
+
 async function atomicWrite(file: string, body: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
   const temp = `${file}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(temp, body, 'utf8')
-  await rename(temp, file)
+  try {
+    await writeFile(temp, body, 'utf8')
+    await rename(temp, file)
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => {})
+    throw error
+  }
 }
 
 function readBinding(value: unknown): { taskId: string; at: number } | undefined {
@@ -296,8 +352,4 @@ function readBinding(value: unknown): { taskId: string; at: number } | undefined
   const record = value as { taskId?: unknown; at?: unknown }
   if (typeof record.taskId !== 'string' || record.taskId === '') return undefined
   return { taskId: record.taskId, at: typeof record.at === 'number' ? record.at : 0 }
-}
-
-function mayHaveLegacyTruncation(paper: Paper): boolean {
-  return paper.abstract.length === LEGACY_ABSTRACT_LIMIT + 1 && paper.abstract.endsWith('…')
 }

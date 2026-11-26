@@ -27,6 +27,7 @@ import {
   updateTask,
   type TaskConditionsPatch,
 } from './api'
+import { RoundEvidence } from './RoundEvidence'
 import { ConditionSummary } from './ConditionSummary'
 import { AlertIcon, ClockIcon, ResultIcon, RoundIcon } from './icons'
 import { tpl, type Translate } from './locales'
@@ -42,6 +43,7 @@ interface Props {
   /** 当前任务正在跑，禁止回填重跑。 */
   busy: boolean
   /** 重跑已触发，让任务页刷新状态并提示。 */
+  onChange: () => void
   onRerun: () => void
 }
 
@@ -81,7 +83,7 @@ export function RoundsDialog({
   taskId,
   detail,
   busy,
-  onRerun,
+  onRerun, onChange,
 }: Props): ReactElement | null {
   const [rounds, setRounds] = useState<SearchRound[]>(detail.rounds ?? [])
   const [loading, setLoading] = useState(false)
@@ -105,7 +107,7 @@ export function RoundsDialog({
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [open, taskId, detail.roundCount, detail.status])
+  }, [open, taskId, detail.roundCount, detail.status, detail.rev])
 
   const restore = async (round: SearchRound): Promise<void> => {
     if (busy || restoring !== null) return
@@ -252,6 +254,8 @@ export function RoundsDialog({
                         )}
                       </section>
                     </div>
+                    {round.hasEvidence ? <RoundEvidence taskId={taskId} roundId={round.id} rev={detail.rev} active={busy} t={t} onChange={onChange} />
+                      : <div style={statusStyle}>{t('evidence.legacy')}</div>}
                   </div>
                 </div>
               )

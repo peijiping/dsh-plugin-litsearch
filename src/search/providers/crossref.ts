@@ -5,6 +5,8 @@
  * 无需密钥；带 `mailto` 可进入 polite pool。
  */
 
+import type { ProviderPage } from '../evidence.js'
+import { SearchError } from '../errors.js'
 import { limitedJson } from '../rate-limit.js'
 import {
   asArray,
@@ -17,7 +19,7 @@ import {
   stripTags,
 } from '../normalize.js'
 import { bestPdfUrl, mergeOaLocations } from '../oa.js'
-import type { OaLocation, PaperRecord, Provider } from '../types.js'
+import type { OaLocation, PaperRecord, Provider, ProviderSearchOptions } from '../types.js'
 
 const ENDPOINT = 'https://api.crossref.org/works'
 
@@ -66,32 +68,52 @@ export const crossref: Provider = {
   },
 
   async search(query, options): Promise<PaperRecord[]> {
-    const params = new URLSearchParams({
-      query,
-      rows: String(options.limit),
-      select: SELECT_FIELDS,
-    })
-
-    const filters: string[] = []
-    if (options.yearFrom !== undefined) filters.push(`from-pub-date:${options.yearFrom}-01-01`)
-    if (options.yearTo !== undefined) filters.push(`until-pub-date:${options.yearTo}-12-31`)
-    if (filters.length > 0) params.set('filter', filters.join(','))
-    if (options.contactEmail !== '') params.set('mailto', options.contactEmail)
-
-    const payload = await limitedJson('crossref', `${ENDPOINT}?${params.toString()}`, {
-      timeoutMs: options.timeoutMs,
-      signal: options.signal,
-      bypassCooldown: options.bypassCooldown === true,
-      headers: {
-        accept: 'application/json',
-        'user-agent': userAgent(options.contactEmail),
-      },
-    })
-
-    const items = asArray(asRecord(asRecord(payload)['message'])['items'])
-    const papers = items.map(mapItem).filter((paper) => paper.title !== '')
-    return options.openAccessOnly ? papers.filter((paper) => paper.openAccess) : papers
+    const page = await searchPage(query, options)
+    return page.entries.flatMap((entry) =>
+      'record' in entry && (!options.openAccessOnly || entry.record.openAccess) ? [entry.record] : [],
+    )
   },
+  firstPageOnly: true,
+  searchPage,
+}
+
+async function searchPage(query: string, options: ProviderSearchOptions): Promise<ProviderPage> {
+  const params = new URLSearchParams({
+    query,
+    rows: String(options.limit),
+    select: SELECT_FIELDS,
+  })
+
+  const filters: string[] = []
+  if (options.yearFrom !== undefined) filters.push(`from-pub-date:${options.yearFrom}-01-01`)
+  if (options.yearTo !== undefined) filters.push(`until-pub-date:${options.yearTo}-12-31`)
+  if (filters.length > 0) params.set('filter', filters.join(','))
+  if (options.contactEmail !== '') params.set('mailto', options.contactEmail)
+
+  const payload = await limitedJson('crossref', `${ENDPOINT}?${params.toString()}`, {
+    timeoutMs: options.timeoutMs,
+    signal: options.signal,
+    bypassCooldown: options.bypassCooldown === true,
+    headers: {
+      accept: 'application/json',
+      'user-agent': userAgent(options.contactEmail),
+    },
+  })
+
+  const message = asRecord(asRecord(payload).message)
+  if (!Array.isArray(message.items))
+    throw new SearchError('upstream_error', 'Crossref 返回了无法识别的检索结果')
+  const entries = message.items.map((item) => {
+    const record = mapItem(item)
+    return record.title ? { record } : { sourceId: record.sourceId, reason: 'missingTitle' }
+  })
+  return {
+    entries,
+    reportedTotal: asNumber(message['total-results']),
+    returned: entries.length,
+    normalized: entries.filter((e) => 'record' in e).length,
+    next: null,
+  }
 }
 
 function mapItem(raw: unknown): PaperRecord {
@@ -159,7 +181,5 @@ function authorName(raw: unknown): string {
   const author = asRecord(raw)
   const name = asString(author['name'])
   if (name !== '') return name
-  return [asString(author['given']), asString(author['family'])]
-    .filter((part) => part !== '')
-    .join(' ')
+  return [asString(author['given']), asString(author['family'])].filter((part) => part !== '').join(' ')
 }

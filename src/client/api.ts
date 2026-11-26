@@ -494,3 +494,11 @@ export function exportUrl(
   const suffix = params.toString()
   return `${BASE}/export${suffix === '' ? '' : `?${suffix}`}`
 }
+
+export function fetchRoundReport(id: string, round: string, signal?: AbortSignal) {
+  return request<import('../search/evidence').RoundReport>(taskPath(id,'/rounds/'+encodeURIComponent(round)),{ signal })
+}
+
+export function changeRound(id: string, round: string, operation: 'next' | 'review', body: Record<string, unknown>) {
+  return request<import('../search/evidence').RoundReport>(taskPath(id,'/rounds/'+encodeURIComponent(round)+'/'+operation),writeInit('POST',body))
+}

@@ -79,37 +79,41 @@ function fnv1a(text: string, seed: number): number {
 
 /** 把一次检索的命中合并成去重后的论文列表，并按 RRF 排序。 */
 export function mergeHits(hits: readonly RankedHit[]): Paper[] {
-  const groups = new Map<string, { base: PaperRecord; hits: RankedHit[] }>()
+  const groups = new Map<string, RankedHit[]>()
   for (const hit of hits) {
     const key = identityKey(hit.record)
     const group = groups.get(key)
     if (group === undefined) {
-      groups.set(key, { base: { ...hit.record }, hits: [hit] })
+      groups.set(key, [hit])
     } else {
-      mergeRecord(group.base, hit.record)
-      group.hits.push(hit)
+      group.push(hit)
     }
   }
 
-  const papers = [...groups.entries()].map(([key, group]): Paper => {
-    const hitSources: PaperHit[] = []
-    const matchedQueries = new Set<string>()
-    for (const hit of group.hits) {
-      matchedQueries.add(hit.queryId)
-      const existing = hitSources.find((entry) => entry.source === hit.source)
-      if (existing === undefined) hitSources.push({ source: hit.source, rank: hit.rank })
-      else existing.rank = Math.min(existing.rank, hit.rank)
-    }
-    hitSources.sort((a, b) => SOURCE_IDS.indexOf(a.source) - SOURCE_IDS.indexOf(b.source))
-    return {
-      ...group.base,
-      paperId: makePaperId(key),
-      hitSources,
-      matchedQueries: [...matchedQueries],
-    }
-  })
+  return [...groups.entries()].map(([key, group]) =>
+    buildPaper(makePaperId(key), group),
+  ).sort(comparePapers)
+}
 
-  return papers.sort(comparePapers)
+/** 从保留下来的来源成员生成阅读题录。 */
+export function buildPaper(paperId: string, hits: readonly RankedHit[]): Paper {
+  const base = { ...hits[0].record }
+  for (const hit of hits.slice(1)) mergeRecord(base, hit.record)
+  const hitSources: PaperHit[] = []
+  const matchedQueries = new Set<string>()
+  for (const hit of hits) {
+    matchedQueries.add(hit.queryId)
+    const existing = hitSources.find((entry) => entry.source === hit.source)
+    if (existing === undefined) hitSources.push({ source: hit.source, rank: hit.rank })
+    else existing.rank = Math.min(existing.rank, hit.rank)
+  }
+  hitSources.sort((a, b) => SOURCE_IDS.indexOf(a.source) - SOURCE_IDS.indexOf(b.source))
+  return {
+    ...base,
+    paperId,
+    hitSources,
+    matchedQueries: [...matchedQueries],
+  }
 }
 
 /** RRF 分数；供排序与调试使用。 */

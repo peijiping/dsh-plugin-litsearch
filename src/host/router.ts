@@ -714,6 +714,34 @@ async function handleTasks(
     return
   }
 
+  if (action === 'rounds' && seg[3]) {
+    const roundId = seg[3]
+    if (req.method === 'GET' && seg.length === 4) {
+      ok(res,await service.roundReport(id,roundId))
+      return
+    }
+    if (req.method === 'POST' && seg[4] === 'next') {
+      const body = await readJsonBody(req)
+      const pageNo = readInt(body['pageNo'],'pageNo',1,Number.MAX_SAFE_INTEGER)
+      if (!pageNo) throw new SearchError('bad_request','缺少页次')
+      await service.continuePage(id,{ roundId,pageNo,queryId:readString(body['queryId'],'queryId',200) ?? '',
+        source:readString(body['source'],'source',80) ?? '' })
+      ok(res,await service.roundReport(id,roundId))
+      return
+    }
+    if (req.method === 'POST' && seg[4] === 'review') {
+      const body = await readJsonBody(req)
+      const action = readEnum(body['action'],'action',['split','keepSeparate','linkVersions','resolveScreening'] as const)
+      const rev = readInt(body['rev'],'rev',1,Number.MAX_SAFE_INTEGER)
+      if (!action || !rev) throw new SearchError('bad_request','缺少复核操作或版本')
+      await service.reviewIdentity(id,roundId,readString(body['subject'],'subject',200) ?? '',action,rev,
+        readString(body['choice'],'choice',200))
+      ok(res,await service.roundReport(id,roundId))
+      return
+    }
+    fail(res,405,'bad_request','不支持的轮次操作')
+    return
+  }
   if (action === 'rounds') {
     if (req.method !== 'GET') {
       fail(res, 405, 'bad_request', 'rounds 仅支持 GET')
@@ -904,6 +932,11 @@ async function handleTasks(
     // 面板里主动重跑 = 用户正在这个任务里工作，把它设为「当前任务」。
     service.setCurrentTask(id)
     const workspace = await resolveSessionWorkspace(sessionId)
+    if (mode === 'more') {
+      await service.run(id,mode,'panel',workspace)
+      ok(res,await service.getDetail(id))
+      return
+    }
     void service.run(id, mode, 'panel', workspace).catch((error: unknown) => {
       console.warn('[dsh-plugin-litsearch] 任务执行失败：', error)
     })
