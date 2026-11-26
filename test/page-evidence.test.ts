@@ -85,6 +85,7 @@ test('检索页可复算，重启后续取同页，复核与版本迁移经真�
     license: [{ URL: 'https://creativecommons.org/licenses/by/4.0/' }],
     type: 'journal-article',
   }))
+  const supplementalDoi = '10.1234/manual-round-2'
   globalThis.fetch = (input, init) => {
     const url = new URL(String(input))
     if (url.hostname === 'www.ebi.ac.uk') {
@@ -113,6 +114,11 @@ test('检索页可复算，重启后续取同页，复核与版本迁移经真�
     }
     if (url.hostname === 'api.crossref.org') {
       sourceCalls.push('crossref')
+      if (url.pathname !== '/works') {
+        return Promise.resolve(Response.json({
+          message: { DOI: supplementalDoi, title: ['Manual round 2'], type: 'journal-article' },
+        }))
+      }
       return Promise.resolve(Response.json({ message: { 'total-results': 71, items: crossref } }))
     }
     return original(input, init)
@@ -287,6 +293,132 @@ test('检索页可复算，重启后续取同页，复核与版本迁移经真�
   PROVIDERS.europepmc.searchPage = epmc
   await service.continuePage(interrupted.id, { ...next, roundId: 'r1' })
   assert.equal(interrupted.result.papers.length, 15)
+
+  const switchable = await create()
+  await service.run(switchable.id)
+  const taskPath = '/tasks/' + switchable.id
+  const firstResults = await route(taskPath + '/results')
+  const firstConditions = switchable.conditions
+  const firstPaperId = firstResults.papers[0].paperId
+  await service.annotate(switchable.id, [{ paperId: firstPaperId, screening: 'included' }])
+  await service.rerun(switchable.id, { origin: 'panel', query: 'zero', sources: ['europepmc'] }, 'panel')
+  assert.equal((await route(taskPath + '/results')).total, 0)
+  const supplement = await route(taskPath + '/supplement', { identifier: supplementalDoi })
+  assert.equal(supplement.status, 'added')
+
+  const callsBeforeSwitch = sourceCalls.length
+  const restored = await route(taskPath + '/rounds/r1/switch', {})
+  assert.equal(restored.activeRoundId, 'r1')
+  assert.equal(restored.roundCount, 2)
+  assert.deepEqual(restored.conditions, firstConditions)
+  assert.equal(restored.stats.rawHits, 20)
+  assert.equal(restored.result.totalLoaded, firstResults.total)
+  assert.deepEqual((await route(taskPath + '/results')).papers, firstResults.papers)
+  const included = await route(taskPath + '/results?screening=included&limit=1')
+  assert.equal(included.total, 1)
+  assert.equal(included.papers[0].paperId, firstPaperId)
+  assert.equal((await route(taskPath + '/rounds/r1')).isCurrent, true)
+  assert.equal((await route(taskPath + '/rounds/r2')).isCurrent, false)
+
+  const draft = await route('/tasks', { ...restored.conditions, runNow: false }, 201)
+  assert.notEqual(draft.id, switchable.id)
+  assert.equal(draft.status, 'draft')
+  assert.deepEqual(draft.conditions, firstConditions)
+  assert.equal(draft.roundCount, 0)
+  assert.equal((await route('/tasks/' + draft.id + '/results')).total, 0)
+  assert.equal(sourceCalls.length, callsBeforeSwitch)
+
+  service.dispose()
+  service = new TaskService()
+  handler = createHandler(service)
+  assert.equal((await route(taskPath)).activeRoundId, 'r1')
+  assert.equal((await route(taskPath + '/results')).total, firstResults.total)
+  assert.equal((await route(taskPath + '/rounds/r2/switch', {})).result.totalLoaded, 1)
+  assert.equal((await route(taskPath + '/results?supplementedOnly=1')).papers[0].doi, supplementalDoi)
+  await route(taskPath + '/rounds/r1/switch', {})
+  const continued = await route(taskPath + '/rounds/r1/next', next)
+  assert.equal(continued.round.stats.loaded, 20)
+  assert.equal((await route(taskPath + '/rounds/r2')).round.stats.loaded, 1)
+  await route(taskPath + '/run', {}, 202)
+  assert.equal(await service.waitUntilIdle(switchable.id, 5000), true)
+  const rerun = await route(taskPath)
+  assert.equal(rerun.activeRoundId, 'r3')
+  assert.deepEqual(rerun.conditions, firstConditions)
+  assert.equal(rerun.roundCount, 3)
+
+  const switchableFile = join(tasksDir, switchable.id + '.json')
+  const oldEvidence = JSON.parse(await readFile(switchableFile, 'utf8'))
+  const oldestRound = oldEvidence.task.rounds[0]
+  delete oldestRound.resultSnapshot
+  await writeFile(switchableFile, JSON.stringify(oldEvidence))
+  service.dispose()
+  service = new TaskService()
+  handler = createHandler(service)
+  assert.equal((await route(taskPath + '/rounds/r1/switch', {})).result.totalLoaded, 20)
+
+  delete oldestRound.evidence
+  await writeFile(switchableFile, JSON.stringify(oldEvidence))
+  service.dispose()
+  service = new TaskService()
+  handler = createHandler(service)
+  assert.equal((await route(taskPath + '/rounds'))[0].hasResults, false)
+  await route(taskPath + '/rounds/r1/switch', {}, 409)
+  assert.equal((await route(taskPath)).activeRoundId, 'r3')
+
+  // 老版本最后一轮仍有当前题录，离开后也能切回来。
+  delete oldEvidence.task.activeRoundId
+  delete oldEvidence.task.rounds[2].evidence
+  await writeFile(switchableFile, JSON.stringify(oldEvidence))
+  service.dispose()
+  service = new TaskService()
+  handler = createHandler(service)
+  const legacyResults = await route(taskPath + '/results')
+  assert.equal((await route(taskPath + '/rounds/r2/switch', {})).activeRoundId, 'r2')
+  assert.equal((await route(taskPath + '/rounds/r3/switch', {})).activeRoundId, 'r3')
+  assert.deepEqual((await route(taskPath + '/results')).papers, legacyResults.papers)
+
+  await service.update(switchable.id, {
+    notes: '同一个研究问题的笔记',
+    groups: [{ id: 'g1', name: '待读', order: 0 }],
+  })
+  const callsBeforeDraft = sourceCalls.length
+  const roundDraft = await route(taskPath + '/rounds/r1/draft', {}, 201)
+  assert.equal(roundDraft.id, switchable.id)
+  assert.equal(roundDraft.activeRoundId, 'r4')
+  assert.equal(roundDraft.status, 'draft')
+  assert.equal(roundDraft.roundCount, 4)
+  assert.deepEqual(roundDraft.conditions, firstConditions)
+  assert.equal(roundDraft.notes, '同一个研究问题的笔记')
+  assert.equal(roundDraft.groups[0].name, '待读')
+  assert.equal((await route(taskPath + '/results')).total, 0)
+  assert.equal((await route(taskPath + '/rounds/r4')).round.status, 'draft')
+  assert.equal(sourceCalls.length, callsBeforeDraft)
+
+  await service.update(switchable.id, {
+    conditions: { queries: [{ text: 'zero' }], sources: ['europepmc'] },
+  }, roundDraft.rev)
+  assert.equal((await route(taskPath + '/rounds/r4')).round.conditions.queries[0].text, 'zero')
+  assert.deepEqual((await route(taskPath + '/rounds/r1')).round.conditions, firstConditions)
+  await route(taskPath + '/rounds/r3/switch', {})
+  assert.deepEqual((await route(taskPath + '/results')).papers, legacyResults.papers)
+  service.dispose()
+  service = new TaskService()
+  handler = createHandler(service)
+  const savedDraft = await route(taskPath + '/rounds/r4/switch', {})
+  assert.equal(savedDraft.status, 'draft')
+  assert.equal(savedDraft.conditions.queries[0].text, 'zero')
+  assert.equal(sourceCalls.length, callsBeforeDraft)
+
+  await route(taskPath + '/run', {}, 202)
+  assert.equal(await service.waitUntilIdle(switchable.id, 5000), true)
+  const executedDraft = await route(taskPath)
+  assert.equal(executedDraft.status, 'done')
+  assert.equal(executedDraft.activeRoundId, 'r4')
+  assert.equal(executedDraft.roundCount, 4)
+  assert.equal(executedDraft.rounds[3].status, 'done')
+  assert.ok(executedDraft.rounds[3].startedAt)
+  assert.equal(executedDraft.notes, savedDraft.notes)
+  assert.equal(sourceCalls.length, callsBeforeDraft + 1)
 
   // 模拟 v2 文件，旧论文状态可读取，旧轮次不虚构执行明细。
   const taskFile = join(tasksDir, zero.id + '.json')

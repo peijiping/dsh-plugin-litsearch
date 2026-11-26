@@ -4,7 +4,7 @@
 
 import { DEFAULT_TASK_MAX_ROUNDS } from '../../search/config.js'
 import type { SearchRound, SearchTask, TaskStats, TaskSummary, TaskDetail } from '../../search/types.js'
-import { cloneConditions, cloneRound, roundsOf, trimRoundList } from './rounds.js'
+import { activeRoundOf, cloneConditions, cloneRound, roundsOf, trimRoundList } from './rounds.js'
 
 export { cloneConditions, cloneRound, roundsOf } from './rounds.js'
 
@@ -42,6 +42,7 @@ export function toDetail(task: SearchTask): TaskDetail {
     notes: task.notes,
     groups: task.groups.map((group) => ({ ...group })),
     rounds: roundsOf(task).map(cloneRound),
+    activeRoundId: activeRoundOf(task)?.id,
     states,
     ...(task.fromTaskId === undefined ? {} : { fromTaskId: task.fromTaskId }),
     result: {

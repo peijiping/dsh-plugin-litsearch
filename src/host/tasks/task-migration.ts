@@ -1,6 +1,6 @@
 import { europePmcTitle } from '../../search/paper-title.js'
 import type { PaperRecord, SearchTask } from '../../search/types.js'
-import { finishRound } from './rounds.js'
+import { activeRoundOf, finishRound } from './rounds.js'
 import { finalizeSteps } from './steps.js'
 import { clearInvalidSupplementOrigins } from './supplements.js'
 
@@ -78,7 +78,7 @@ export function recoverInterruptedTask(task: SearchTask): boolean {
   task.error = '上次检索中断，已保存的结果可以继续查看'
   task.rev++
   finalizeSteps(task.steps ?? [], 'canceled', task.error)
-  const round = task.rounds.at(-1)
+  const round = activeRoundOf(task)
   if (round) {
     finishRound(round, task)
     for (const run of round.evidence?.runs ?? []) {

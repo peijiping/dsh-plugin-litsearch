@@ -720,6 +720,11 @@ async function handleTasks(
       ok(res,await service.roundReport(id,roundId))
       return
     }
+    if (req.method === 'POST' && seg.length === 5 && (seg[4] === 'switch' || seg[4] === 'draft')) {
+      await service.selectRound(id, roundId, seg[4])
+      ok(res, await service.getDetail(id, await resolveSessionWorkspace(sessionId)), seg[4] === 'draft' ? 201 : 200)
+      return
+    }
     if (req.method === 'POST' && seg[4] === 'next') {
       const body = await readJsonBody(req)
       const pageNo = readInt(body['pageNo'],'pageNo',1,Number.MAX_SAFE_INTEGER)

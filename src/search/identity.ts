@@ -97,7 +97,7 @@ export function mergeHits(hits: readonly RankedHit[]): Paper[] {
 
 /** 从保留下来的来源成员生成阅读题录。 */
 export function buildPaper(paperId: string, hits: readonly RankedHit[]): Paper {
-  const base = { ...hits[0].record }
+  const base = { ...hits[0].record, ids: { ...hits[0].record.ids } }
   for (const hit of hits.slice(1)) mergeRecord(base, hit.record)
   const hitSources: PaperHit[] = []
   const matchedQueries = new Set<string>()

@@ -7,8 +7,10 @@ import type { Attempt, ProviderPage, SourceRun } from '../../search/evidence.js'
 import type { SearchRound, SearchTask, TaskOrigin, TaskStatus } from '../../search/types.js'
 import { acceptPage, fetchPage, newEvidence, sameConditions } from './page-evidence.js'
 import { rebuildRound } from './paper-groups.js'
-import { finishRound, startRound } from './rounds.js'
+import { archiveRoundResults } from './round-results.js'
+import { activeRoundOf, cloneConditions, finishRound, startRound } from './rounds.js'
 import { buildSteps, finalizeSteps } from './steps.js'
+import { resultSupplements } from './supplements.js'
 
 export interface RunnerHooks {
   checkpoint(task: SearchTask, change: (draft: SearchTask) => void): Promise<void>
@@ -28,7 +30,7 @@ function findRun(round: SearchRound, target: Pick<PageTarget, 'queryId' | 'sourc
 }
 
 export function checkResume(task: SearchTask, target: PageTarget): void {
-  const round = task.rounds.at(-1)
+  const round = activeRoundOf(task)
   if (!round?.evidence || round.id !== target.roundId || !sameConditions(round, task)) {
     throw new SearchError('conflict', '轮次或检索条件已变更，请按当前条件开新轮')
   }
@@ -105,10 +107,19 @@ export class TaskRunner {
       await hooks.checkpoint(task, change)
       hooks.publish(task)
     }
+    const supplements = target ? resultSupplements(task) : undefined
     await commit((draft) => {
-      let round = draft.rounds.at(-1)
+      let round = activeRoundOf(draft)
       if (!target) {
-        round = startRound(draft, origin, DEFAULT_TASK_MAX_ROUNDS)
+        if (round?.status === 'draft') {
+          round.conditions = cloneConditions(draft.conditions)
+          round.origin = origin
+          round.startedAt = new Date().toISOString()
+          round.stats = undefined
+        } else {
+          archiveRoundResults(draft)
+          round = startRound(draft, origin, DEFAULT_TASK_MAX_ROUNDS)
+        }
         round.evidence = newEvidence(round.conditions)
         const queries = round.conditions.queries.filter((q) => q.enabled && q.text.trim())
         const sources = [...new Set(round.evidence.runs.map((r) => r.source))]
@@ -139,18 +150,18 @@ export class TaskRunner {
       draft.status = 'running'
       draft.progress = { queryIndex: 0, queryTotal: new Set(round.evidence.runs.map((r) => r.queryId)).size }
     })
-    const latest = () => task.rounds.at(-1)!
-    const queryIds = [...new Set(latest().evidence!.runs.map((r) => r.queryId))]
+    const current = () => activeRoundOf(task)!
+    const queryIds = [...new Set(current().evidence!.runs.map((r) => r.queryId))]
     try {
       for (const [index, queryId] of queryIds.entries()) {
         if (signal.aborted) break
         if (target && target.queryId !== queryId) continue
-        const pending = latest().evidence!.runs.filter(
+        const pending = current().evidence!.runs.filter(
           (r) => r.queryId === queryId && (!target || r.source === target.source),
         )
         const queryStep = 'q' + (index + 1)
         await commit((draft) => {
-          const round = draft.rounds.at(-1)!
+          const round = activeRoundOf(draft)!
           draft.progress = { queryIndex: index + 1, queryTotal: queryIds.length }
           const group = draft.steps?.find((s) => s.id === queryStep)
           if (group) group.status = 'running'
@@ -171,7 +182,7 @@ export class TaskRunner {
         })
         const outcomes = await Promise.allSettled(
           pending.map(async (descriptor) => {
-            const run = findRun(latest(), descriptor)
+            const run = findRun(current(), descriptor)
             const input = run.pages.at(-1)!.input
             let result: ProviderPage | undefined
             let failure: Attempt['outcome'] = 'error'
@@ -181,13 +192,13 @@ export class TaskRunner {
               result = await requestTrace.run(
                 async (request) => {
                   await commit((draft) => {
-                    findRun(draft.rounds.at(-1)!, descriptor)
+                    findRun(activeRoundOf(draft)!, descriptor)
                       .pages.at(-1)!
                       .attempts.at(-1)!
                       .requests.push(request)
                   })
                 },
-                () => fetchPage(run, latest().conditions, input, signal),
+                () => fetchPage(run, current().conditions, input, signal),
               )
             } catch (error) {
               if (signal.aborted) failure = 'canceled'
@@ -204,7 +215,7 @@ export class TaskRunner {
                   : '来源请求未成功'
             }
             await commit((draft) => {
-              const round = draft.rounds.at(-1)!
+              const round = activeRoundOf(draft)!
               const live = findRun(round, descriptor)
               const page = live.pages.at(-1)!
               const attempt = page.attempts.at(-1)!
@@ -214,7 +225,7 @@ export class TaskRunner {
                 Object.assign(attempt, { outcome: failure, detail, retryAfter })
                 Object.assign(live.progress, { stopReason: failure, retryAfter })
               }
-              rebuildRound(draft, round)
+              rebuildRound(draft, round, supplements)
               if (page.committed) draft.result.fetchedAt = attempt.endedAt
               const step = draft.steps?.find((s) => s.id === queryStep + ':' + descriptor.source)
               const success = attempt.outcome === 'committed'
@@ -244,7 +255,7 @@ export class TaskRunner {
       }
     } finally {
       await commit((draft) => {
-        const round = draft.rounds.at(-1)!
+        const round = activeRoundOf(draft)!
         const evidence = round.evidence!
         for (const run of evidence.runs) {
           if (signal.aborted && !run.pages.length) run.progress.stopReason = 'canceled'
@@ -268,7 +279,7 @@ export class TaskRunner {
         const dedup = draft.steps?.find((s) => s.id === 'dedup')
         if (dedup) Object.assign(dedup, { status: 'done', count: evidence.counts.merged })
         finalizeSteps(draft.steps ?? [], draft.status, draft.error)
-        rebuildRound(draft, round)
+        rebuildRound(draft, round, supplements)
         finishRound(round, draft)
       })
     }

@@ -232,12 +232,6 @@ export function PaperCard({
         </button>
       </div>
 
-      {paper.supplement !== undefined && (
-        <span style={{ ...INFO_BADGE_STYLE, color: 'var(--ls-accent)', alignSelf: 'flex-start' }}>
-          {t('supplement.badge')}
-        </span>
-      )}
-
       <div style={FIELD_ROW_STYLE}>
         <span style={FIELD_ICON_STYLE}>
           <TitleIcon />
@@ -294,6 +288,9 @@ export function PaperCard({
           {t('result.infoLabel')}
         </span>
         <div style={{ ...badgeRowStyle, ...FIELD_BODY_STYLE, marginTop: 0 }}>
+          {paper.supplement !== undefined && (
+            <span style={SUPPLEMENT_BADGE_STYLE}>{t('supplement.badge')}</span>
+          )}
           <span style={{ ...INFO_BADGE_STYLE, color: SCREENING_COLOR[screening] }}>
             {t(`screening.${screening}`)}
           </span>
@@ -545,6 +542,13 @@ const INFO_BADGE_STYLE: CSSProperties = {
   lineHeight: 1.3,
   color: INFO_COLOR,
   border: '1px solid rgba(18,131,108,0.45)',
+}
+const SUPPLEMENT_BADGE_STYLE: CSSProperties = {
+  ...INFO_BADGE_STYLE,
+  color: '#733c08',
+  background: '#ffe6af',
+  borderColor: '#d19437',
+  fontWeight: 600,
 }
 const SELECT_STYLE: CSSProperties = {
   fontSize: 11,

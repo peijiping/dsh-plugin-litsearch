@@ -17,6 +17,15 @@ export function roundsOf(task: SearchTask): SearchRound[] {
   return Array.isArray(task.rounds) ? task.rounds : []
 }
 
+export function activeRoundOf(task: SearchTask): SearchRound | undefined {
+  const rounds = roundsOf(task)
+  return rounds.find((round) => round.id === task.activeRoundId) ?? rounds.at(-1)
+}
+
+export function hasRoundResults(round: SearchRound): boolean {
+  return round.resultSnapshot !== undefined || round.evidence !== undefined || round.stats?.loaded === 0
+}
+
 /**
  * 条件深拷贝。
  *
@@ -38,10 +47,11 @@ export function cloneConditions(conditions: TaskConditions): TaskConditions {
 /** 轮次深拷贝，避免投影对象与内存任务共享条件引用。 */
 export function cloneRound(round: SearchRound): SearchRound {
   // 详情轮询只发送摘要。游标和题录明细由专门端点投影。
-  const { evidence, ...metadata } = round
+  const { evidence, resultSnapshot, ...metadata } = round
   return {
     ...metadata,
     ...(evidence ? { hasEvidence: true } : {}),
+    hasResults: hasRoundResults(round),
     conditions: cloneConditions(round.conditions),
     ...(round.stats === undefined
       ? {}
@@ -81,6 +91,7 @@ export function startRound(
     conditions: cloneConditions(task.conditions),
   }
   task.rounds = trimRoundList([...previous, round], max)
+  task.activeRoundId = round.id
   return round
 }
 
@@ -92,13 +103,7 @@ export function finishRound(
 ): void {
   round.finishedAt = now
   round.status = task.status
-  round.stats = {
-    rawHits: task.stats.rawHits,
-    deduped: task.stats.deduped,
-    loaded: task.result.papers.length,
-    ...(task.stats.supplemented === undefined ? {} : { supplemented: task.stats.supplemented }),
-    perQuery: { ...task.stats.perQuery },
-  }
+  round.stats = roundStats(task)
   const skipped = task.result.sources.filter((source) => source.skipped === true)
   const failed = task.result.sources.filter((source) => !source.ok && source.skipped !== true)
   round.skippedSources = skipped.length
@@ -112,4 +117,14 @@ export function finishRound(
     error: source.error ?? '',
   }))
   if (task.error !== undefined) round.error = task.error
+}
+
+export function roundStats(task: SearchTask): NonNullable<SearchRound['stats']> {
+  return {
+    rawHits: task.stats.rawHits,
+    deduped: task.stats.deduped,
+    loaded: task.result.papers.length,
+    ...(task.stats.supplemented === undefined ? {} : { supplemented: task.stats.supplemented }),
+    perQuery: { ...task.stats.perQuery },
+  }
 }

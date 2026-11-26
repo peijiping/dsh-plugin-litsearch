@@ -76,7 +76,7 @@ import {
   resolvePdfRoot,
 } from '../pdf/store.js'
 import { hasPdfTrailer, looksLikePdf } from '../pdf/guard.js'
-import { applySupplements } from './supplements.js'
+import { applySupplements, resultSupplements } from './supplements.js'
 import { isFileInDir, resolveDownloadDir } from '../pdf/root.js'
 import { storageRoot } from '../paths.js'
 import { ZoteroWriteAccess } from '../zotero/write.js'
@@ -89,7 +89,8 @@ import { filterPapers, sortPapers, type PaperFilter } from './filter.js'
 import type { Review, RoundReport } from '../../search/evidence.js'
 import { digest, sameConditions } from './page-evidence.js'
 import { rebuildRound, resolvePaperId } from './paper-groups.js'
-import { finishRound } from './rounds.js'
+import { createDraftRound, selectRoundResults } from './round-results.js'
+import { activeRoundOf, cloneConditions, finishRound, hasRoundResults } from './rounds.js'
 import { TaskRunner, type PageTarget } from './runner.js'
 import { computeStats } from './stats.js'
 import { applyAnnotations, countScreening, emptyState, normalizeGroups } from './states.js'
@@ -219,6 +220,7 @@ export class TaskService {
   private readonly events = new TaskEvents()
 
   private readonly runner = new TaskRunner()
+  private readonly switchingRounds = new Set<string>()
   private readonly zoteroWrite = new ZoteroWriteAccess(storageRoot())
   private readonly zoteroSyncQueue = new Map<string, Promise<unknown>>()
 
@@ -326,7 +328,7 @@ export class TaskService {
   }
 
   isRunning(id: string): boolean {
-    return this.runner.isRunning(id)
+    return this.runner.isRunning(id) || this.switchingRounds.has(id)
   }
 
   health(): HealthInfo {
@@ -415,11 +417,39 @@ export class TaskService {
     return roundsOf(await this.get(id)).map(cloneRound)
   }
 
+  async selectRound(id: string, roundId: string, mode: 'switch' | 'draft'): Promise<void> {
+    const task = await this.get(id)
+    if (this.isRunning(id)) throw new SearchError('conflict', '任务正在执行操作，请稍后调整轮次')
+    if (mode === 'switch' && activeRoundOf(task)?.id === roundId) return
+    const index = task.rounds.findIndex((round) => round.id === roundId)
+    const round = task.rounds[index]
+    if (!round) throw new SearchError('not_found', '轮次不存在')
+    if (mode === 'switch' && !hasRoundResults(round)) {
+      throw new SearchError('conflict', '本轮仅保留历史汇总，无法切换查询结果')
+    }
+    this.switchingRounds.add(id)
+    try {
+      await this.store.checkpoint(task, (draft) => {
+        const source = draft.rounds[index]
+        if (mode === 'draft') createDraftRound(draft, source)
+        else selectRoundResults(draft, source)
+      })
+      for (const [sessionId, view] of this.views) {
+        if (view.taskId === id) this.views.delete(sessionId)
+      }
+      this.setCurrentTask(id)
+      this.events.publish(toSummary(task))
+    } finally {
+      this.switchingRounds.delete(id)
+    }
+  }
+
   async roundReport(id: string, roundId: string): Promise<RoundReport> {
     const task = await this.get(id)
     const original = task.rounds.find(r => r.id === roundId)
     if (!original) throw new SearchError('not_found','轮次不存在')
-    const round = structuredClone(original)
+    const { resultSnapshot: _snapshot, ...roundData } = original
+    const round = structuredClone(roundData)
     const records: RoundReport['records'] = {}
     for (const run of round.evidence?.runs ?? []) {
       run.progress.next = null
@@ -442,9 +472,9 @@ export class TaskService {
     }
     const aliases = (task.paperAliases ?? []).filter(a => a.recordIds.some(key => records[key]) &&
       Number(a.sinceRound.slice(1)) <= original.index)
-    return { taskId:id, rev:task.rev, round, records, aliases,
-      isCurrent:original.id === task.rounds.at(-1)?.id,
-      canContinue:!!original.evidence && original.id === task.rounds.at(-1)?.id && !this.isRunning(id) && sameConditions(original,task) }
+    const isCurrent = original.id === activeRoundOf(task)?.id
+    return { taskId:id, rev:task.rev, round, records, aliases, isCurrent,
+      canContinue:!!original.evidence && isCurrent && !this.isRunning(id) && sameConditions(original,task) }
   }
 
   async continuePage(id: string, target: PageTarget): Promise<void> {
@@ -456,7 +486,7 @@ export class TaskService {
     const task = await this.get(id)
     await this.store.checkpoint(task,draft => {
       if (this.isRunning(id) || draft.rev !== rev) throw new SearchError('conflict','任务已更新，请重新打开明细')
-      const round = draft.rounds.at(-1)
+      const round = activeRoundOf(draft)
       if (round?.id !== roundId || !round.evidence) throw new SearchError('conflict','仅当前轮次可复核')
       const ev = round.evidence
       let item = ev.reviews.find(r => r.id === subject)
@@ -483,7 +513,7 @@ export class TaskService {
         draft.states[paperId] = { ...draft.states[paperId], screening:candidate.state.screening }
       } else if (item.reason === 'screeningConflict') throw new SearchError('bad_request','请确认筛读结论')
       item.decisions.push(decision)
-      rebuildRound(draft,round)
+      rebuildRound(draft, round, resultSupplements(draft))
       const finishedAt = round.finishedAt
       finishRound(round,draft)
       round.finishedAt = finishedAt
@@ -679,7 +709,7 @@ export class TaskService {
     if (expectedRev !== undefined && expectedRev !== task.rev) {
       throw new SearchError('conflict', `任务已被更新（当前 rev=${task.rev}），请刷新后重试`)
     }
-    if (this.runner.isRunning(id)) {
+    if (this.isRunning(id)) {
       throw new SearchError('conflict', '任务正在运行，请等待完成或先取消')
     }
 
@@ -701,6 +731,8 @@ export class TaskService {
     }
     if (patch.conditions !== undefined) {
       task.conditions = mergeConditions(task.conditions, patch.conditions)
+      const round = activeRoundOf(task)
+      if (round?.status === 'draft') round.conditions = cloneConditions(task.conditions)
     }
 
     task.rev += 1
@@ -756,7 +788,7 @@ export class TaskService {
    */
   async rerun(id: string, input: CreateTaskInput, origin: TaskOrigin): Promise<SearchTask> {
     const task = await this.get(id)
-    if (this.runner.isRunning(id)) {
+    if (this.isRunning(id)) {
       throw new SearchError('conflict', '任务正在运行，请等待当前轮次结束')
     }
     const nextTitle = input.title?.trim() ?? ''
@@ -1085,12 +1117,13 @@ export class TaskService {
   async supplement(id: string, input: string): Promise<PaperSupplementResult> {
     const identifier = parseIdentifier(input)
     const assertIdle = (task: SearchTask): void => {
-      if (this.runner.isRunning(id) || task.status === 'running' || task.status === 'queued') {
+      if (this.isRunning(id) || task.status === 'running' || task.status === 'queued') {
         throw new SearchError('conflict', '检索尚未完成，请等待结果更新后再补录')
       }
     }
     const task = await this.get(id)
     assertIdle(task)
+    const roundId = activeRoundOf(task)?.id
     const findExisting = (current: SearchTask) =>
       current.result.papers.find((paper) => matchesIdentifier(paper, identifier))
     const existing = findExisting(task)
@@ -1099,6 +1132,9 @@ export class TaskService {
     const outcome = await lookupPaper(identifier)
     const current = await this.get(id)
     assertIdle(current)
+    if (activeRoundOf(current)?.id !== roundId) {
+      throw new SearchError('conflict', '查询轮次已切换，请在要补录的轮次重试')
+    }
     const concurrentMatch = findExisting(current)
     if (concurrentMatch !== undefined) return { status: 'existing', paper: concurrentMatch }
     if (!('paper' in outcome)) return outcome
@@ -1112,15 +1148,17 @@ export class TaskService {
       if (sameDoi !== undefined) return { status: 'existing', paper: sameDoi }
     }
 
-    const entry: Paper = {
+    const supplements = resultSupplements(current)
+    const savedEntry = current.supplements?.find((record) => matchesIdentifier(record, identifier))
+    const entry: Paper = savedEntry ?? {
       ...paper,
       ...(current.result.papers.some((record) => record.paperId === paper.paperId)
         ? { paperId: makePaperId(`supplement:${identifier.kind}:${identifier.id}`) }
         : {}),
       supplement: { ...identifier, addedAt: new Date().toISOString() },
     }
-    current.supplements = [entry, ...(current.supplements ?? [])]
-    applySupplements(current, current.result.papers)
+    if (savedEntry === undefined) current.supplements = [entry, ...(current.supplements ?? [])]
+    applySupplements(current, current.result.papers, [entry, ...supplements])
     await this.saveResearchChange(current)
     return { status: 'added', paper: findPaper(current, entry.paperId) }
   }
@@ -1620,7 +1658,7 @@ export class TaskService {
     workspace?: string,
     target?: PageTarget,
   ): Promise<SearchTask> {
-    if (this.runner.isRunning(task.id)) {
+    if (this.isRunning(task.id)) {
       throw new SearchError('conflict', '任务正在运行')
     }
     const nextWorkspace = normalizeWorkspace(workspace)
@@ -1629,7 +1667,7 @@ export class TaskService {
       void this.store.save(task)
     }
     if (mode === 'more' && !target) {
-      const round = task.rounds.at(-1)
+      const round = activeRoundOf(task)
       const eligible = round?.evidence?.runs.filter(r => ['ready','error','rateLimited','timeout','canceled'].includes(r.progress.stopReason))
       if (!round || eligible?.length !== 1) throw new SearchError('bad_request','请在轮次执行明细中选择可继续的来源')
       const run = eligible[0]

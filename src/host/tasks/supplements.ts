@@ -2,10 +2,21 @@ import { matchesIdentifier } from '../../search/lookup.js'
 import type { Paper, SearchTask } from '../../search/types.js'
 import { countScreening } from './states.js'
 
+export function resultSupplements(task: SearchTask): Paper[] {
+  const originals = new Map(task.supplements?.map((paper) => [paper.paperId, paper]))
+  return task.result.papers
+    .filter((paper) => paper.supplement !== undefined)
+    .map((paper) => originals.get(paper.paperId) ?? paper)
+}
+
 /** 手工确认的记录独立于轮次保留，显示时覆盖同一篇题录并沿用人工状态。 */
-export function applySupplements(task: SearchTask, papers: readonly Paper[]): void {
+export function applySupplements(
+  task: SearchTask,
+  papers: readonly Paper[],
+  supplements: readonly Paper[] = task.supplements ?? [],
+): void {
   let remaining = [...papers]
-  const supplemented = (task.supplements ?? []).map((entry) => {
+  const supplemented = supplements.map((entry) => {
     const identifier = entry.supplement
     const same = remaining.filter((paper) =>
       paper.paperId === entry.paperId || (identifier !== undefined && matchesIdentifier(paper, identifier) &&

@@ -39,6 +39,7 @@ export interface TaskView extends TaskState {
   pageCount: number
   goToPage(index: number): void
   reload(): void
+  showRound(detail: TaskDetail): void
   rerun(): Promise<void>
   cancel(): Promise<void>
   annotate(papers: readonly AnnotationInput[]): Promise<void>
@@ -208,6 +209,16 @@ export function useTask(
     setNonce((value) => value + 1)
   }, [])
 
+  const showRound = useCallback((detail: TaskDetail) => {
+    if (detail.id !== id) return
+    seq.current += 1
+    statusRef.current = detail.status
+    revRef.current = detail.rev
+    setState({ ...INITIAL, detail })
+    setPageIndex(0)
+    reload()
+  }, [id, reload])
+
   const pageCount =
     state.page === null ? 1 : Math.max(1, Math.ceil(state.page.total / size))
 
@@ -286,6 +297,7 @@ export function useTask(
     pageCount,
     goToPage,
     reload,
+    showRound,
     rerun,
     cancel,
     annotate,

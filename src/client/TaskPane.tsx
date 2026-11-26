@@ -229,6 +229,7 @@ export function TaskPane({
   const [filterOpen, setFilterOpen] = useState(false)
 
   const detail = view.detail
+  const activeRoundId = detail?.activeRoundId
   const filterCount = useMemo(() => activeFilterCount(filters), [filters])
   const filterActive = filterCount > 0
   // 排序只换顺序、不换结果集合，翻页更不该清空已选；只有换任务或改其它筛选条件才重置。
@@ -239,11 +240,11 @@ export function TaskPane({
 
   useEffect(() => {
     setSelected(new Set())
-  }, [taskId, selectionScope])
+  }, [taskId, activeRoundId, selectionScope])
 
   useEffect(() => {
     papersByIdRef.current.clear()
-  }, [taskId])
+  }, [taskId, activeRoundId])
 
   // 每翻到一页就把文献并入缓存，跨页选中的条目在别的页上也能取到详情。
   useEffect(() => {
@@ -264,7 +265,7 @@ export function TaskPane({
   useEffect(() => {
     setEditingConditions(false)
     setRisFallback(null)
-  }, [taskId])
+  }, [taskId, activeRoundId])
 
   useEffect(() => {
     if (detail !== null) rememberTaskTitle(detail.id, detail.title)
@@ -289,10 +290,10 @@ export function TaskPane({
     return () => controller.abort()
   }, [taskId, detail?.rev])
 
-  // 切任务时先清掉上一个任务的覆盖率，避免横幅短暂显示旧数据。
+  // 切任务或轮次时清掉覆盖率，避免横幅短暂显示旧数据。
   useEffect(() => {
     setOverview(null)
-  }, [taskId])
+  }, [taskId, activeRoundId])
 
   useEffect(() => {
     if (toast === null) return
@@ -305,7 +306,7 @@ export function TaskPane({
   // 翻页或切换 tab 后回到内容顶部，避免停在上一页的滚动位置。
   useEffect(() => {
     bodyRef.current?.scrollTo({ top: 0 })
-  }, [view.pageIndex, tab])
+  }, [view.pageIndex, tab, activeRoundId])
 
   const insert = (paper: Paper): void => {
     const outcome = insertQuote(inputActions, paperText(t, paper), paperSummary(t, paper))
@@ -810,6 +811,7 @@ export function TaskPane({
   }
 
   const active = detail.status === 'running' || detail.status === 'queued'
+  const isEmptyDraft = detail.status === 'draft' && detail.result.totalLoaded === 0
   /** 执行查询按钮的忙碌态：任务在跑，或本轮重跑请求尚未返回。 */
   const running = active || view.busy
   const roundCount = detail.roundCount ?? 0
@@ -830,9 +832,8 @@ export function TaskPane({
 
   // 右栏：当前轮次的进度 / 结果与提醒。
   const rounds = detail.rounds ?? []
-  const currentRound = rounds.length === 0 ? undefined : rounds[rounds.length - 1]
+  const currentRound = rounds.find((round) => round.id === activeRoundId) ?? rounds.at(-1)
   const currentRoundNo = currentRound?.index ?? roundCount
-  const currentStats = currentRound?.stats ?? detail.stats
   const roundLine = active
     ? currentRoundNo > 0
       ? detail.progress === undefined
@@ -852,16 +853,16 @@ export function TaskPane({
       ? tpl(t('task.roundLine'), {
           round: currentRoundNo,
           status: t(`task.status.${currentRound?.status ?? detail.status}`),
-          date: formatDate(currentRound?.createdAt ?? detail.createdAt),
+          date: formatDate(currentRound?.startedAt ?? currentRound?.createdAt ?? detail.createdAt),
         })
       : tpl(t('task.roundStatusLine'), {
           status: t(`task.status.${detail.status}`),
           date: formatDate(detail.createdAt),
         })
   const statsLine = tpl(t('task.stats'), {
-    raw: currentStats.rawHits,
-    deduped: currentStats.deduped,
-    loaded: currentRound?.stats?.loaded ?? detail.result.totalLoaded,
+    raw: detail.stats.rawHits,
+    deduped: detail.stats.deduped,
+    loaded: detail.result.totalLoaded,
   })
   const failedLine = failed
     .map((source) =>
@@ -1006,12 +1007,14 @@ export function TaskPane({
               </span>
               <span style={active ? ROUND_RUNNING_TEXT_STYLE : ROUND_TEXT_STYLE}>{roundLine}</span>
             </div>
-            <div style={ROUND_LINE_STYLE}>
-              <span style={ROUND_ICON_STYLE} aria-hidden>
-                <ResultIcon />
-              </span>
-              <span style={ROUND_TEXT_STYLE}>{statsLine}</span>
-            </div>
+            {!isEmptyDraft && (
+              <div style={ROUND_LINE_STYLE}>
+                <span style={ROUND_ICON_STYLE} aria-hidden>
+                  <ResultIcon />
+                </span>
+                <span style={ROUND_TEXT_STYLE}>{statsLine}</span>
+              </div>
+            )}
             {failed.length > 0 && (
               <div style={{ ...ROUND_LINE_STYLE, color: ERROR }}>
                 <span style={ROUND_ICON_STYLE} aria-hidden>
@@ -1166,38 +1169,42 @@ export function TaskPane({
               <RunProgressPanel t={t} steps={detail.steps} />
             </details>
           )}
-          <div style={COVERAGE_WRAP_STYLE}>
-            <div style={COVERAGE_ROW_STYLE}>
-              {(detail.stats.supplemented ?? 0) > 0 && (
-                <span>{tpl(t('supplement.count'), { n: detail.stats.supplemented ?? 0 })}</span>
-              )}
-              {overview !== null && (
-                <span>
-                  {tpl(t('fulltext.coverageBar'), {
-                    available: overviewAvailable,
-                    total: overview.loaded,
-                    rate: overviewRate,
-                  })}
-                </span>
-              )}
-              {detail.fromTaskId !== undefined && (
-                <NewOnlyPill t={t} filters={filters} onChange={setFilters} />
-              )}
-              <FilterToggleButton
-                t={t}
-                count={filterCount}
-                onClick={() => setFilterOpen(true)}
-              />
-              <ActiveFilterChips
-                t={t}
-                value={filters}
-                queries={detail.conditions.queries}
-                groups={detail.groups}
-                onChange={setFilters}
-              />
-              <ExportMenu t={t} taskId={taskId} filters={filters} />
+          {isEmptyDraft ? (
+            <div style={statusStyle}>{t('task.draftEmpty')}</div>
+          ) : (
+            <div style={COVERAGE_WRAP_STYLE}>
+              <div style={COVERAGE_ROW_STYLE}>
+                {(detail.stats.supplemented ?? 0) > 0 && (
+                  <span>{tpl(t('supplement.count'), { n: detail.stats.supplemented ?? 0 })}</span>
+                )}
+                {overview !== null && (
+                  <span>
+                    {tpl(t('fulltext.coverageBar'), {
+                      available: overviewAvailable,
+                      total: overview.loaded,
+                      rate: overviewRate,
+                    })}
+                  </span>
+                )}
+                {detail.fromTaskId !== undefined && (
+                  <NewOnlyPill t={t} filters={filters} onChange={setFilters} />
+                )}
+                <FilterToggleButton
+                  t={t}
+                  count={filterCount}
+                  onClick={() => setFilterOpen(true)}
+                />
+                <ActiveFilterChips
+                  t={t}
+                  value={filters}
+                  queries={detail.conditions.queries}
+                  groups={detail.groups}
+                  onChange={setFilters}
+                />
+                <ExportMenu t={t} taskId={taskId} filters={filters} />
+              </div>
             </div>
-          </div>
+          )}
           <TaskFilters
             t={t}
             value={filters}
@@ -1206,7 +1213,7 @@ export function TaskPane({
             groups={detail.groups}
             stats={overview}
             screeningCounts={detail.stats.screening}
-            open={filterOpen}
+            open={!isEmptyDraft && filterOpen}
             onOpenChange={setFilterOpen}
             onChange={setFilters}
           />
@@ -1304,8 +1311,8 @@ export function TaskPane({
                   <SpinnerIcon />
                 </span>
                 <span>
-                  {roundCount > 0
-                    ? tpl(t('task.roundRunningResults'), { round: roundCount })
+                  {currentRoundNo > 0
+                    ? tpl(t('task.roundRunningResults'), { round: currentRoundNo })
                     : t('task.running')}
                 </span>
               </div>
@@ -1358,7 +1365,7 @@ export function TaskPane({
               />
             </>
           ) : (
-            !view.loading && (
+            !isEmptyDraft && !view.loading && (
               <div style={statusStyle}>
                 {filterActive ? t('filter.noMatch') : t('task.empty')}
               </div>
@@ -1492,12 +1499,14 @@ export function TaskPane({
         onClose={() => setShowRounds(false)}
         taskId={taskId}
         detail={detail}
-        busy={active}
+        busy={running}
         onChange={() => view.reload()}
-        onRerun={() => {
-          view.reload()
-          notify(t('rounds.rerunStarted'))
+        onSwitch={(next) => {
+          setFilters({})
+          setTab('results')
+          view.showRound(next)
         }}
+        onCreate={onOpenTask}
       />
       {taskListDialog}
     </div>

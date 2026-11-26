@@ -166,6 +166,7 @@ export class TaskStore {
         await atomicWrite(this.taskFile(task.id), serialize(draft))
         this.legacyFiles.delete(task.id)
         // 下载、批注等可能在写盘期间修改 live 对象，按最新状态重新应用页变更。
+        if (this.cached(task.id) !== task) throw new Error('任务已删除或替换')
         if (task.rev !== rev) continue
         Object.assign(task, draft)
         task.progress = draft.progress

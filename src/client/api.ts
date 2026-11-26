@@ -131,6 +131,7 @@ export interface CreateTaskBody {
   language?: TaskLanguage
   types?: string[]
   sort?: SortMode
+  runNow?: boolean
 }
 
 export interface TaskConditionsPatch {
@@ -234,6 +235,10 @@ export function deleteTask(id: string): Promise<{ id: string }> {
 /** 打开历史时间轴时刷新轮次（详情里也带 rounds，这里用于弹窗内独立刷新）。 */
 export function fetchRounds(id: string, signal?: AbortSignal): Promise<SearchRound[]> {
   return request<SearchRound[]>(taskPath(id, '/rounds'), { signal })
+}
+
+export function selectTaskRound(id: string, roundId: string, mode: 'switch' | 'draft'): Promise<TaskDetail> {
+  return request<TaskDetail>(taskPath(id, `/rounds/${encodeURIComponent(roundId)}/${mode}`), writeInit('POST', {}))
 }
 
 /** 用户从任务列表点开某任务 = 进入该任务，之后的模型检索默认落在这里。 */

@@ -57,6 +57,7 @@ import {
   type DownloadScopeResult,
 } from './tasks/download.js'
 import { filterPapers, pdfStatusOf, sortPapers, type PaperFilter } from './tasks/filter.js'
+import { activeRoundOf } from './tasks/rounds.js'
 import type { QueryInput, TaskPatch, TaskService } from './tasks/service.js'
 import { resolveDownloadDir } from './pdf/root.js'
 import { describeZoteroTargets, matchZoteroTarget } from './zotero/match.js'
@@ -1912,17 +1913,17 @@ function formatCurrentTask(task: SearchTask | undefined, view: readonly string[]
   }
   const conditions = task.conditions
   const queries = conditions.queries.map((query) => `${query.name}=「${query.text}」`).join('；')
-  const last = task.rounds[task.rounds.length - 1]
+  const currentRound = activeRoundOf(task)
   const screening = task.stats.screening
   const lines = [
     `当前任务：${task.title}（id: ${task.id}）`,
     `状态：${statusLabel(task.status)}${task.error === undefined ? '' : `（${task.error}）`}`,
     ...view,
     `检索轮次：共 ${task.rounds.length} 轮${
-      last === undefined
+      currentRound === undefined
         ? ''
-        : `｜最近一轮 ${last.createdAt.slice(0, 19).replace('T', ' ')}（${
-            last.origin === 'model' ? '模型' : '面板'
+        : `｜当前第 ${currentRound.index} 轮 ${(currentRound.startedAt ?? currentRound.createdAt).slice(0, 19).replace('T', ' ')}（${
+            currentRound.origin === 'model' ? '模型' : '面板'
           }）`
     }`,
     `检索式：${queries === '' ? '（无）' : queries}`,
@@ -2158,7 +2159,7 @@ function formatTaskResult(
 ): string {
   const lines = [
     `任务：${detail.title}（id: ${detail.id}）`,
-    `轮次：第 ${detail.roundCount ?? 0} 轮｜${
+    `轮次：第 ${detail.rounds.find((round) => round.id === detail.activeRoundId)?.index ?? detail.roundCount ?? 0} 轮｜${
       reused ? '复用已有任务，未新建任务、未新开 tab' : '新建任务'
     }｜右侧栏历史图标可查看各轮条件与结果概览`,
   ]
@@ -2252,7 +2253,7 @@ function formatRounds(
   }
   const recent = rounds.slice(-Math.max(1, limit))
   const lines = [
-    `任务「${title}」（id: ${id}）共 ${rounds.length} 轮检索${
+    `任务「${title}」（id: ${id}）共 ${rounds.length} 个轮次${
       rounds.length > recent.length ? `，列出最近 ${recent.length} 轮` : ''
     }：`,
   ]
@@ -2261,11 +2262,13 @@ function formatRounds(
       .map((query) => `「${query.text}」`)
       .join('、')
     const stats =
-      round.stats === undefined
-        ? '统计未回填'
-        : `原始 ${round.stats.rawHits}｜去重 ${round.stats.deduped}｜已加载 ${round.stats.loaded} 篇`
+      round.status === 'draft'
+        ? '等待执行'
+        : round.stats === undefined
+          ? '统计未回填'
+          : `原始 ${round.stats.rawHits}｜去重 ${round.stats.deduped}｜已加载 ${round.stats.loaded} 篇`
     lines.push(
-      `- 第 ${round.index} 轮｜${round.createdAt.slice(0, 19).replace('T', ' ')}｜${
+      `- 第 ${round.index} 轮｜${(round.startedAt ?? round.createdAt).slice(0, 19).replace('T', ' ')}｜${
         round.origin === 'model' ? '模型' : '面板'
       }｜${round.status === undefined ? '进行中' : statusLabel(round.status)}｜${stats}${
         round.error === undefined ? '' : `｜${round.error}`
@@ -2273,7 +2276,7 @@ function formatRounds(
     )
     lines.push(`  条件：${truncate(queries, 300)}｜每源 ${round.conditions.pageSize} 条｜源 ${round.conditions.sources.join('/')}`)
   }
-  lines.push('', '提示：右侧栏历史时间轴可查看同样内容，并可一键回填某轮条件重跑。')
+  lines.push('', '右侧栏轮次历史支持切换已保存的结果，也可以用该轮条件新建轮次草稿或任务草稿。')
   lines.push('', NO_AUTO_NEXT_ROUND)
   return lines.join('\n')
 }

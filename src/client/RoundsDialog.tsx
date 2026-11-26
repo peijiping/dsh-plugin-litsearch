@@ -1,8 +1,7 @@
 /**
  * 任务内「检索轮次」时间轴弹窗。
  *
- * 只展示每轮的元数据（时间、条件、发起方、命中数、状态），不回吐文献列表；
- * 每轮都可把当时的条件回填并原地重跑，产生新的一轮而不是新任务。
+ * 可切换已保存的轮次，或用该轮条件创建轮次草稿和任务草稿。
  *
  * 每一轮做成左右两栏：左侧是这一轮的完整查询条件（复用 ConditionSummary），
  * 右侧是本轮的结果概括（发起方 / 轮次状态 / 漏斗 / 失败与跳过的数据源），
@@ -19,19 +18,13 @@ import {
 
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
-import type { SearchRound, TaskConditions, TaskDetail } from '../search/types'
-import {
-  fetchRounds,
-  fetchTask,
-  runTask,
-  updateTask,
-  type TaskConditionsPatch,
-} from './api'
+import type { SearchRound, TaskDetail } from '../search/types'
+import { createTask, fetchRounds, selectTaskRound } from './api'
 import { RoundEvidence } from './RoundEvidence'
 import { ConditionSummary } from './ConditionSummary'
 import { AlertIcon, ClockIcon, ResultIcon, RoundIcon } from './icons'
 import { tpl, type Translate } from './locales'
-import { ACCENT, ERROR, linkButtonStyle, statusStyle } from './styles'
+import { ACCENT, ERROR, statusStyle } from './styles'
 import { notifyTaskListChanged } from './taskListStore'
 
 interface Props {
@@ -40,11 +33,11 @@ interface Props {
   onClose: () => void
   taskId: string
   detail: TaskDetail
-  /** 当前任务正在跑，禁止回填重跑。 */
+  /** 当前任务正在执行，暂时不能切换轮次。 */
   busy: boolean
-  /** 重跑已触发，让任务页刷新状态并提示。 */
   onChange: () => void
-  onRerun: () => void
+  onSwitch: (detail: TaskDetail) => void
+  onCreate?: (id: string, title: string) => void
 }
 
 function messageOf(error: unknown): string {
@@ -56,26 +49,6 @@ function formatDate(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-/** 轮次条件的深拷贝快照 → PATCH 可接受的条件体。 */
-function conditionsToPatch(conditions: TaskConditions): TaskConditionsPatch {
-  return {
-    queries: conditions.queries.map((query) => ({
-      name: query.name,
-      text: query.text,
-      enabled: query.enabled,
-      ...(query.perSource === undefined ? {} : { perSource: { ...query.perSource } }),
-    })),
-    sources: [...conditions.sources],
-    pageSize: conditions.pageSize,
-    yearFrom: conditions.yearFrom ?? null,
-    yearTo: conditions.yearTo ?? null,
-    openAccessOnly: conditions.openAccessOnly,
-    language: conditions.language,
-    types: conditions.types === undefined ? [] : [...conditions.types],
-    sort: conditions.sort,
-  }
-}
-
 export function RoundsDialog({
   t,
   open,
@@ -83,12 +56,14 @@ export function RoundsDialog({
   taskId,
   detail,
   busy,
-  onRerun, onChange,
+  onChange,
+  onSwitch,
+  onCreate,
 }: Props): ReactElement | null {
   const [rounds, setRounds] = useState<SearchRound[]>(detail.rounds ?? [])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [restoring, setRestoring] = useState<string | null>(null)
+  const [pending, setPending] = useState<{ id: string; action: 'switch' | 'draft' | 'task' } | null>(null)
 
   // 弹窗打开时独立刷新一次；任务状态 / 轮数变化（轮询到）时再刷。
   useEffect(() => {
@@ -109,25 +84,35 @@ export function RoundsDialog({
     return () => controller.abort()
   }, [open, taskId, detail.roundCount, detail.status, detail.rev])
 
-  const restore = async (round: SearchRound): Promise<void> => {
-    if (busy || restoring !== null) return
-    setRestoring(round.id)
+  const selectRound = async (round: SearchRound, mode: 'switch' | 'draft'): Promise<void> => {
+    if (busy || pending !== null) return
+    setPending({ id: round.id, action: mode })
     setError(null)
     try {
-      // 先取最新 rev，避免轮询期间 rev 前进导致乐观锁冲突。
-      const latest = await fetchTask(taskId)
-      await updateTask(taskId, {
-        conditions: conditionsToPatch(round.conditions),
-        rev: latest.rev,
-      })
-      await runTask(taskId)
-      notifyTaskListChanged()
-      onRerun()
+      onSwitch(await selectTaskRound(taskId, round.id, mode))
       onClose()
     } catch (err) {
       setError(messageOf(err))
     } finally {
-      setRestoring(null)
+      setPending(null)
+    }
+  }
+
+  const createTaskDraft = async (round: SearchRound): Promise<void> => {
+    if (onCreate === undefined || pending !== null) return
+    setPending({ id: round.id, action: 'task' })
+    setError(null)
+    try {
+      const sourceTitle = detail.title.length > 80 ? `${detail.title.slice(0, 80)}…` : detail.title
+      const title = tpl(t('rounds.draftTitle'), { title: sourceTitle, n: round.index })
+      const draft = await createTask({ ...round.conditions, title, runNow: false })
+      notifyTaskListChanged()
+      onCreate(draft.id, draft.title)
+      onClose()
+    } catch (err) {
+      setError(messageOf(err))
+    } finally {
+      setPending(null)
     }
   }
 
@@ -166,6 +151,7 @@ export function RoundsDialog({
               const skippedList = round.skippedSourceList ?? []
               const failedCount = failedList.length || round.failedSources || 0
               const skippedCount = skippedList.length || round.skippedSources || 0
+              const isCurrent = round.id === (detail.activeRoundId ?? rounds.at(-1)?.id)
               return (
                 <div key={round.id} style={roundRowStyle}>
                   <span style={dotStyle} />
@@ -174,17 +160,47 @@ export function RoundsDialog({
                       <strong style={{ fontSize: 12.5 }}>
                         {tpl(t('rounds.item'), { n: round.index })}
                       </strong>
-                      <button
-                        type="button"
-                        style={linkButtonStyle}
-                        disabled={busy || restoring !== null}
-                        title={busy ? t('task.running') : t('rounds.restoreHint')}
-                        onClick={() => {
-                          void restore(round)
-                        }}
-                      >
-                        {restoring === round.id ? t('rounds.restoring') : t('rounds.restore')}
-                      </button>
+                      <div style={cardActionsStyle}>
+                        {isCurrent ? (
+                          <span style={statusStyle}>{t('rounds.current')}</span>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={busy || pending !== null || !round.hasResults}
+                            title={!round.hasResults ? t('rounds.resultsUnavailable') : busy ? t('task.running') : undefined}
+                            onClick={() => void selectRound(round, 'switch')}
+                          >
+                            {pending?.id === round.id && pending.action === 'switch'
+                              ? t('rounds.switching') : t('rounds.switch')}
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={busy || pending !== null}
+                          title={busy ? t('task.running') : t('rounds.createRoundHint')}
+                          onClick={() => void selectRound(round, 'draft')}
+                        >
+                          {pending?.id === round.id && pending.action === 'draft'
+                            ? t('rounds.creating') : t('rounds.createRound')}
+                        </Button>
+                        {onCreate !== undefined && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={pending !== null}
+                            title={t('rounds.createTaskHint')}
+                            onClick={() => void createTaskDraft(round)}
+                          >
+                            {pending?.id === round.id && pending.action === 'task'
+                              ? t('rounds.creating') : t('rounds.createTask')}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                     <div style={columnsStyle}>
                       {/* 左栏：这一轮的完整查询条件。 */}
@@ -202,7 +218,7 @@ export function RoundsDialog({
                                 ? 'rounds.originModel'
                                 : 'rounds.originPanel',
                             ),
-                            date: formatDate(round.createdAt),
+                            date: formatDate(round.startedAt ?? round.createdAt),
                           })}
                         </InfoLine>
                         <InfoLine icon={<RoundIcon />}>
@@ -212,13 +228,15 @@ export function RoundsDialog({
                             date: formatDate(round.finishedAt ?? round.createdAt),
                           })}
                         </InfoLine>
-                        <InfoLine icon={<ResultIcon />}>
-                          {tpl(t('task.stats'), {
-                            raw: stats?.rawHits ?? 0,
-                            deduped: stats?.deduped ?? 0,
-                            loaded: stats?.loaded ?? 0,
-                          })}
-                        </InfoLine>
+                        {round.status !== 'draft' && (
+                          <InfoLine icon={<ResultIcon />}>
+                            {tpl(t('task.stats'), {
+                              raw: stats?.rawHits ?? 0,
+                              deduped: stats?.deduped ?? 0,
+                              loaded: stats?.loaded ?? 0,
+                            })}
+                          </InfoLine>
+                        )}
                         {failedList.map((item, index) => (
                           <InfoLine key={`f-${item.id}-${index}`} icon={<AlertIcon />} tone="error">
                             {tpl(t('error.sourceFailed'), {
@@ -254,8 +272,11 @@ export function RoundsDialog({
                         )}
                       </section>
                     </div>
-                    {round.hasEvidence ? <RoundEvidence taskId={taskId} roundId={round.id} rev={detail.rev} active={busy} t={t} onChange={onChange} />
-                      : <div style={statusStyle}>{t('evidence.legacy')}</div>}
+                    {round.hasEvidence ? (
+                      <RoundEvidence taskId={taskId} roundId={round.id} rev={detail.rev} active={busy} t={t} onChange={onChange} />
+                    ) : !round.hasResults && !isCurrent && (
+                      <div style={statusStyle}>{t('evidence.legacy')}</div>
+                    )}
                   </div>
                 </div>
               )
@@ -322,9 +343,19 @@ const cardHeadStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
+  flexWrap: 'wrap',
   gap: 8,
   paddingBottom: 6,
   borderBottom: '1px solid var(--ls-line)',
+}
+
+const cardActionsStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  flexWrap: 'wrap',
+  gap: 8,
+  marginLeft: 'auto',
 }
 
 const columnsStyle: CSSProperties = {

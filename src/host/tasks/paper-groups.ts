@@ -10,6 +10,7 @@ import type { MatchEvidence, PaperGroup, Review } from '../../search/evidence.js
 import type { Paper, PaperRecord, SearchRound, SearchTask, SourceStatus } from '../../search/types.js'
 import { applySupplements } from './supplements.js'
 import { digest, filterReasons } from './page-evidence.js'
+import { activeRoundOf } from './rounds.js'
 import { reportRecord } from './task-migration.js'
 
 const idFields = ['doi', 'pmid', 'pmcid', 'arxivId'] as const
@@ -79,16 +80,16 @@ function components(ids: string[], records: Record<string, PaperRecord>) {
 
 export function resolvePaperId(task: SearchTask, id: string): string {
   if (task.result.papers.some((paper) => paper.paperId === id)) return id
-  return task.paperAliases?.find((a) => a.from === id)?.to ?? id
+  const index = activeRoundOf(task)?.index ?? Infinity
+  return task.paperAliases?.find((a) => a.from === id && Number(a.sinceRound.slice(1)) <= index)?.to ?? id
 }
 
-export function rebuildRound(task: SearchTask, round: SearchRound): void {
-  const ev = round.evidence!
+function collectRoundHits(task: SearchTask, round: SearchRound) {
   const records = task.records ?? {}
   const hitsByRecord = new Map<string, RankedHit[]>()
   const sources = new Map<SourceStatus['id'], SourceStatus>()
   const perQuery: Record<string, number> = {}
-  for (const run of ev.runs) {
+  for (const run of round.evidence?.runs ?? []) {
     const source = sources.get(run.source) ?? { id: run.source, count: 0, ok: true }
     const stop = run.progress.stopReason
     if (stop === 'rateLimited') {
@@ -107,9 +108,11 @@ export function rebuildRound(task: SearchTask, round: SearchRound): void {
       if (committed.hits.some((h) => h.status === 'filtered')) source.filtered = true
       for (const hit of committed.hits) {
         if (hit.status !== 'kept') continue
+        const record = records[hit.recordId]
+        if (!record) continue
         const list = hitsByRecord.get(hit.recordId) ?? []
         list.push({
-          record: reportRecord(records[hit.recordId]),
+          record: reportRecord(record),
           queryId: run.queryId,
           source: run.source,
           rank: hit.rank,
@@ -118,10 +121,46 @@ export function rebuildRound(task: SearchTask, round: SearchRound): void {
       }
     }
   }
+  return { hitsByRecord, sources: [...sources.values()], perQuery }
+}
+
+function paperFromMembers(
+  round: SearchRound,
+  hitsByRecord: ReadonlyMap<string, RankedHit[]>,
+  paperId: string,
+  members: readonly string[],
+): Paper {
+  const runs = round.evidence!.runs
+  const runIndex = (hit: RankedHit) =>
+    runs.findIndex((run) => run.source === hit.source && run.queryId === hit.queryId)
+  const hits = members
+    .flatMap((id) => hitsByRecord.get(id)!)
+    .sort((a, b) => runIndex(a) - runIndex(b) || a.rank - b.rank)
+  return buildPaper(paperId, hits)
+}
+
+/** 按已保存的成员分组与顺序还原题录，避免重新去重改写旧轮次的身份。 */
+export function readRoundSearchResults(task: SearchTask, round: SearchRound) {
+  const { hitsByRecord, sources, perQuery } = collectRoundHits(task, round)
+  const saved = new Set(round.evidence?.savedPaperIds)
+  const papers = new Map<string, Paper>()
+  for (const group of round.evidence?.groups ?? []) {
+    if (saved.has(group.paperId) && group.members.length > 0 && group.members.every((id) => hitsByRecord.has(id))) {
+      papers.set(group.paperId, paperFromMembers(round, hitsByRecord, group.paperId, group.members))
+    }
+  }
+  return { papers, sources, perQuery }
+}
+
+export function rebuildRound(task: SearchTask, round: SearchRound, supplements?: readonly Paper[]): void {
+  const ev = round.evidence!
+  const records = task.records ?? {}
+  const { hitsByRecord, sources, perQuery } = collectRoundHits(task, round)
   // 先找完整的强标识连通组，再判断一致性；遍历先后不能决定桥接记录归属。
   const ids = [...hitsByRecord.keys()].sort()
   const { sets, edges } = components(ids, records)
-  const oldReviews = new Map(task.rounds.flatMap((r) => r.evidence?.reviews ?? []).map((r) => [r.id, r]))
+  const oldReviews = new Map(task.rounds.filter((r) => r.index <= round.index)
+    .flatMap((r) => r.evidence?.reviews ?? []).map((r) => [r.id, r]))
   const reviews = new Map<string, Review>()
   const memberPaper = new Map<string, string>()
   const review = (reason: Review['reason'], members: string[], evidence: string[]): Review => {
@@ -168,7 +207,7 @@ export function rebuildRound(task: SearchTask, round: SearchRound): void {
   })
   const history = new Map<string, Set<string>>()
   for (const previous of task.rounds) {
-    if (previous.id === round.id) continue
+    if (previous.index >= round.index) continue
     for (const group of previous.evidence?.groups ?? []) {
       for (const id of group.members) {
         const old = records[id]
@@ -276,14 +315,7 @@ export function rebuildRound(task: SearchTask, round: SearchRound): void {
         : makePaperId(key + ':' + nativeId(record) + ':' + JSON.stringify(record.ids)))
     if (!owner && assigned.has(paperId)) paperId = makePaperId(paperId + ':' + members[0])
     assigned.add(paperId)
-    const hits = members
-      .flatMap((id) => hitsByRecord.get(id)!)
-      .sort(
-        (a, b) =>
-          ev.runs.findIndex((r) => r.source === a.source && r.queryId === a.queryId) -
-            ev.runs.findIndex((r) => r.source === b.source && r.queryId === b.queryId) || a.rank - b.rank,
-      )
-    const paper = buildPaper(paperId, hits)
+    const paper = paperFromMembers(round, hitsByRecord, paperId, members)
     papers.push(paper)
     paperGroups.set(paperId, { paperId, members, matches: [], disposition: 'saved', reasons: [] })
     for (const oldId of legacyIds.get(index) ?? []) {
@@ -334,7 +366,8 @@ export function rebuildRound(task: SearchTask, round: SearchRound): void {
   }
 
   // 人工状态原件始终按原 ID 保留。兼容投影仅在唯一可归属时继承。
-  const aliases = task.paperAliases ?? []
+  const laterAliases = task.paperAliases?.filter((a) => Number(a.sinceRound.slice(1)) > round.index) ?? []
+  const aliases = task.paperAliases?.filter((a) => Number(a.sinceRound.slice(1)) <= round.index) ?? []
   for (const alias of aliases) {
     if (paperGroups.has(alias.to)) continue
     const targets = possibleAliases.get(alias.to)
@@ -394,8 +427,8 @@ export function rebuildRound(task: SearchTask, round: SearchRound): void {
   task.stats.perQuery = perQuery
   task.stats.rawHits = Object.values(perQuery).reduce((a, b) => a + b, 0)
   task.stats.deduped = papers.length
-  task.result.sources = [...sources.values()]
-  applySupplements(task, saved)
+  task.result.sources = sources
+  applySupplements(task, saved, supplements)
   // 手工补录题录占用自己的稳定 ID；搜索结果被其覆盖时，旧链接也要能定位。
   for (const paper of saved) {
     if (task.result.papers.some((entry) => entry.paperId === paper.paperId)) continue
@@ -419,4 +452,5 @@ export function rebuildRound(task: SearchTask, round: SearchRound): void {
       reason: 'manualSupplement',
     })
   }
+  task.paperAliases.push(...laterAliases)
 }
