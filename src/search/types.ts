@@ -890,6 +890,7 @@ export const RESULT_PAGE_SIZE = 20
 /** 模型侧下载范围；工具把自然语言收敛成这 7 种之一。 */
 export type DownloadScope =
   | 'ids'
+  | 'selected'
   | 'currentPage'
   | 'currentView'
   | 'pages'
@@ -931,6 +932,7 @@ export interface ViewSnapshot {
   pagePaperIds: string[]
   /** 跨页累计勾选的 paperId。 */
   selectedIds: string[]
+  roundId?: string
   /** 客户端看到的任务 rev；每下载一篇都会自增，故只做宽松校验。 */
   rev: number
 }
@@ -996,15 +998,34 @@ export interface ZoteroCommand {
 }
 
 /** `/events` 的响应；`reset` 表示客户端的 sinceRev 比服务端新（宿主重启）。 */
+export type PanelOperation =
+  | { action: 'view'; taskId: string; page?: number; filters?: ViewSnapshot['filters']; tab?: 'results' | 'fulltext' | 'overview' | 'groups' | 'notes' | 'compare'; roundId?: string; reset?: boolean }
+  | { action: 'paper'; taskId: string; paperId: string; title: string }
+  | { action: 'supplement'; taskId: string; roundId?: string; status: 'added' | 'existing' | 'failed'; message: string }
+  | { action: 'confirm'; message: string }
+
+export type PanelCommand = PanelOperation & {
+  commandId: string
+  sessionId: string
+  at: number
+}
+
+export interface PanelCommandResult {
+  status: 'pending' | 'running' | 'done' | 'canceled' | 'failed'
+  text: string
+}
+
 export interface EventsPage {
   rev: number
   reset: boolean
   tasks: TaskSummary[]
+  removedTaskIds?: string[]
   focus?: TaskFocus
   /** 增量下发的模型下载指令；数组而非单值，避免两次轮询间连发时丢指令。 */
   downloads?: DownloadCommand[]
   /** 增量下发的模型 Zotero 同步指令，与 downloads 并列、互不影响。 */
   zotero?: ZoteroCommand[]
+  panel?: PanelCommand[]
 }
 
 /** `/health` 的响应：数据源能力 + 客户端需要的默认设置（不含密钥）。 */

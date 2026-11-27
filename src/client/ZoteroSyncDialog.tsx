@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type { PaperState, ZoteroTarget, ZoteroTransfer } from '../search/types'
-import { fetchZoteroTargets, syncZotero } from './api'
+import { cancelTransfer, fetchZoteroTargets, syncZotero } from './api'
 import type { BatchDownloadItem } from './DownloadDialog'
 import { SpinnerIcon } from './icons'
 import { tpl, type Translate } from './locales'
@@ -36,6 +36,7 @@ interface Row {
 
 /** 模型发起的 Zotero 同步：弹窗展示信息与自动执行开关。 */
 export interface ZoteroCommandMeta {
+  commandId?: string
   origin: 'model'
   /** Host 生成的中文范围说明（含篇数），这里只展示。 */
   scopeLabel: string
@@ -224,7 +225,7 @@ export function ZoteroSyncDialog({
         id: target.id,
         name: target.name,
         ...(target.filesEditable === undefined ? {} : { filesEditable: target.filesEditable }),
-      })
+      }, meta?.commandId)
       const item = result.items[0]
       const ok = item?.ok ?? result.ok
       const note = item?.ok === true ? result.messages[0] : undefined
@@ -279,6 +280,7 @@ export function ZoteroSyncDialog({
     await Promise.all(
       Array.from({ length: Math.min(SYNC_CONCURRENCY, work.length) }, () => worker()),
     )
+    if (stopRef.current && meta?.commandId !== undefined) void cancelTransfer(meta.commandId).catch(() => undefined)
     setRunning(false)
     onDone([])
   }
@@ -331,12 +333,16 @@ export function ZoteroSyncDialog({
           ? tpl(t('zotero.dialog.done'), { n: synced })
           : tpl(t('zotero.dialog.partial'), { saved: synced, failed })
 
+  const closeIdle = (): void => {
+    if (running) return
+    if (!hasRun && meta?.commandId !== undefined) void cancelTransfer(meta.commandId).catch(() => undefined)
+    onClose()
+  }
+
   return (
     <Modal
       open={open}
-      onClose={() => {
-        if (!running) onClose()
-      }}
+      onClose={closeIdle}
       title={meta === undefined ? t('zotero.dialog.title') : t('zotero.dialog.modelTitle')}
       description={tpl(
         meta === undefined
@@ -360,7 +366,7 @@ export function ZoteroSyncDialog({
                   // 只停止派发后续文献，已在途的请求会正常结束并写回状态。
                   stopRef.current = true
                 } else {
-                  onClose()
+                  closeIdle()
                 }
               }}
             >

@@ -39,7 +39,7 @@ export interface TaskView extends TaskState {
   pageCount: number
   goToPage(index: number): void
   reload(): void
-  showRound(detail: TaskDetail): void
+  showRound(detail: TaskDetail, page?: number, nextFilters?: ResultsQuery): void
   rerun(): Promise<void>
   cancel(): Promise<void>
   annotate(papers: readonly AnnotationInput[]): Promise<void>
@@ -87,9 +87,12 @@ export function useTask(
   // 换任务或改筛选（含排序）时回到第一页：渲染期调整，避免先按旧页码多取一次。
   const scopeKey = `${id ?? ''}\u0000${filterKey}`
   const [prevScope, setPrevScope] = useState(scopeKey)
+  const requestedPage = useRef<{ key: string; index: number } | null>(null)
   if (prevScope !== scopeKey) {
     setPrevScope(scopeKey)
-    setPageIndex(0)
+    const requested = requestedPage.current
+    requestedPage.current = null
+    setPageIndex(requested?.key === scopeKey ? requested.index : 0)
   }
 
   // 结果变少（例如把最后一页的条目全部标为排除）后，页码可能越界，收回最后一页。
@@ -209,13 +212,16 @@ export function useTask(
     setNonce((value) => value + 1)
   }, [])
 
-  const showRound = useCallback((detail: TaskDetail) => {
+  const showRound = useCallback((detail: TaskDetail, page = 0, nextFilters?: ResultsQuery) => {
     if (detail.id !== id) return
     seq.current += 1
     statusRef.current = detail.status
     revRef.current = detail.rev
     setState({ ...INITIAL, detail })
-    setPageIndex(0)
+    if (nextFilters !== undefined && JSON.stringify(nextFilters) !== JSON.stringify(filtersRef.current)) {
+      requestedPage.current = { key: `${id}\u0000${JSON.stringify(nextFilters)}`, index: page }
+    }
+    setPageIndex(page)
     reload()
   }, [id, reload])
 

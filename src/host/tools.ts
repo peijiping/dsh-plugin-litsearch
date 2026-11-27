@@ -62,6 +62,7 @@ import type { QueryInput, TaskPatch, TaskService } from './tasks/service.js'
 import { resolveDownloadDir } from './pdf/root.js'
 import { describeZoteroTargets, matchZoteroTarget } from './zotero/match.js'
 import { resolveSessionWorkspace } from './workspace.js'
+import { modelOperations, modelTask, type ModelOperationDeps } from './model-operations.js'
 
 /** 模型侧最多等多久；超时后任务继续跑，只返回当前进度与已有结果。 */
 const MODEL_WAIT_MS = 25_000
@@ -79,6 +80,7 @@ const EXPORT_FORMATS: readonly ExportFormat[] = ['csv', 'ris', 'bibtex', 'md']
 const DOWNLOAD_SCOPES: readonly DownloadScope[] = [
   'ids',
   'currentPage',
+  'selected',
   'pages',
   'currentView',
   'all',
@@ -246,8 +248,9 @@ const TASK_PARAMETERS = {
       description:
         'current 读「当前任务」（推荐在执行检索/任务操作前先调用，确认这个对话正在用哪个任务，无需 id）；list 列任务；activate 切换「当前任务」并在右侧栏打开/聚焦该任务 tab（只切换、不检索，id 必填）；get 读条件与结果；update 改条件/标题/笔记/分组；run 重跑（仅在用户明确要求进入下一轮时使用）；rounds 读该任务的检索轮次历史；annotate 写筛读/分组；supplement 按用户提供的 DOI、PMID 或 arXiv ID 逐项核对后补录；compare 与旧任务对比；stats 读语料统计。',
     },
-    id: { type: 'string', description: '任务 id；除 current / list 外必填。' },
+    id: { type: 'string', description: '任务 id。省略时使用本会话任务；activate 必填。' },
     withTaskId: { type: 'string', description: 'compare 时的基准任务 id。' },
+    round: { type: 'integer', minimum: 1, description: 'supplement 可核对目标轮号；指定轮次可先用 literature_round switch 切换。' },
     identifier: { type: 'string', description: 'supplement 时用户提供的 DOI、PMID 或 arXiv ID，可含版本。' },
     limit: {
       type: 'integer',
@@ -278,6 +281,7 @@ const TASK_PARAMETERS = {
     venue: { type: 'string', description: '期刊/出处（精确匹配）。' },
     author: { type: 'string', description: '作者全名（精确匹配）。' },
     newOnly: { type: 'boolean', description: '只看相对基准任务新增的文献。' },
+    supplementedOnly: { type: 'boolean', description: '只看手工补录的文献。' },
     fields: {
       type: 'string',
       enum: ['full', 'ids'],
@@ -383,7 +387,7 @@ const DOWNLOAD_PARAMETERS = {
       type: 'string',
       enum: [...DOWNLOAD_SCOPES],
       description:
-        '下载范围，按用户话术选择：ids = 用户点名了具体文献且你已从工具结果看到确切 paperId；currentPage = 「当前页/这一页」；pages = 用户给了明确页码（「第 2 页」「第 4–5 页」），必须同时给 pages；currentView = 「当前全部/当前筛选下全部」（含跨页，默认，不等于整个任务）；all = 用户明确说「整个任务/所有文献/不管筛选」；group = 「xx 分组」（必须同时给 groupId）；filters = 用户给了年份、开放获取、关键词、来源、筛读状态等条件。',
+        '下载范围，按用户话术选择：ids = 用户点名了具体文献且你已从工具结果看到确切 paperId；selected = 「右侧栏勾选的文献」；currentPage = 「当前页/这一页」；pages = 用户给了明确页码（「第 2 页」「第 4–5 页」），必须同时给 pages；currentView = 「当前全部/当前筛选下全部」（含跨页，默认，不等于整个任务）；all = 用户明确说「整个任务/所有文献/不管筛选」；group = 「xx 分组」（必须同时给 groupId）；filters = 用户给了年份、开放获取、关键词、来源、筛读状态等条件。',
     },
     pages: {
       type: 'array',
@@ -425,6 +429,7 @@ const DOWNLOAD_PARAMETERS = {
         '仅有 PDF 直链或已下载的文献。「下载当前页的所有 pdf 文献」用这个；付费墙文献会被跳过。',
     },
     missingFullText: { type: 'boolean', description: '只下尚无可用全文的文献。' },
+    supplementedOnly: { type: 'boolean', description: '只处理手工补录的文献。' },
     hasFullText: {
       type: 'boolean',
       description: '只下可获取全文的文献（含 PDF 直链、已下载与 HTML 全文）。',
@@ -473,7 +478,7 @@ const ZOTERO_PARAMETERS = {
       type: 'string',
       enum: [...DOWNLOAD_SCOPES],
       description:
-        '同步范围，按用户话术选择：ids = 用户点名了具体文献且你已从工具结果看到确切 paperId；currentPage = 「当前页/这一页」；pages = 用户给了明确页码（「第 2 页」「第 4–5 页」），必须同时给 pages；currentView = 「当前全部/当前筛选下全部」（含跨页，默认，不等于整个任务）；all = 用户明确说「整个任务/所有文献/不管筛选」；group = 「xx 分组」（必须同时给 groupId）；filters = 用户给了年份、开放获取、关键词、来源、筛读状态等条件。',
+        '同步范围，按用户话术选择：ids = 用户点名了具体文献且你已从工具结果看到确切 paperId；selected = 「右侧栏勾选的文献」；currentPage = 「当前页/这一页」；pages = 用户给了明确页码（「第 2 页」「第 4–5 页」），必须同时给 pages；currentView = 「当前全部/当前筛选下全部」（含跨页，默认，不等于整个任务）；all = 用户明确说「整个任务/所有文献/不管筛选」；group = 「xx 分组」（必须同时给 groupId）；filters = 用户给了年份、开放获取、关键词、来源、筛读状态等条件。',
     },
     pages: {
       type: 'array',
@@ -538,6 +543,8 @@ const SCOPE_PARAMETERS = {
 }
 
 interface TaskArgs {
+  round?: number
+  supplementedOnly?: boolean
   action: (typeof TASK_ACTIONS)[number]
   id?: string
   identifier?: string
@@ -617,13 +624,14 @@ interface SearchArgs {
 }
 
 /** 构造本插件注册的全部工具（每次注册都新造定义，便于整体替换）。 */
-export function literatureTools(service: TaskService): ToolDefinition[] {
+export function literatureTools(service: TaskService, deps: ModelOperationDeps = {}): ToolDefinition[] {
   return [
     {
       name: 'literature_search',
       description:
         '检索免费开放学术文献。并发查询 PubMed、Europe PMC、OpenAlex、Crossref、Semantic Scholar、arXiv、PubTator，跨源与跨检索式去重合并成一篇文献一条，返回标题、作者、年份、出处、DOI、被引次数、开放获取状态与摘要，支持一次提交多条检索式（queries）。' +
-        '【任务模型】一个研究主题 = 一个任务 = 一个右侧栏 tab；一个对话只保留一个任务 tab。若不确定这个对话当前用哪个任务，先调用 literature_task（action=current）查清再执行。默认复用「当前任务」并在同一任务内开新一轮：任务 id 不变、tab 不变，结果替换为最新一轮，已有的已读/纳入/排除/备注按文献身份保留；绝不会新建任务或新开 tab。当前任务是持久化的「最近一次使用或打开的任务」，跨对话、宿主重启都有效；用户从右侧栏点开别的任务会切换当前任务，用户要求切换时也可用 literature_task action=activate 切换（不要靠再检索一次来切换）。只有用户明确要求新建查询任务，或研究主题与当前任务明显不同时，才传 newTask=true 并用 title 给新任务起一个概括主题的名称；也可用 taskId 显式指定要复用的任务（先用 literature_task current/list 查 id，或让用户点右侧栏的「加入对话」把任务 id 带进对话）。每次调用请提交【完整】的新检索条件，缺省项回落到插件默认设置而非沿用旧条件。' +
+        '【任务模型】一个研究主题 = 一个任务 = 一个右侧栏 tab；一个对话只保留一个任务 tab。若不确定这个对话当前用哪个任务，先调用 literature_task（action=current）查清再执行。默认复用「当前任务」并在同一任务内开新一轮：任务 id 不变、tab 不变，结果替换为最新一轮，已有的已读/纳入/排除/备注按文献身份保留；绝不会新建任务或新开 tab。当前任务优先取当前会话右侧栏打开的任务；没有会话记录时使用宿主持久化的最近任务；用户从右侧栏点开别的任务会切换当前任务，用户要求切换时也可用 literature_task action=activate 切换（不要靠再检索一次来切换）。只有用户明确要求新建查询任务，或研究主题与当前任务明显不同时，才传 newTask=true 并用 title 给新任务起一个概括主题的名称；也可用 taskId 显式指定要复用的任务（先用 literature_task current/list 查 id，或让用户点右侧栏的「加入对话」把任务 id 带进对话）。每次调用请提交【完整】的新检索条件，缺省项回落到插件默认设置而非沿用旧条件。' +
+        '已有草稿并只要求开始执行时，调用 literature_task run 保留草稿条件。' +
         '【轮次约束】本轮检索结束后，只给用户一份「如何完善检索」的建议，禁止自行发起下一轮、禁止重复调用本工具；必须等用户查看结果后，在右侧栏调整条件、或在对话里明确要求调整，才可在同一任务里再搜一次。' +
         '超过 25 秒仍在进行时会先返回当前进度，任务会继续在右侧栏完成。适合找论文、查某主题的代表作、补充参考文献。',
       parameters: SEARCH_PARAMETERS,
@@ -645,7 +653,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
           task = await service.get(taskId)
           reused = true
         } else if (newTask !== true) {
-          task = await service.currentTask()
+          task = await service.currentTask(exec.agent?.id)
           reused = task !== undefined
         }
 
@@ -669,6 +677,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
         }
 
         // 让客户端把该任务 tab 打开/切到前台（右侧面板关着时重新打开）。
+        service.setCurrentTask(task.id, exec.agent?.id)
         service.focusTask(task.id, task.title, exec.agent?.id)
 
         // 复用时不带 title：命名只属于新建任务，避免误改已有任务名。
@@ -711,7 +720,7 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
     {
       name: 'literature_task',
       description:
-        '读取与推进已保存的检索任务。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；activate 切换「当前任务」并在右侧栏打开/聚焦该任务 tab（只切换、不检索，id 必填）；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词/年份/来源/类型/语言/全文状态/是否有 PDF 过滤；fields=ids 时每条只回「paperId｜标题｜有无 PDF」，一次最多 200 条，适合列清单或核对范围）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态与分组；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
+        '读取与推进已保存的检索任务。supplement 按 DOI、PMID 或 arXiv ID 补录到本会话当前轮并显示面板反馈，可用 get + supplementedOnly 核对。轮次切换和草稿用 literature_round。current 读「当前任务」（推荐在执行任何检索/任务操作前先调用，确认这个对话正在用哪个任务；无需 id）；list 列出任务；activate 切换「当前任务」并在右侧栏打开/聚焦该任务 tab（只切换、不检索，id 必填）；get 读条件、分组、笔记与结果（可按筛读/分组/检索式/关键词/年份/来源/类型/语言/全文状态/是否有 PDF 过滤；fields=ids 时每条只回「paperId｜标题｜有无 PDF」，一次最多 200 条，适合列清单或核对范围）；update 改标题、条件、任务笔记与分组；rounds 读该任务的检索轮次历史（每轮时间、条件、发起方、命中数与状态）；annotate 批量写入筛读状态与分组；compare 与旧任务按论文身份对比新增/缺失；stats 读语料统计（年份、来源、期刊、作者、类型、语言）。' +
         'current / get 会回显「面板视图：第 x/y 页｜每页 20 条｜筛选…」，这是判断用户所说「第几页」的唯一依据；含页码的下载/同步请直接用 literature_download 的 scope=pages，不要靠 get 的 offset 自己拼页码。' +
         '注意：一个对话只保留一个任务 tab；用户要求切换任务（如「切到口臭那个任务」）时，先用 list / current 找到任务 id，再调用 activate——它会原位替换右侧 tab、把该任务设为「当前任务」，不发起检索；不要通过再检索一次来切换。run 会在指定任务内开新一轮检索（并把它设为当前任务），与 literature_search 一样受「用户查看结果并明确要求后才能进入下一轮」约束，不能用它绕过该约束自行加搜；也不要用 update 改完条件就立刻 run。适合在检索之后做筛选、整理与汇报。用户要求批量下载 PDF 时改用 literature_download，要求批量存入 Zotero 时改用 literature_zotero。',
       parameters: TASK_PARAMETERS,
@@ -766,14 +775,21 @@ export function literatureTools(service: TaskService): ToolDefinition[] {
       description:
         '在用户要求「把这批文献存入 Zotero / 存到『综述』目录 / 把当前页的文献同步到 Zotero / 把 xx 分组的文献存进 Zotero」时调用：把范围算成一份已校验的 paperId 清单，下发给右侧栏，右侧栏复用「存入 Zotero」弹窗逐篇同步，用户能看到每篇标题、来源与实时状态，也能中途取消。' +
         '【目录怎么选】用户点名了目标目录（如「综述」「C15」）→ 填 collection，宿主会在本机 Zotero 目录列表里精确匹配，唯一命中时弹窗自动选中该目录并立即开始同步；没点名 → 省略 collection，弹窗加载好文献和目录后由用户自己选目录再点「同步」（与手动操作完全一致）；匹配失败或有歧义、Zotero 没开、同步在设置里关闭时，本工具不下发指令并返回原因与可用目录清单，此时请在对话里向用户确认目录或请其检查 Zotero，绝不猜一个目录就写入。也可以先主动问一句「要存到哪个目录」，但不要把它当成必经步骤。' +
-        '【范围怎么选】与 literature_download 完全相同的 7 种 scope 和筛选字段：用户点名具体文献且你已在工具结果的「paperId:」行看到确切 id → scope=ids + paperIds；「当前页」→ currentPage；「第 2 页 / 第 4–5 页」→ scope=pages + pages（1-based，面板上那一页）；「当前全部」→ currentView（含跨页，不等于整个任务）；「整个任务」→ all；「xx 分组」→ scope=group + groupId；给了年份、OA、关键词、筛读状态等条件 → scope=filters 并填对应字段。你看不到右侧栏界面，「当前页 / 第 N 页 / 当前筛选全部」由宿主用面板上报的视图快照 + 服务端筛选精确计算，不要自己猜页码或编造 paperId；面板每页恒为 20 条，与任务条件的「每源条数」不是一回事。范围不确定时先调 literature_scope 预演，再同步。' +
-        '同步会在 Zotero 里新建条目、不会覆盖已有条目，也不要跳过「已同步」的文献；目录只读时只存条目、不带 PDF 附件。本工具只下发指令、不等同步完成，也不要重复调用同一条指令或臆测同步结果；范围为空会返回原因而不下发。需要检索后再同步时，先按检索工具的轮次约束完成检索，再由用户明确提出同步。',
+        '【范围怎么选】与 literature_download 完全相同的 8 种 scope 和筛选字段：用户点名具体文献且你已在工具结果的「paperId:」行看到确切 id → scope=ids + paperIds；「勾选的」→ selected；「当前页」→ currentPage；「第 2 页 / 第 4–5 页」→ scope=pages + pages（1-based，面板上那一页）；「当前全部」→ currentView（含跨页，不等于整个任务）；「整个任务」→ all；「xx 分组」→ scope=group + groupId；给了年份、OA、关键词、筛读状态等条件 → scope=filters 并填对应字段。你看不到右侧栏界面，「当前页 / 第 N 页 / 当前筛选全部」由宿主用面板上报的视图快照 + 服务端筛选精确计算，不要自己猜页码或编造 paperId；面板每页恒为 20 条，与任务条件的「每源条数」不是一回事。范围不确定时先调 literature_scope 预演，再同步。' +
+        '同步按已保存的检查点复用可核验的 Zotero 条目，目录只读时只存条目；查询结果或只补传附件用 literature_transfer。本工具只下发指令、不等同步完成，也不要重复调用同一条指令或臆测同步结果；范围为空会返回原因而不下发。需要检索后再同步时，先按检索工具的轮次约束完成检索，再由用户明确提出同步。',
       parameters: ZOTERO_PARAMETERS,
       output: TEXT_OUTPUT,
       async execute(args, exec): Promise<{ text: string }> {
         return { text: await runZotero(service, readZoteroArgs(args), exec.agent?.id) }
       },
     },
+    ...modelOperations(service, deps).map(({ run, ...operation }): ToolDefinition => ({
+      ...operation,
+      output: TEXT_OUTPUT,
+      async execute(args, exec) {
+        return { text: await run(asRecord(args), exec.agent?.id, exec.signal) }
+      },
+    })),
   ]
 }
 
@@ -951,7 +967,7 @@ function readTaskArgs(args: unknown): TaskArgs {
 
   const id = readText(record['id'], 'id')
   if (id !== undefined) input.id = id
-  if (input.action !== 'list' && input.action !== 'current' && input.id === undefined) {
+  if (input.action === 'activate' && input.id === undefined) {
     throw new Error(`action=${input.action} 需要 id`)
   }
 
@@ -959,6 +975,7 @@ function readTaskArgs(args: unknown): TaskArgs {
     const identifier = readText(record['identifier'], 'identifier')
     if (identifier === undefined || identifier.length > 512) throw new Error('supplement 需要有效的 identifier')
     input.identifier = identifier
+    input.round = readInteger(record['round'], 'round')
   }
 
   const withTaskId = readText(record['withTaskId'], 'withTaskId')
@@ -1006,6 +1023,7 @@ function readTaskArgs(args: unknown): TaskArgs {
   if (filter.venue !== undefined) input.venue = filter.venue
   if (filter.author !== undefined) input.author = filter.author
   if (filter.newOnly === true) input.newOnly = true
+  if (filter.supplementedOnly === true) input.supplementedOnly = true
 
   const fields = record['fields']
   if (fields !== undefined) {
@@ -1279,7 +1297,7 @@ function readScopeFilter(record: Record<string, unknown>): PaperFilter {
     throw new Error('yearFrom 不能大于 yearTo')
   }
 
-  for (const key of ['openAccessOnly', 'hasPdf', 'missingFullText', 'hasFullText', 'newOnly'] as const) {
+  for (const key of ['openAccessOnly', 'hasPdf', 'missingFullText', 'hasFullText', 'newOnly', 'supplementedOnly'] as const) {
     const value = record[key]
     if (value === undefined) continue
     if (typeof value !== 'boolean') throw new Error(`${key} 必须是布尔值`)
@@ -1331,9 +1349,12 @@ async function runTaskAction(
   signal: AbortSignal | undefined,
   sessionId: string | undefined,
 ): Promise<string> {
+  if (args.id === undefined && args.action !== 'list' && args.action !== 'current') {
+    args.id = (await modelTask(service, sessionId)).id
+  }
   switch (args.action) {
     case 'current': {
-      const task = await service.currentTask()
+      const task = await service.currentTask(sessionId)
       if (task === undefined) return formatCurrentTask(undefined)
       const snapshot = await service.getViewSnapshot(sessionId, task.id)
       return formatCurrentTask(
@@ -1348,9 +1369,9 @@ async function runTaskAction(
     case 'activate': {
       const id = requireId(args)
       const task = await service.get(id)
-      const previous = await service.currentTask()
+      const previous = await service.currentTask(sessionId)
       // 与用户从任务列表点开完全同一条路径：切换当前任务 + 原位打开/聚焦 tab。
-      await service.activate(id, await resolveSessionWorkspace(sessionId))
+      await service.activate(id, await resolveSessionWorkspace(sessionId), sessionId)
       service.focusTask(task.id, task.title, sessionId, true)
       const summary = `「${task.title}」（id: ${id}，${task.rounds.length} 轮，已加载 ${task.result.papers.length} 篇）`
       if (previous?.id === id) return `当前任务已经是${summary}，已在右侧栏聚焦该任务 tab。`
@@ -1366,7 +1387,7 @@ async function runTaskAction(
         offset: args.offset ?? 0,
       })
       const snapshot = await service.getViewSnapshot(sessionId, id)
-      const view = describeView(snapshot, page.total)
+      const view = describeView(snapshot, snapshot?.total ?? page.total)
       if (args.fields === 'ids') return formatPaperIds(task, page, view)
       return formatTaskDetail(detail, page, task.states, task.groups, undefined, view)
     }
@@ -1381,7 +1402,7 @@ async function runTaskAction(
       const task = await service.get(id)
       const workspace = await resolveSessionWorkspace(sessionId)
       // 用户明确要求推进这个任务：它成为当前任务，并让客户端打开/聚焦对应 tab。
-      service.setCurrentTask(id)
+      service.setCurrentTask(id, sessionId)
       service.focusTask(task.id, task.title, sessionId)
       const outcome = await runWithin(
         service,
@@ -1405,9 +1426,29 @@ async function runTaskAction(
       return formatRounds(task.title, id, await service.getRounds(id), args.limit ?? 30)
     }
     case 'supplement': {
-      const result = await service.supplement(requireId(args), args.identifier ?? '')
-      if (!('paper' in result)) return `补录${result.status}：${result.error}`
-      return `${result.status === 'added' ? '补录成功' : '当前结果已有，无需补录'}「${result.paper.title}」（paperId: ${result.paper.paperId}）。`
+      const task = await service.get(requireId(args))
+      const active = activeRoundOf(task)
+      if (args.round !== undefined && args.round !== active?.index) {
+        throw new SearchError('conflict', '指定轮次不是当前轮，请先用 literature_round switch 切换')
+      }
+      const routeFeedback = (status: 'added' | 'existing' | 'failed', message: string): void => {
+        if (sessionId === undefined) return
+        service.focusTask(task.id, task.title, sessionId, true)
+        service.requestPanel(sessionId, { action: 'supplement', taskId: task.id, roundId: active?.id, status, message })
+      }
+      try {
+        const result = await service.supplement(task.id, args.identifier ?? '', active?.id ?? null)
+        if (!('paper' in result)) {
+          routeFeedback('failed', result.error)
+          return `补录${result.status}：${result.error}`
+        }
+        const message = `${result.status === 'added' ? '补录成功' : '当前结果已有，无需补录'}「${result.paper.title}」`
+        routeFeedback(result.status, message)
+        return `${message}（任务「${task.title}」，${active === undefined ? '当前查询' : `第 ${active.index} 轮`}，paperId: ${result.paper.paperId}）。`
+      } catch (error) {
+        routeFeedback('failed', error instanceof Error ? error.message : String(error))
+        throw error
+      }
     }
     case 'annotate': {
       const result = await service.annotate(requireId(args), args.papers ?? [])
@@ -1477,7 +1518,7 @@ async function resolveModelScope(
   verb: string,
 ): Promise<ModelScopeResolution> {
   const task =
-    args.taskId !== undefined ? await service.get(args.taskId) : await service.currentTask()
+    args.taskId !== undefined ? await service.get(args.taskId) : await service.currentTask(sessionId)
   if (task === undefined) {
     return {
       ok: false,
@@ -1486,12 +1527,12 @@ async function resolveModelScope(
   }
   const snapshot = await service.getViewSnapshot(sessionId, task.id)
   const needsView =
-    args.scope === 'currentPage' || args.scope === 'currentView' || args.scope === 'pages'
+    args.scope === 'currentPage' || args.scope === 'currentView' || args.scope === 'pages' || args.scope === 'selected'
   if (needsView && snapshot === undefined) {
     return {
       ok: false,
       text: [
-        `任务「${task.title}」（id: ${task.id}）暂时读不到右侧栏的当前视图，无法准确判断「当前页 / 第 N 页 / 当前全部」。`,
+        `任务「${task.title}」（id: ${task.id}）暂时读不到右侧栏的当前视图，无法准确判断「当前页 / 第 N 页 / 当前全部 / 勾选的文献」。`,
         args.scope === 'pages'
           ? '页码是按面板的筛选、排序与每页 20 条切出来的，缺视图快照就无法换算成同一批文献。'
           : '',
@@ -1503,7 +1544,7 @@ async function resolveModelScope(
     }
   }
 
-  // 「当前页 / 第 N 页 / 当前全部」以界面筛选打底；其余范围忽略界面筛选，避免
+  // 「当前页 / 第 N 页 / 当前全部 / 勾选的文献」以界面筛选打底；其余范围忽略界面筛选，避免
   // 用户说「把全部文献存进去」时却只处理了筛出来的那批。
   const viewFilter = needsView ? toPaperFilter(snapshot?.filters ?? {}) : {}
   const filter = await service.resolveDownloadFilter(
@@ -1751,15 +1792,15 @@ async function runDownload(
   }
   // 先请求打开任务 tab，再下发指令；两者在同一次 /events 增量里送到客户端，
   // 面板即使原本没挂载也能被拉起后再消费指令。
-  service.focusTask(task.id, task.title, sessionId)
-  service.publishDownloadCommand(command)
+  service.focusTask(task.id, task.title, sessionId, true)
+  service.publishDownloadCommand(command, activeRoundOf(task)?.id ?? null)
 
   const dirLine =
     args.dir === undefined
       ? '保存目录：未指定——右侧栏会弹出下载框并默认当前目录，等用户确认或改选后再开始。'
       : `保存目录：${args.dir}（宿主会展开 ~；可位于工作空间之外）——右侧栏会直接开始下载。`
   const lines = [
-    `已向右侧栏下发批量下载指令：${resolved.scopeLabel}。`,
+    `已向右侧栏下发批量下载指令（commandId=${command.commandId}）：${resolved.scopeLabel}。`,
     `任务「${task.title}」（id: ${task.id}）；范围：${args.reason}`,
     `清单已逐个校验：${resolved.paperIds.length} 篇属于该任务且满足条件${ignoredNote(resolved, args.scope)}。`,
     dirLine,
@@ -1767,7 +1808,7 @@ async function runDownload(
     '清单前几篇：',
     previewItems(resolved),
     '',
-    '右侧栏会弹出下载框；用户能看到每篇标题、来源与实时状态，也可点「取消下载」中止。本工具只下发指令、不等待下载完成；请勿重复调用，也不要替用户臆测下载结果。',
+    '右侧栏会弹出下载框；用户能看到每篇标题、来源与实时状态，也可点「取消下载」中止。当前仅已下发指令，可用 literature_transfer status 核对实际结果。',
   ]
   if (resolved.paperIds.length > 200) {
     lines.push(
@@ -1841,8 +1882,8 @@ async function runZotero(
     ...(target === undefined ? {} : { target }),
     autoStart: target !== undefined,
   }
-  service.focusTask(task.id, task.title, sessionId)
-  service.publishZoteroCommand(command)
+  service.focusTask(task.id, task.title, sessionId, true)
+  service.publishZoteroCommand(command, activeRoundOf(task)?.id ?? null)
 
   const targetLine =
     target === undefined
@@ -1851,7 +1892,7 @@ async function runZotero(
           target.filesEditable === false ? '，该目录不可写附件，只会保存条目' : ''
         }：右侧栏会自动预选并立即开始同步。`
   const lines = [
-    `已向右侧栏下发批量存入 Zotero 指令：${resolved.scopeLabel}。`,
+    `已向右侧栏下发批量存入 Zotero 指令（commandId=${command.commandId}）：${resolved.scopeLabel}。`,
     `任务「${task.title}」（id: ${task.id}）；范围：${args.reason}`,
     `清单已逐个校验：${resolved.paperIds.length} 篇属于该任务且满足条件${ignoredNote(resolved, args.scope)}。`,
     '',
@@ -1859,7 +1900,7 @@ async function runZotero(
     previewItems(resolved),
     '',
     targetLine,
-    '用户能在弹窗里看到每篇标题、来源与实时状态，也可中途取消；重新同步会在 Zotero 里新建条目，不会覆盖已有条目。本工具只下发指令、不等同步完成；请勿重复调用，也不要替用户臆测同步结果。',
+    '用户能在弹窗查看逐篇状态。同步会从检查点继续。当前仅已下发指令，可用 literature_transfer status 核对实际结果。',
   ]
   if (resolved.paperIds.length > 200) {
     lines.push(
@@ -1888,6 +1929,7 @@ function readFilterArgs(args: TaskArgs): PaperFilter {
   if (args.venue !== undefined) filter.venue = args.venue
   if (args.author !== undefined) filter.author = args.author
   if (args.newOnly === true) filter.newOnly = true
+  if (args.supplementedOnly === true) filter.supplementedOnly = true
   return filter
 }
 
@@ -2012,6 +2054,7 @@ function formatTaskDetail(
     const state = states[paper.paperId]
     const marks = [
       state?.screening ?? 'unread',
+      paper.supplement === undefined ? '' : '手工补录',
       state?.groupId === undefined ? '' : groupNames.get(state.groupId) ?? state.groupId,
     ].filter((part) => part !== '')
     const meta = [
@@ -2270,7 +2313,7 @@ function formatRounds(
     lines.push(
       `- 第 ${round.index} 轮｜${(round.startedAt ?? round.createdAt).slice(0, 19).replace('T', ' ')}｜${
         round.origin === 'model' ? '模型' : '面板'
-      }｜${round.status === undefined ? '进行中' : statusLabel(round.status)}｜${stats}${
+      }｜${round.status === undefined ? '进行中' : statusLabel(round.status)}｜${stats}${round.hasResults ? '｜可切换' : ''}${
         round.error === undefined ? '' : `｜${round.error}`
       }`,
     )

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util'
 
 import { DEFAULT_TASK_MAX_ROUNDS } from '../../search/config.js'
 import { SearchError } from '../../search/errors.js'
-import type { SearchRound, SearchTask } from '../../search/types.js'
+import type { SearchRound, SearchTask, TaskOrigin } from '../../search/types.js'
 import { readRoundSearchResults } from './paper-groups.js'
 import { activeRoundOf, cloneConditions, roundStats, startRound } from './rounds.js'
 import { countScreening } from './states.js'
@@ -23,7 +23,7 @@ export function archiveRoundResults(task: SearchTask): void {
   round.stats = roundStats(task)
 }
 
-export function createDraftRound(task: SearchTask, source: SearchRound): void {
+export function createDraftRound(task: SearchTask, source: SearchRound, origin: TaskOrigin): void {
   archiveRoundResults(task)
   task.conditions = cloneConditions(source.conditions)
   task.status = 'draft'
@@ -37,7 +37,7 @@ export function createDraftRound(task: SearchTask, source: SearchRound): void {
     perQuery: {},
     screening: countScreening(task.result.papers, task.states),
   }
-  const round = startRound(task, 'panel', DEFAULT_TASK_MAX_ROUNDS)
+  const round = startRound(task, origin, DEFAULT_TASK_MAX_ROUNDS)
   round.status = 'draft'
   round.stats = roundStats(task)
 }

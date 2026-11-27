@@ -243,6 +243,10 @@ export function resolveDownloadScope(
       }
       break
     }
+    case 'selected': {
+      ordered = [...new Set(options.snapshot?.selectedIds ?? [])]
+      break
+    }
     case 'currentPage': {
       ordered = [...(options.pagePaperIds ?? options.snapshot?.pagePaperIds ?? [])]
       break
@@ -304,6 +308,9 @@ export function buildScopeLabel(
   switch (scope) {
     case 'ids':
       parts.push('指定文献')
+      break
+    case 'selected':
+      parts.push('右侧栏已勾选')
       break
     case 'currentPage':
       parts.push(`当前页（第 ${(options.snapshot?.pageIndex ?? 0) + 1} 页）`)

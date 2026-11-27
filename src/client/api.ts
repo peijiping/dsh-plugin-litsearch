@@ -16,6 +16,7 @@ import type {
   EventsPage,
   ExportFormat,
   HealthInfo,
+  PanelCommandResult,
   PaperDetail,
   PaperSupplementResult,
   PaperEntities,
@@ -60,7 +61,7 @@ function withSession(init?: RequestInit): RequestInit {
   const id = currentSessionId()
   if (id === '') return init ?? {}
   const headers = new Headers(init?.headers)
-  headers.set(SESSION_HEADER, id)
+  if (!headers.has(SESSION_HEADER)) headers.set(SESSION_HEADER, id)
   return { ...init, headers }
 }
 
@@ -198,6 +199,13 @@ export function translateTexts(
 
 export function fetchEvents(sinceRev: number, signal?: AbortSignal): Promise<EventsPage> {
   return request<EventsPage>(`/events?sinceRev=${encodeURIComponent(String(sinceRev))}`, { signal })
+}
+
+export function finishPanelCommand(id: string, sessionId: string, accepted: boolean, error?: string): Promise<PanelCommandResult> {
+  const init = writeInit('POST', { accepted, error })
+  const headers = new Headers(init.headers)
+  headers.set(SESSION_HEADER, sessionId)
+  return request<PanelCommandResult>(`/panel/${encodeURIComponent(id)}`, { ...init, headers })
 }
 
 /** 上报给 Host 的视图快照（会话 id 与时间由请求头 / Host 填充）。 */
@@ -411,12 +419,17 @@ export function downloadPaperPdf(
   paperId: string,
   dir?: string,
   signal?: AbortSignal,
+  commandId?: string,
 ): Promise<PdfDownloadResult> {
-  const body = dir === undefined || dir.trim() === '' ? {} : { dir: dir.trim() }
+  const body = { commandId, ...(dir === undefined || dir.trim() === '' ? {} : { dir: dir.trim() }) }
   return request<PdfDownloadResult>(
     taskPath(taskId, `/papers/${encodeURIComponent(paperId)}/download`),
     { ...writeInit('POST', body), signal },
   )
+}
+
+export function cancelTransfer(commandId: string): Promise<{ canceled: boolean }> {
+  return request(`/transfer/${encodeURIComponent(commandId)}`, writeInit('POST', {}))
 }
 
 /** 弹出宿主系统的「选择文件夹」对话框，返回绝对路径。 */
@@ -449,11 +462,13 @@ export function syncZotero(
   taskId: string,
   paperIds: readonly string[],
   target?: { id: string; name?: string; filesEditable?: boolean },
+  commandId?: string,
 ): Promise<ZoteroSyncResult> {
   return request<ZoteroSyncResult>(
     taskPath(taskId, '/zotero'),
     writeInit('POST', {
       paperIds,
+      commandId,
       ...(target === undefined
         ? {}
         : {

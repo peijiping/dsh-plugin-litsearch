@@ -11,6 +11,7 @@ import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 
 import type {
   AnnotationInput,
+  PanelCommand,
   Paper,
   Screening,
   SortMode,
@@ -19,10 +20,13 @@ import type {
 } from '../search/types'
 import { isManualPdfFailure } from '../search/types'
 import {
+  cancelTransfer,
   chooseDownloadDir,
   downloadPaperPdf,
   exportUrl,
   fetchPaper,
+  fetchTask,
+  finishPanelCommand,
   supplementPaper,
   fetchStats,
   postViewSnapshot,
@@ -61,6 +65,7 @@ import { NotesTab } from './NotesTab'
 import { OverviewTab } from './OverviewTab'
 import { Pager } from './Pager'
 import { RunProgressPanel } from './RunProgressPanel'
+import { consumePanelCommand, usePanelCommands } from './panelCommands'
 import { PaperCard } from './PaperCard'
 import { BulkActionButton, BulkDownloadButton } from './BulkButtons'
 import type { PdfDownloadUi } from './pdfActions'
@@ -106,6 +111,7 @@ interface Props {
   /** 当前任务被删除且没有别的任务可切换时，由宿主关闭这个任务 tab。 */
   onCloseTask?: (taskId: string) => void
   /** 切换前记录的上一个任务；当前任务失效时可一键切回，避免困在错误页。 */
+  currentSession?(): string | undefined
   getPreviousTask?: () => { id: string; title: string } | null
   /** 已下载文献：先复核文件仍在，再在右侧面板预览本地 PDF。 */
   onOpenLocal?: (taskId: string, paperId: string, path: string) => void
@@ -135,6 +141,7 @@ function formatDate(value: string): string {
 
 /** 弹窗来源信息：手动批量不带说明，模型发起时展示范围与用户意图。 */
 interface BatchMeta {
+  commandId?: string
   origin: 'panel' | 'model'
   scopeLabel?: string
   reason?: string
@@ -163,6 +170,7 @@ export function TaskPane({
   onOpenTask,
   onCloseTask,
   getPreviousTask,
+  currentSession,
   onOpenLocal,
   onRevealLocal,
 }: Props): ReactElement {
@@ -170,6 +178,11 @@ export function TaskPane({
   const taskId = parseTaskId(info)
   const [filters, setFilters] = useState<ResultsQuery>({})
   const [tab, setTab] = useState<TabKey>('results')
+  const [modelSupplement, setModelSupplement] = useState<(SupplementFeedback & { roundId?: string }) | null>(null)
+  const panelCommands = usePanelCommands()
+  const processingPanel = useRef(false)
+  const sendingViewAck = useRef(false)
+  const [viewCommand, setViewCommand] = useState<Extract<PanelCommand, { action: 'view' }> | null>(null)
   const view = useTask(taskId, info.tab.signal, RESULT_PAGE_SIZE, filters)
   const bodyRef = useRef<HTMLDivElement>(null)
   const [toast, setToast] = useState<{
@@ -505,7 +518,7 @@ export function TaskPane({
         changed = true
         setDownloads((previous) => ({ ...previous, [paperId]: { state: 'downloading' } }))
         try {
-          const result = await downloadPaperPdf(taskId, paperId, dir, controller.signal)
+          const result = await downloadPaperPdf(taskId, paperId, dir, controller.signal, meta.commandId)
           if (result.status === 'downloaded') {
             ok += 1
             setDownloads((previous) => ({
@@ -604,6 +617,7 @@ export function TaskPane({
   /** 只有显式的「取消下载」才中止；关闭弹窗仍只隐藏，后台继续跑完。 */
   const cancelBatch = (): void => {
     batchAbortRef.current?.abort()
+    if (batchMeta.commandId !== undefined) void cancelTransfer(batchMeta.commandId).catch(() => undefined)
     setBatchCancelled(true)
   }
 
@@ -611,6 +625,7 @@ export function TaskPane({
   const closeBatch = (): void => {
     setBatchOpen(false)
     if (!batchRunningRef.current) {
+      if (batchPhase === 'setup' && batchMeta.commandId !== undefined) void cancelTransfer(batchMeta.commandId).catch(() => undefined)
       batchBusyRef.current = false
       setBatchBusy(false)
     }
@@ -631,28 +646,99 @@ export function TaskPane({
       .finally(() => setBatchPicking(false))
   }
 
-  // 上报当前视图快照：Host 侧的模型工具靠它算准「当前页 / 当前筛选全部」。
-  // 变化时节流 400ms，切任务或卸载时清理；后台标签页不上报。
+  // 先上报已加载的页，再确认模型翻页完成，后续按页操作就能读到新视图。
   useEffect(() => {
-    if (taskId === null || view.detail === null || view.page === null) return undefined
+    if (taskId === null || (viewCommand !== null && viewCommand.sessionId !== currentSession?.())) return undefined
+    if (viewCommand !== null && view.error !== null && !view.loading) {
+      void finishPanelCommand(viewCommand.commandId, viewCommand.sessionId, false, view.error).catch(() => undefined)
+      processingPanel.current = false
+      setViewCommand(null)
+      consumePanelCommand(viewCommand.commandId)
+      return undefined
+    }
+    if (view.detail === null || view.page === null || view.loading || view.page.rev !== view.detail.rev) return undefined
     const body: ViewSnapshotBody = {
       taskId,
       pageIndex: view.pageIndex,
       pageSize: view.pageSize,
-      // 让 Host 能直接答出「共 N 页」，不必自己重算一遍筛选。
       total: view.page.total,
       ...(filters.sort === undefined ? {} : { sort: filters.sort }),
       filters: snapshotFilters(filters),
       pagePaperIds: view.page.papers.map((paper) => paper.paperId),
       selectedIds: [...selected],
+      roundId: view.detail.activeRoundId,
       rev: view.page.rev,
     }
     const timer = setTimeout(() => {
-      if (document.hidden) return
-      void postViewSnapshot(body).catch(() => undefined)
+      if (document.hidden || (viewCommand !== null && (viewCommand.sessionId !== currentSession?.() || sendingViewAck.current))) return
+      if (viewCommand !== null) sendingViewAck.current = true
+      void (async () => {
+        try {
+          const { saved } = await postViewSnapshot(body)
+          if (viewCommand !== null) {
+            const reached = saved && (viewCommand.page ?? 1) === body.pageIndex + 1 && viewCommand.roundId === body.roundId
+            await finishPanelCommand(viewCommand.commandId, viewCommand.sessionId, reached,
+              reached ? undefined : t('rounds.resultsUnavailable'))
+          }
+        } catch (error) {
+          if (viewCommand !== null) {
+            await finishPanelCommand(viewCommand.commandId, viewCommand.sessionId, false, messageOf(error)).catch(() => undefined)
+          }
+        } finally {
+          if (viewCommand !== null) {
+            sendingViewAck.current = false
+            processingPanel.current = false
+            setViewCommand(null)
+            consumePanelCommand(viewCommand.commandId)
+          }
+        }
+      })()
     }, 400)
     return () => clearTimeout(timer)
-  }, [taskId, view.detail, view.page, view.pageIndex, view.pageSize, filters, selected])
+  }, [taskId, view.detail, view.page, view.loading, view.error, view.pageIndex, view.pageSize, filters, selected, viewCommand, currentSession, t])
+
+  useEffect(() => {
+    if (taskId === null || processingPanel.current) return
+    const command = panelCommands.find((entry) =>
+      (entry.action === 'view' || (entry.action === 'supplement' && modelSupplement === null)) &&
+      entry.taskId === taskId && entry.sessionId === currentSession?.())
+    if (command === undefined || (command.action !== 'view' && command.action !== 'supplement')) return
+    processingPanel.current = true
+    void (async () => {
+      let awaitingView = false
+      try {
+        if (command.action === 'supplement') {
+          setTab('results')
+          setModelSupplement({ status: command.status, message: command.message, roundId: command.roundId })
+          view.reload()
+        } else {
+          const next = await fetchTask(taskId, info.tab.signal)
+          if (command.sessionId !== currentSession?.() || info.tab.signal?.aborted === true) {
+            throw new Error(t('task.openFailed').replace('{message}', taskId))
+          }
+          if (command.roundId !== next.activeRoundId) throw new Error(t('rounds.resultsUnavailable'))
+          const nextFilters = command.reset ? {} : command.filters as ResultsQuery | undefined
+          if (nextFilters !== undefined) setFilters(nextFilters)
+          setTab(command.tab ?? 'results')
+          setShowRounds(false)
+          view.showRound(next, (command.page ?? 1) - 1, nextFilters)
+          awaitingView = true
+          setViewCommand(command)
+          return
+        }
+        await finishPanelCommand(command.commandId, command.sessionId, true)
+      } catch (error) {
+        const message = messageOf(error)
+        await finishPanelCommand(command.commandId, command.sessionId, false, message).catch(() => undefined)
+        notify(message, 'error')
+      } finally {
+        if (!awaitingView) {
+          processingPanel.current = false
+          consumePanelCommand(command.commandId)
+        }
+      }
+    })()
+  }, [taskId, panelCommands, modelSupplement, currentSession, info.tab.signal])
 
   // 消费模型下载指令：始终串行。上一轮没跑完（含停在选目录）就留在 store
   // 队列里，空闲后自动接着处理下一条，不丢也不重复。
@@ -678,6 +764,7 @@ export function TaskPane({
     markConsumed(command.commandId)
     stageDownload(items, {
       origin: 'model',
+      commandId: command.commandId,
       scopeLabel: command.scopeLabel,
       reason: command.reason,
       ...(command.dir === undefined ? {} : { dir: command.dir }),
@@ -710,6 +797,7 @@ export function TaskPane({
     markZoteroConsumed(command.commandId)
     openZotero(items, {
       origin: 'model',
+      commandId: command.commandId,
       scopeLabel: command.scopeLabel,
       reason: command.reason,
       ...(command.target === undefined ? {} : { initialTarget: command.target }),
@@ -1152,6 +1240,17 @@ export function TaskPane({
       <div ref={bodyRef} style={SCROLL_BODY_STYLE}>
         {tab === 'results' ? (
         <>
+          {modelSupplement !== null && (
+            <SupplementResultDialog
+              t={t}
+              feedback={modelSupplement}
+              onClose={() => setModelSupplement(null)}
+              onViewSupplements={modelSupplement.roundId !== detail.activeRoundId ? undefined : () => {
+                setFilters({ supplementedOnly: true })
+                setModelSupplement(null)
+              }}
+            />
+          )}
           <SupplementBox
             key={taskId}
             t={t}
@@ -1682,6 +1781,36 @@ const EXPORT_FORMATS = ['csv', 'ris', 'bibtex', 'md'] as const
 /** 批量下载的并发上限：同时下载 5 篇。 */
 const BATCH_CONCURRENCY = 5
 
+interface SupplementFeedback {
+  status: 'added' | 'existing' | 'failed'
+  message: string
+}
+
+function SupplementResultDialog({ t, feedback, onClose, onViewSupplements }: {
+  t: Translate
+  feedback: SupplementFeedback
+  onClose(): void
+  onViewSupplements?: () => void
+}): ReactElement {
+  const title = t(`supplement.${feedback.status}Title`)
+  return (
+    <Modal open headless title={title} onClose={() => undefined}>
+      <div style={{ padding: '20px 20px 0' }}>
+        <h2 style={{ margin: 0, fontSize: 17 }}>{title}</h2>
+        <p style={{ margin: '10px 0 20px', maxHeight: '50dvh', overflowY: 'auto', overflowWrap: 'anywhere' }}>
+          {feedback.message}
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          {feedback.status === 'added' && onViewSupplements !== undefined && (
+            <Button type="button" variant="outline" onClick={onViewSupplements}>{t('supplement.viewAll')}</Button>
+          )}
+          <Button type="button" variant="primary" data-modal-autofocus onClick={onClose}>{t('supplement.confirm')}</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 /** 在结果页按标识补录，提交后等待用户确认结果。 */
 function SupplementBox({ t, taskId, disabled, onAdded, onViewSupplements }: {
   t: Translate
@@ -1692,10 +1821,7 @@ function SupplementBox({ t, taskId, disabled, onAdded, onViewSupplements }: {
 }): ReactElement {
   const [identifier, setIdentifier] = useState('')
   const [busy, setBusy] = useState(false)
-  const [feedback, setFeedback] = useState<{
-    status: 'added' | 'existing' | 'failed'
-    message: string
-  } | null>(null)
+  const [feedback, setFeedback] = useState<SupplementFeedback | null>(null)
   const pending = useRef<AbortController | null>(null)
   useEffect(() => () => pending.current?.abort(), [])
 
@@ -1726,8 +1852,6 @@ function SupplementBox({ t, taskId, disabled, onAdded, onViewSupplements }: {
     }
   }
 
-  const feedbackTitle = feedback === null ? '' : t(`supplement.${feedback.status}Title`)
-
   return (
     <>
       <form
@@ -1750,36 +1874,12 @@ function SupplementBox({ t, taskId, disabled, onAdded, onViewSupplements }: {
         </Button>
       </form>
       {feedback !== null && (
-        <Modal
-          open
-          headless
-          title={feedbackTitle}
-          onClose={() => { /* 点击遮罩或按 Escape 时保留结果。 */ }}
-        >
-          <div style={{ padding: '20px 20px 0' }}>
-            <h2 style={{ margin: 0, fontSize: 17 }}>{feedbackTitle}</h2>
-            <p style={{ margin: '10px 0 20px', maxHeight: '50dvh', overflowY: 'auto', overflowWrap: 'anywhere' }}>
-              {feedback.message}
-            </p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8 }}>
-              {feedback.status === 'added' && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setFeedback(null)
-                    onViewSupplements()
-                  }}
-                >
-                  {t('supplement.viewAll')}
-                </Button>
-              )}
-              <Button type="button" variant="primary" data-modal-autofocus onClick={() => setFeedback(null)}>
-                {t('supplement.confirm')}
-              </Button>
-            </div>
-          </div>
-        </Modal>
+        <SupplementResultDialog
+          t={t}
+          feedback={feedback}
+          onClose={() => setFeedback(null)}
+          onViewSupplements={() => { setFeedback(null); onViewSupplements() }}
+        />
       )}
     </>
   )

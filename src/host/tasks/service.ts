@@ -30,6 +30,9 @@ import type {
   ExportFile,
   ExportFormat,
   HealthInfo,
+  PanelCommand,
+  PanelCommandResult,
+  PanelOperation,
   Paper,
   PaperDetail,
   PaperEntities,
@@ -63,6 +66,7 @@ import type {
 } from '../../search/types.js'
 import { SOURCE_IDS } from '../../search/types.js'
 import { TaskEvents } from '../events.js'
+import { TransferLog } from '../transfer-log.js'
 import { buildExport, type ExportContext } from '../export/index.js'
 import {
   cleanupPdfCache,
@@ -218,6 +222,7 @@ export class TaskService {
   private readonly store = new TaskStore()
 
   private readonly events = new TaskEvents()
+  readonly transfers = new TransferLog()
 
   private readonly runner = new TaskRunner()
   private readonly switchingRounds = new Set<string>()
@@ -239,6 +244,12 @@ export class TaskService {
    * 宿主重启即失效，与事件日志 rev 的生命周期一致。
    */
   private readonly views = new Map<string, ViewSnapshot>()
+  private readonly sessionTasks = new Map<string, string>()
+  private readonly panelCommands = new Map<string, {
+    command: PanelCommand
+    result: PanelCommandResult
+    execute?: () => Promise<string>
+  }>()
 
   /**
    * 全局「当前任务」：最后一次使用或打开的任务。
@@ -380,9 +391,14 @@ export class TaskService {
     }
   }
 
-  async eventsSince(sinceRev: number): Promise<EventsPage> {
+  async eventsSince(sinceRev: number, sessionId?: string): Promise<EventsPage> {
     await this.ready
-    return this.events.since(sinceRev)
+    const page = this.events.since(sinceRev, sessionId)
+    if (page.panel !== undefined) {
+      page.panel = page.panel.filter((command) => this.panelCommands.get(command.commandId)?.result.status === 'pending' &&
+        Date.now() - command.at <= 10 * 60_000)
+    }
+    return page
   }
 
   async list(filter: TaskListFilter = {}): Promise<TaskSummary[]> {
@@ -417,7 +433,7 @@ export class TaskService {
     return roundsOf(await this.get(id)).map(cloneRound)
   }
 
-  async selectRound(id: string, roundId: string, mode: 'switch' | 'draft'): Promise<void> {
+  async selectRound(id: string, roundId: string, mode: 'switch' | 'draft', origin: TaskOrigin = 'panel'): Promise<void> {
     const task = await this.get(id)
     if (this.isRunning(id)) throw new SearchError('conflict', '任务正在执行操作，请稍后调整轮次')
     if (mode === 'switch' && activeRoundOf(task)?.id === roundId) return
@@ -431,7 +447,7 @@ export class TaskService {
     try {
       await this.store.checkpoint(task, (draft) => {
         const source = draft.rounds[index]
-        if (mode === 'draft') createDraftRound(draft, source)
+        if (mode === 'draft') createDraftRound(draft, source, origin)
         else selectRoundResults(draft, source)
       })
       for (const [sessionId, view] of this.views) {
@@ -477,9 +493,9 @@ export class TaskService {
       canContinue:!!original.evidence && isCurrent && !this.isRunning(id) && sameConditions(original,task) }
   }
 
-  async continuePage(id: string, target: PageTarget): Promise<void> {
+  async continuePage(id: string, target: PageTarget, origin: TaskOrigin = 'panel'): Promise<void> {
     const task = await this.get(id)
-    await this.begin(task,'more','panel',undefined,target)
+    await this.begin(task, 'more', origin, undefined, target)
   }
 
   async reviewIdentity(id: string, roundId: string, subject: string, action: 'split' | 'keepSeparate' | 'linkVersions' | 'resolveScreening', rev: number, choice?: string): Promise<void> {
@@ -527,8 +543,11 @@ export class TaskService {
    * 没有时间窗口、也不区分对话；只要任务还在就一直有效。任务被全部删除后
    * 返回 undefined，由调用方决定是否新建。
    */
-  async currentTask(): Promise<SearchTask | undefined> {
+  async currentTask(sessionId?: string): Promise<SearchTask | undefined> {
     await this.ready
+    const localId = sessionId === undefined ? undefined :
+      this.sessionTasks.get(sessionId) ?? this.views.get(sessionId)?.taskId
+    if (localId !== undefined) return this.tryGet(localId)
     if (this.currentTaskId === undefined) return undefined
     const task = await this.tryGet(this.currentTaskId)
     if (task !== undefined) return task
@@ -539,7 +558,16 @@ export class TaskService {
   }
 
   /** 记住最近使用的任务（下一次模型检索默认落在这里）。 */
-  setCurrentTask(id: string): void {
+  setCurrentTask(id: string, sessionId?: string): void {
+    if (sessionId) {
+      if (this.sessionTasks.get(sessionId) !== id) this.views.delete(sessionId)
+      this.sessionTasks.delete(sessionId)
+      this.sessionTasks.set(sessionId, id)
+      if (this.sessionTasks.size > MAX_VIEWS) {
+        const oldest = this.sessionTasks.keys().next().value
+        if (oldest !== undefined) this.sessionTasks.delete(oldest)
+      }
+    }
     this.currentTaskId = id
     this.currentTaskAt = Date.now()
     this.persistCurrent()
@@ -553,13 +581,59 @@ export class TaskService {
     this.events.requestFocus(id, title, sessionId, force)
   }
 
+  requestPanel(sessionId: string | undefined, operation: PanelOperation, execute?: () => Promise<string>): string {
+    if (!sessionId) throw new SearchError('bad_request', '此操作需要一个打开的 DSH 会话')
+    const command: PanelCommand = { ...operation, sessionId, commandId: randomUUID(), at: Date.now() }
+    this.panelCommands.set(command.commandId, { command, result: { status: 'pending', text: '等待右侧栏处理' }, execute })
+    if (this.panelCommands.size > 150) {
+      const oldest = this.panelCommands.keys().next().value
+      if (oldest !== undefined) this.panelCommands.delete(oldest)
+    }
+    this.events.publishPanel(command)
+    return command.commandId
+  }
+
+  panelResult(id: string, sessionId?: string): PanelCommandResult {
+    const entry = this.panelCommands.get(id)
+    if (entry === undefined || entry.command.sessionId !== sessionId) {
+      throw new SearchError('not_found', '此会话没有这条面板指令')
+    }
+    if (entry.result.status === 'pending' && Date.now() - entry.command.at > 10 * 60_000) {
+      entry.result = { status: 'canceled', text: '面板指令已过期' }
+      delete entry.execute
+    }
+    return entry.result
+  }
+
+  async finishPanel(id: string, sessionId: string, accepted: boolean, error?: string): Promise<PanelCommandResult> {
+    const result = this.panelResult(id, sessionId)
+    if (result.status !== 'pending') return result
+    const entry = this.panelCommands.get(id)!
+    if (!accepted || error !== undefined) {
+      entry.result = error === undefined
+        ? { status: 'canceled', text: '已取消操作' }
+        : { status: 'failed', text: error }
+    } else {
+      entry.result = { status: 'running', text: '正在执行' }
+      try {
+        entry.result = { status: 'done', text: await entry.execute?.() ?? '面板已处理' }
+      } catch (error) {
+        entry.result = { status: 'failed', text: error instanceof Error ? error.message : String(error) }
+      }
+    }
+    delete entry.execute
+    return entry.result
+  }
+
   /** 下发一条模型批量下载指令；右侧栏轮询 /events 拿增量后自行执行。 */
-  publishDownloadCommand(command: DownloadCommand): void {
+  publishDownloadCommand(command: DownloadCommand, roundId: string | null = null): void {
+    this.transfers.add('download', command, roundId)
     this.events.publishDownload(command)
   }
 
   /** 下发一条模型批量存入 Zotero 指令；与下载指令走独立的事件日志。 */
-  publishZoteroCommand(command: ZoteroCommand): void {
+  publishZoteroCommand(command: ZoteroCommand, roundId: string | null = null): void {
+    this.transfers.add('zotero', command, roundId)
     this.events.publishZotero(command)
   }
 
@@ -567,10 +641,12 @@ export class TaskService {
    * 面板上报当前视图。会话 id 以请求头为准覆盖 body，防止伪造别的会话的视图；
    * 时间也由 Host 重置，避免客户端时钟偏差影响过期判断。
    */
-  saveViewSnapshot(sessionId: string, snapshot: ViewSnapshot): void {
-    if (sessionId === '' || snapshot.taskId === '') return
+  saveViewSnapshot(sessionId: string, snapshot: ViewSnapshot): boolean {
+    if (sessionId === '' || snapshot.taskId === '') return false
+    const localId = this.sessionTasks.get(sessionId)
+    if (localId !== undefined && localId !== snapshot.taskId) return false
     this.views.set(sessionId, { ...snapshot, sessionId, at: Date.now() })
-    if (this.views.size <= MAX_VIEWS) return
+    if (this.views.size <= MAX_VIEWS) return true
     let oldestKey: string | undefined
     let oldestAt = Number.MAX_SAFE_INTEGER
     for (const [key, value] of this.views) {
@@ -580,6 +656,7 @@ export class TaskService {
       }
     }
     if (oldestKey !== undefined) this.views.delete(oldestKey)
+    return true
   }
 
   /** 取该会话在该任务上的最近视图；过期、跨任务或 rev 超前都视为不可信。 */
@@ -597,7 +674,8 @@ export class TaskService {
     }
     // 每下载一篇都会让 rev +1，因此只做「快照不比任务更新」的宽松校验。
     const task = await this.tryGet(taskId)
-    if (task === undefined || snapshot.rev > task.rev) return undefined
+    if (task === undefined || snapshot.rev > task.rev ||
+      (snapshot.roundId !== undefined && snapshot.roundId !== activeRoundOf(task)?.id)) return undefined
     return snapshot
   }
 
@@ -611,10 +689,10 @@ export class TaskService {
   }
 
   /** 用户从任务列表点开某任务 = 进入该任务，之后的模型检索默认落在这里。 */
-  async activate(id: string, workspace?: string): Promise<SearchTask> {
+  async activate(id: string, workspace?: string, sessionId?: string): Promise<SearchTask> {
     const task = await this.get(id)
     await this.applyWorkspace(task, workspace)
-    this.setCurrentTask(task.id)
+    this.setCurrentTask(task.id, sessionId)
     return task
   }
 
@@ -750,6 +828,7 @@ export class TaskService {
     // 模型工具导出到 <storage>/out/<taskId>/ 的文件随任务一起清掉。
     await rm(join(this.store.root, 'out', task.id), { recursive: true, force: true })
     this.events.remove(task.id)
+    this.transfers.remove(task.id)
     for (const [key, value] of this.views) {
       if (value.taskId === task.id) this.views.delete(key)
     }
@@ -908,6 +987,15 @@ export class TaskService {
     return { path, file, count: papers.length }
   }
 
+  async exportRoundReport(id: string, roundId: string): Promise<string> {
+    const report = await this.roundReport(id, roundId)
+    const dir = join(this.store.root, 'out', report.taskId)
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, `${report.taskId}-${report.round.id}.json`)
+    await writeFile(path, JSON.stringify(report, null, 2), 'utf8')
+    return path
+  }
+
   /** 设置页清理：任务文件与 PDF 缓存。 */
   async cleanup(scope: CleanupScope): Promise<CleanupResult> {
     if (scope === 'pdf') {
@@ -919,7 +1007,7 @@ export class TaskService {
         remaining: this.store.list().length,
       }
     }
-    const tasks = await this.store.cleanupUnpinned()
+    const tasks = await this.store.cleanupUnpinned((id) => this.remove(id))
     const pdf =
       scope === 'all' ? await cleanupPdfCache(this.store.root) : { removed: 0, freedBytes: 0 }
     return {
@@ -1114,7 +1202,7 @@ export class TaskService {
     return html
   }
 
-  async supplement(id: string, input: string): Promise<PaperSupplementResult> {
+  async supplement(id: string, input: string, expectedRoundId?: string | null): Promise<PaperSupplementResult> {
     const identifier = parseIdentifier(input)
     const assertIdle = (task: SearchTask): void => {
       if (this.isRunning(id) || task.status === 'running' || task.status === 'queued') {
@@ -1124,6 +1212,9 @@ export class TaskService {
     const task = await this.get(id)
     assertIdle(task)
     const roundId = activeRoundOf(task)?.id
+    if (expectedRoundId !== undefined && (roundId ?? null) !== expectedRoundId) {
+      throw new SearchError('conflict', '当前轮次已变化，请重新确认补录目标')
+    }
     const findExisting = (current: SearchTask) =>
       current.result.papers.find((paper) => matchesIdentifier(paper, identifier))
     const existing = findExisting(task)
@@ -1163,17 +1254,24 @@ export class TaskService {
     return { status: 'added', paper: findPaper(current, entry.paperId) }
   }
 
-  async associatePdf(id: string, paperId: string, bytes: Buffer, workspace?: string): Promise<PaperDetail> {
+  async associatePdf(id: string, paperId: string, bytes: Buffer, workspace?: string, expectedRoundId?: string | null): Promise<PaperDetail> {
     if (bytes.length > getSettings().pdfMaxMb * 1024 * 1024 ||
         !looksLikePdf(bytes.subarray(0, 1_024)) || !hasPdfTrailer(bytes.subarray(-2_048))) {
       throw new SearchError('bad_request', '文件不是完整 PDF，或超过设置中的 PDF 大小上限')
     }
     const task = await this.get(id)
+    const assertRound = (): void => {
+      if (expectedRoundId !== undefined && (activeRoundOf(task)?.id ?? null) !== expectedRoundId) {
+        throw new SearchError('conflict', '当前轮次已变化，请重新确认要关联的论文')
+      }
+    }
+    assertRound()
     paperId = resolvePaperId(task,paperId)
     const paper = findPaper(task, paperId)
     const dir = join(resolvePdfRoot(normalizeWorkspace(workspace) ?? task.workspace), 'attachments', paperId)
     const saved = await persistPdf(bytes, this.store.root, paper, workspace, dir, true)
     await this.get(id)
+    assertRound()
     findPaper(task, paperId)
     const current = task.states[paperId] ?? emptyState()
     const existing = current.pdfMaterial
@@ -1341,6 +1439,7 @@ export class TaskService {
     paperIds?: readonly string[],
     workspace?: string,
     target?: { id: string; name?: string; filesEditable?: boolean },
+    attachmentOnly = false,
   ): Promise<ZoteroSyncResult> {
     const settings = getSettings()
     if (!settings.zoteroEnabled) throw new SearchError('bad_request', 'Zotero 同步已在设置中关闭')
@@ -1377,6 +1476,15 @@ export class TaskService {
             (entry.serverId === undefined && entry.baseUrl === baseUrl)
           ),
         )
+        if (attachmentOnly && (
+          scope === undefined || serverId === undefined || selected.filesEditable === false ||
+          matching?.parent.key === undefined || matching.parent.status !== 'done' ||
+          matching.collection !== 'done' || matching.attachment.status === 'done'
+        )) {
+          return { paperId: paper.paperId, ok: false, attached: false,
+            parentSaved: matching?.parent.status === 'done',
+            error: '目标分类不可写、题录未核验，或该篇已完成附件同步' }
+        }
         const transfer: ZoteroTransfer = matching === undefined ? {
           baseUrl, serverId, targetId: selected.id, targetName: selected.name,
           library: scope?.prefix, collectionKey: scope?.collectionKey,
@@ -1392,7 +1500,7 @@ export class TaskService {
         }
         const group = task.groups.find((entry) => entry.id === state.groupId)
         const tags = group === undefined ? [] : [group.name]
-        const attach = settings.zoteroAttachPdf
+        const attach = attachmentOnly || settings.zoteroAttachPdf
         const recordedPdf = state.pdfMaterial?.path ?? state.pdfFile
         const pdfPath = attach && selected.filesEditable !== false
           ? await this.ensureLocalPdf(paper, workspaceDir, recordedPdf)
@@ -1403,7 +1511,7 @@ export class TaskService {
           const expectedSha256 = material?.path === pdfPath ? material?.sha256 : undefined
           await new ZoteroResume(this.zoteroWrite, baseUrl, serverId, scope.prefix).sync(
             transfer, paper, tags, settings.zoteroTag, attach && selected.filesEditable !== false,
-            pdfPath, save, expectedSha256,
+            pdfPath, save, expectedSha256, attachmentOnly,
           )
         } else if (scope !== undefined && matching === undefined && !transfer.legacy &&
                    !state.zoteroTransfers?.some((entry) => entry.baseUrl === baseUrl)) {
@@ -1455,7 +1563,7 @@ export class TaskService {
         await save(transfer)
         const attached = transfer.attachment.status === 'done'
         const ok = transfer.parent.status === 'done' && transfer.collection === 'done' &&
-          (attached || transfer.attachment.status === 'skipped' ||
+          (!attachmentOnly || attached) && (attached || transfer.attachment.status === 'skipped' ||
             (transfer.attachment.status === 'pending' && pdfPath === undefined)) && transfer.error === undefined
         return { paperId: paper.paperId, ok, attached, parentSaved: transfer.parent.status === 'done',
           transfer, ...(ok ? {} : { error: transfer.error ?? '题录已处理，PDF 尚待获取或补传' }),

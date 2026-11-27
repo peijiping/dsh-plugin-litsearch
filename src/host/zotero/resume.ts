@@ -35,13 +35,17 @@ export class ZoteroResume {
     pdfPath: string | undefined,
     save: Checkpoint,
     expectedSha256?: string,
+    attachmentOnly = false,
   ): Promise<ZoteroTransfer> {
     let stage: 'parent' | 'collection' | 'attachment' = 'parent'
     try {
       delete transfer.error
-      const parent = await this.parent(transfer, paper, tags, defaultTag, save)
+      const parent = await this.parent(transfer, paper, tags, defaultTag, save, attachmentOnly)
       stage = 'collection'
-      await this.collection(transfer, parent, save)
+      if (!attachmentOnly) await this.collection(transfer, parent, save)
+      else if (transfer.collectionKey !== undefined && !asArray(parent.data.collections).includes(transfer.collectionKey)) {
+        throw new Error('既有条目不在指定分类，请先在 Zotero 核对')
+      }
       stage = 'attachment'
       if (!attachPdf || pdfPath === undefined) {
         if (transfer.attachment.status !== 'done' || attachPdf) {
@@ -63,10 +67,14 @@ export class ZoteroResume {
 
   private async parent(
     transfer: ZoteroTransfer, paper: Paper, tags: string[], defaultTag: string, save: Checkpoint,
+    attachmentOnly = false,
   ): Promise<Item> {
     const previous = transfer.parent.key
     const expected = previous ?? objectKey(`paper:${paper.paperId}`)
     let item = await this.item(expected)
+    if (attachmentOnly && (previous === undefined || item === null)) {
+      throw new Error('找不到已记录的 Zotero 父条目，请先核对')
+    }
     if (item === null) item = await this.findParent(paper)
     if (item === null) {
       if (transfer.legacy || (previous !== undefined && transfer.parent.status === 'done')) {

@@ -16,7 +16,7 @@
 import { useSyncExternalStore } from 'react'
 
 import { DEFAULT_AUTO_OPEN, DEFAULT_MAX_TASK_TABS } from '../search/config'
-import type { TaskSummary } from '../search/types'
+import type { PanelCommand, TaskSummary } from '../search/types'
 import { fetchEvents, fetchTask } from './api'
 import { publishDownloadCommands } from './downloadCommandStore'
 import { getHealth, refreshHealth } from './health'
@@ -166,6 +166,8 @@ function enqueuePending(task: TaskSummary): void {
 
 interface AutoOpenOptions {
   open(id: string, title: string): void
+  removed?(ids: readonly string[]): void
+  panel?(commands: readonly PanelCommand[]): void
   /** 当前屏幕上的会话 id；聚焦请求来自别的对话时不抢占这个面板。 */
   sessionId?: () => string | undefined
 }
@@ -272,9 +274,19 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
   let seeded = false
   let ticks = 0
   let stopped = false
+  let requesting = false
+  let previousSession: string | undefined
+  const revisions = new Map<string | undefined, number>()
 
   const tick = async (): Promise<void> => {
-    if (stopped || document.hidden) return
+    if (stopped || document.hidden || requesting) return
+    requesting = true
+    const screenSession = options.sessionId?.()
+    if (screenSession !== previousSession) {
+      previousSession = screenSession
+      rev = revisions.get(screenSession) ?? -1
+      seeded = rev >= 0
+    }
     ticks += 1
     if (ticks % 10 === 0) void refreshHealth()
 
@@ -283,9 +295,14 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
       page = await fetchEvents(rev < 0 ? 0 : rev)
     } catch {
       return
+    } finally {
+      requesting = false
     }
-    if (stopped) return
+    if (stopped || screenSession !== options.sessionId?.()) return
 
+    revisions.delete(screenSession)
+    revisions.set(screenSession, page.rev)
+    if (revisions.size > 100) revisions.delete(revisions.keys().next().value)
     if (page.reset) {
       rev = page.rev
       seeded = true
@@ -298,6 +315,7 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
 
     // 已挂载的任务 tab 靠这份增量同步宿主侧的变化（例如模型在同一任务里开新一轮）。
     publishTaskSummaries(page.tasks)
+    if (page.removedTaskIds?.length) options.removed?.(page.removedTaskIds)
 
     // 模型下载指令总是入队，不受「自动打开开关 / 首次轮询」影响：tab 可能还没
     // 挂载，指令在 store 里等工具同时发出的 focus 把 tab 拉起后再被消费。
@@ -321,6 +339,7 @@ export function startAutoOpen(options: AutoOpenOptions): () => void {
         rememberOpened(focus.taskId, false)
       }
     }
+    if (page.panel?.length) options.panel?.(page.panel)
     if (first || !autoOpen) return
     const maxTabs = settings?.maxTaskTabs ?? DEFAULT_MAX_TASK_TABS
 

@@ -20,6 +20,7 @@ import { join } from 'node:path'
 
 import { createHandler, type WebServerLike } from './host/router.js'
 import { createTranslator } from './host/translate.js'
+import type { AttachmentStoreLike, SessionFilesLike } from './host/model-attachments.js'
 import { literatureTools, type ToolsService } from './host/tools.js'
 import { TaskService } from './host/tasks/service.js'
 import { setSessionStore, type SessionStoreLike } from './host/workspace.js'
@@ -250,10 +251,49 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
     )
   })
 
+  const getService = <T,>(key: string): T | undefined => {
+    const get = (ctx as unknown as { get?: (name: string) => unknown }).get
+    return typeof get === 'function' ? get.call(ctx, key) as T | undefined : undefined
+  }
+  // 翻译器按需读取宿主 llm，面板与工具共享同一个缓存及引擎。
+  const translate = createTranslator({ getLlm: () => getService('llm') })
+
   // 模型侧：原生注册，不依赖外部 MCP。
   ctx.inject(['tools'], (toolCtx: Context) => {
     const toolsService = (toolCtx as unknown as { tools: ToolsService }).tools
-    for (const definition of literatureTools(service)) {
+    for (const definition of literatureTools(service, {
+      translate,
+      attachments: () => getService<AttachmentStoreLike>('attachments'),
+      sessionFiles: () => {
+        const store = getService<SessionFilesLike>('sessionPersistence')
+        if (store === undefined) return undefined
+        return {
+          async open(id, access, options) {
+            // 刚提交的用户消息可能仍在宿主的写入队列里。
+            const sessions = getService<{ get(id: string): unknown; flush(session: unknown): Promise<boolean> }>('sessions')
+            const live = sessions?.get(id)
+            if (sessions !== undefined && live !== undefined) await sessions.flush(live)
+            options?.signal.throwIfAborted()
+            return store.open(id, access, options)
+          },
+        }
+      },
+      updateSettings: async (patch, reset) => {
+        interface Entry { id: string }
+        const editor = getService<{
+          entries(): Entry[]
+          edit(entry: Entry, change: (current: Record<string, unknown>) => Record<string, unknown>): Promise<void>
+        }>('configEditor')
+        const entryId = (ctx as unknown as { fiber?: { entry?: Entry } }).fiber?.entry?.id
+        const entry = editor?.entries().find((candidate) => candidate.id === entryId)
+        if (editor === undefined || entry === undefined) throw new Error('当前插件没有可写的 DSH 配置项')
+        await editor.edit(entry, (current) => {
+          const next = { ...current, ...patch }
+          for (const key of reset) delete next[key]
+          return next
+        })
+      },
+    })) {
       toolCtx.effect(
         () => toolsService.register(definition),
         `dsh-plugin-litsearch: ${definition.name}`,
@@ -264,17 +304,6 @@ export function apply(ctx: Context, config: Schemastery.TypeT<typeof Config>): v
   // 人侧：右侧栏面板与设置页通过回环端点读写任务。
   ctx.inject(['webServer'], (hostCtx: Context) => {
     const webServer = (hostCtx as unknown as { webServer: WebServerLike }).webServer
-    // 翻译器按需取 llm：服务未就绪或宿主没装 provider 时只走 Bing，不让端点整体 500。
-    const translate = createTranslator({
-      getLlm: () => {
-        try {
-          const get = (ctx as unknown as { get?: (name: string) => unknown }).get
-          return typeof get === 'function' ? get.call(ctx, 'llm') : undefined
-        } catch {
-          return undefined
-        }
-      },
-    })
     const handler = createHandler(service, { translate })
     hostCtx.effect(
       () => webServer.register({ kind: 'prefix', path: ROUTE_MATCH, handler }),

@@ -25,6 +25,7 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 | 动作 | 在对话里说一句 | 在右侧栏点一下 | 两边怎么合上 |
 | --- | --- | --- | --- |
 | **搜索** | 「查 GLP-1 与心血管结局，只看 2020 年后的」 | 填检索式、选来源 / 年份 / 排序 | 模型发起的检索落到同一个任务 tab，面板自动打开刷新；界面改条件重跑也记成新一轮，模型 `literature_task current` 读得到完整条件 |
+| **切换、补录与关联** | 「切到第 10 轮」「把这个 DOI 补到当前查询，再关联我上传的 PDF」 | 检索历史 → 切换轮次；结果 → 精确补录；论文页 → 关联 PDF | 使用同一轮次与题录，补录结果在对话和面板都能看到 |
 | **下载全文** | 「下载第 2 页有 PDF 的」「下载当前全部」 | 勾选 → 批量下载 | 模型把范围算成已校验的 `paperId` 清单，面板自动弹出下载框逐篇跑进度；「当前页 / 第 N 页 / 当前筛选」以面板上报的视图快照为准 |
 | **存入 Zotero** | 「把这批存到『综述』目录」 | 勾选 → 存入 Zotero → 选目录 | 与下载共用同一套范围解析；目录唯一匹配时自动预选开跑，没点名就停在弹窗等你选 |
 
@@ -69,14 +70,15 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 | 你可以这么说 | 实际范围 |
 | --- | --- |
 | 「下载这几篇」 | 指定文献（结果里给出的 `paperId`） |
+| 「把勾选的文献存到 Zotero」 | 本会话右侧栏跨页累计勾选的文献 |
 | 「下载当前页的所有 PDF」 | 右侧栏当前这一页，且仅有 PDF 直链或已下载 |
 | 「下载第 4–5 页」「把第二页有 PDF 的存到 Zotero」 | 面板第 4–5 页 / 第 2 页，页内再筛（每页固定 20 条） |
 | 「下载『综述』分组」「2023 年后、开放获取、已纳入的」 | 分组跨页全量 / 条件筛选 |
 | 「下载当前全部文献」 | 当前筛选下的全部结果（跨页）；说「整个任务」才下全任务 |
 
-- 模型不翻页、也不搬 id：页码交给服务端按视图快照切片，`pageBase='view'` 是「第 2 页里有 PDF 的」，`filtered` 是「有 PDF 的第 2 页」；越界直接拒绝并给出总页数。
+- 按页下载时，页码交给服务端按视图快照切片，`pageBase='view'` 是「第 2 页里有 PDF 的」，`filtered` 是「有 PDF 的第 2 页」；越界直接拒绝并给出总页数。
 - 拿不准先用只读 `literature_scope` 预演（返回命中数、总页数、面板视图、前 10 篇，不产生指令）；每个 `paperId` 逐一与任务结果校验，编造的会被忽略；面板没打开或快照过期会提示先打开任务页。
-- 下载与 Zotero 共用 `resolveModelScope()`，7 种 `scope` 一套口径；`hasPdf` 与 `openAccessOnly` 不混用，付费墙不会静默算成功。指令按 `commandId` 幂等排队、串行执行；不设篇数上限，大范围建议先收窄。**升级后需重启宿主或重新加载插件**才生效。
+- 下载与 Zotero 共用 `resolveModelScope()`，8 种 `scope` 一套口径；`hasPdf` 与 `openAccessOnly` 不混用，付费墙不会静默算成功。指令按 `commandId` 幂等排队、串行执行；不设篇数上限，大范围建议先收窄。**升级后需重启宿主或重新加载插件**才生效。
 
 ## 搜索任务与轮次
 
@@ -84,7 +86,8 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 
 - 模型首次检索建任务并用 `title` 命名，后续默认复用「当前任务」；`current` 读当前任务（没有时明确回「当前没有任务」），`get` 可按筛读 / 分组 / 年份 / 来源 / 全文状态过滤，`fields=ids` 回紧凑清单（最多 200 条 + `offset`），并回显「第 x/y 页｜每页 20 条｜筛选…」。
 - 在对话里说「切到某个任务」时，模型用 `activate` 切换「当前任务」并在右侧栏原位打开对应 tab（只切换、不检索）；点任务列表切换也是同一条链路。
-- 每轮记一条 `SearchRound`（只记元数据，最多 30 轮），时间轴 / `literature_task rounds` / `GET /tasks/:id/rounds` 可读；切换任务原位替换 tab，「当前任务」持久化、重启后恢复。
+- 每轮记一条 `SearchRound`（最多 30 轮，含统计与切换所需的结果快照），时间轴 / `literature_task rounds` / `GET /tasks/:id/rounds` 可读；切换任务原位替换 tab。当前任务优先取本会话的右侧栏任务，暂无会话记录时可恢复宿主最近使用的任务。
+- 可以说「基于第 10 轮新建任务，叫 XXXXX」，模型会复制该轮条件并打开待执行的草稿。
 - **每轮结束模型只给改进建议，不自行发起下一轮**；你重跑或明确要求才继续。
 
 ## 安装
@@ -153,8 +156,8 @@ pnpm test                         # node:test 单元测试
 ## 架构
 
 - `src/search/`：检索层；`providers/` 每家 API 一个 provider，新增源实现 `Provider` 并注册。
-- `src/host/`：API 端点、任务执行 / 持久化 / 统计 / 导出，及 7 个模型工具（`literature_search` / `literature_sources` / `literature_task` / `literature_scope` / `literature_export` / `literature_download` / `literature_zotero`）。
-- `src/host/tasks/download.ts` + `tools.ts`：7 种 `scope`（含 `pages`）解析成已校验的 `paperId` 清单，下载与 Zotero 共用 `resolveModelScope()`；`pdf/` 管候选链与失败归类，`zotero/match.ts` 做目录唯一匹配。
+- `src/host/`：API 端点、任务执行 / 持久化 / 统计 / 导出，及模型工具。除检索、任务、范围预演、导出、下载和 Zotero 外，`literature_round` 操作历史轮次与执行明细，`literature_paper` 读取论文及关联 PDF，`literature_panel` 同步面板操作，`literature_transfer` 查询下载与同步结果，`literature_settings` 管理设置与诊断。
+- `src/host/tasks/download.ts` + `tools.ts`：8 种 `scope`（含 `pages`）解析成已校验的 `paperId` 清单，下载与 Zotero 共用 `resolveModelScope()`；`pdf/` 管候选链与失败归类，`zotero/match.ts` 做目录唯一匹配。
 - `src/client/`：任务 tab、论文页、设置页；`DownloadDialog.tsx` / `ZoteroSyncDialog.tsx` 批量弹窗，两个 `*CommandStore.ts` 各自幂等排队。
 
 两侧靠 `/events` 增量轮询联动（Host 无原生推送）：

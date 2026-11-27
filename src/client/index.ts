@@ -27,6 +27,7 @@ import {
   ApiFailure,
   activateTask,
   fetchTask,
+  finishPanelCommand,
   recheckPaperPdf,
   revealLocalFile,
   setSessionIdProvider,
@@ -46,6 +47,7 @@ import { LitsearchPage } from './LitsearchPage'
 import { dicts, NS, tpl, type Translate } from './locales'
 import { showNotice } from './noticeStore'
 import { notifyTaskListChanged } from './taskListStore'
+import { queuePanelCommand, rememberPanelCommand } from './panelCommands'
 import { PAPER_ADDRESS_PREFIX, PaperPane } from './PaperPane'
 import { LitsearchSettingsController, ROW_ID } from './SettingsController'
 import { SettingsNavIcon } from './SettingsNavIcon'
@@ -269,10 +271,11 @@ export function apply(ctx: ClientContext): void {
    * 预检失败只提醒、不切换。
    */
   const openTask = (id: string, title?: string): void => {
+    const intendedSession = ctx.sidebarRight.mounted.getSnapshot()
     const token = ++openSeq
     void fetchTask(id)
       .then((detail) => {
-        if (token !== openSeq) return
+        if (token !== openSeq || intendedSession !== ctx.sidebarRight.mounted.getSnapshot()) return
         rememberTaskTitle(detail.id, detail.title)
         const address = `${TASK_ADDRESS_PREFIX}${encodeURIComponent(detail.id)}`
         // 一个对话只保留一个检索页：已有任务页 / 主页时原位替换，不再另开。
@@ -302,7 +305,7 @@ export function apply(ctx: ClientContext): void {
         void activateTask(detail.id).catch(() => undefined)
       })
       .catch((error: unknown) => {
-        if (token !== openSeq) return
+        if (token !== openSeq || intendedSession !== ctx.sidebarRight.mounted.getSnapshot()) return
         if (error instanceof ApiFailure && error.code === 'not_found') {
           // 清掉本地标题 / 待打开缓存，并让所有任务列表刷新掉这条已失效的记录。
           forgetTask(id)
@@ -421,6 +424,7 @@ export function apply(ctx: ClientContext): void {
       onOpenTask: (id: string, title: string) => openTask(id, title),
       onCloseTask: (id: string) => closeTask(id),
       getPreviousTask: () => previousTask,
+      currentSession: () => ctx.sidebarRight.mounted.getSnapshot(),
       onOpenLocal: openPdfPreview,
       onRevealLocal: revealPdf,
     })
@@ -562,6 +566,36 @@ export function apply(ctx: ClientContext): void {
       startAutoOpen({
         open: (id, title) => openTask(id, title),
         sessionId: () => ctx.sidebarRight.mounted.getSnapshot(),
+        removed: (ids) => {
+          for (const id of ids) { forgetTask(id); closeTask(id) }
+          notifyTaskListChanged()
+        },
+        panel: (commands) => {
+          const sessionId = ctx.sidebarRight.mounted.getSnapshot()
+          if (sessionId === undefined) return
+          for (const command of commands) {
+            if (command.sessionId !== sessionId || !rememberPanelCommand(command)) continue
+            if (command.action === 'confirm') {
+              const accepted = window.confirm(command.message)
+              void finishPanelCommand(command.commandId, sessionId, accepted)
+                .then((result) => {
+                  if (result.status === 'done' || result.status === 'failed') {
+                    showNotice(result.text)
+                    notifyTaskListChanged()
+                  }
+                })
+                .catch((error: unknown) => showNotice(String(error)))
+              continue
+            }
+            if (command.action === 'paper') {
+              openPaper(command.taskId, command.paperId, command.title)
+              void finishPanelCommand(command.commandId, sessionId, true).catch((error: unknown) => showNotice(String(error)))
+              continue
+            }
+            queuePanelCommand(command)
+            openTask(command.taskId)
+          }
+        },
       }),
     'dsh-plugin-litsearch: auto open',
   )

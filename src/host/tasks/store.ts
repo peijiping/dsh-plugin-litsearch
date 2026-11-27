@@ -215,7 +215,7 @@ export class TaskStore {
   }
 
   /** 手动清理：删除所有未保留任务，返回条数与释放的字节数。 */
-  async cleanupUnpinned(): Promise<{ removed: number; freedBytes: number }> {
+  async cleanupUnpinned(remove: (id: string) => Promise<void>): Promise<{ removed: number; freedBytes: number }> {
     const targets = this.list().filter((summary) => !summary.pinned)
     let freedBytes = 0
     for (const summary of targets) {
@@ -224,7 +224,7 @@ export class TaskStore {
       } catch {
         // 文件已丢失时仍继续移除索引项。
       }
-      await this.remove(summary.id)
+      await remove(summary.id)
     }
     return { removed: targets.length, freedBytes }
   }

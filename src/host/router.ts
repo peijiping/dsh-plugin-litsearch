@@ -52,6 +52,7 @@ import type {
 import { resolvePdfRoot } from './pdf/store.js'
 import { pickDirectory } from './picker.js'
 import type { TranslateFn } from './translate.js'
+import { activeRoundOf } from './tasks/rounds.js'
 import { resolveSessionWorkspace } from './workspace.js'
 
 /** dsh `webServer` 的最小结构接口（类型不在已安装的 dsh 包里）。 */
@@ -364,6 +365,7 @@ function readViewSnapshot(body: Record<string, unknown>, sessionId: string): Vie
     filters,
     pagePaperIds: readStringArray(body['pagePaperIds'], 'pagePaperIds', 200, 200) ?? [],
     selectedIds: readStringArray(body['selectedIds'], 'selectedIds', 1500, 200) ?? [],
+    roundId: readString(body['roundId'], 'roundId', 80),
     rev: readInt(body['rev'], 'rev', 0, 1_000_000_000) ?? 0,
   }
 }
@@ -666,6 +668,7 @@ async function handleTasks(
       const input = readCreateInput(await readJsonBody(req))
       const workspace = await resolveSessionWorkspace(sessionId)
       const task = await service.create({ ...input, origin: 'panel', workspace })
+      service.setCurrentTask(task.id, sessionId)
       ok(res, await service.getDetail(task.id), 201)
       return
     }
@@ -762,7 +765,7 @@ async function handleTasks(
       fail(res, 405, 'bad_request', 'activate 仅支持 POST')
       return
     }
-    const task = await service.activate(id, await resolveSessionWorkspace(sessionId))
+    const task = await service.activate(id, await resolveSessionWorkspace(sessionId), sessionId)
     ok(res, await service.getDetail(task.id))
     return
   }
@@ -836,15 +839,12 @@ async function handleTasks(
       }
       const body = await readJsonBody(req)
       const dir = readString(body['dir'], 'dir', 4096)
-      ok(
-        res,
-        await service.downloadPdf(
-          id,
-          paperId,
-          await resolveSessionWorkspace(sessionId),
-          dir,
-        ),
-      )
+      const commandId = readString(body['commandId'], 'commandId', 80)
+      const roundId = commandId === undefined ? null : activeRoundOf(await service.get(id))?.id ?? null
+      const workspace = await resolveSessionWorkspace(sessionId)
+      ok(res, await service.transfers.run(commandId, 'download', id, sessionId, roundId, paperId,
+        () => service.downloadPdf(id, paperId, workspace, dir)))
+
       return
     }
     if (op === 'fulltext') {
@@ -895,22 +895,16 @@ async function handleTasks(
       return
     }
     const targetFilesEditable = body['targetFilesEditable']
-    ok(
-      res,
-      await service.zoteroSync(
-        id,
-        ids === undefined || ids === null ? undefined : ids,
-        await resolveSessionWorkspace(sessionId),
-        target === undefined
-          ? undefined
-          : {
-              ...target,
-              ...(typeof targetFilesEditable === 'boolean'
-                ? { filesEditable: targetFilesEditable }
-                : {}),
-            },
-      ),
-    )
+    const commandId = readString(body['commandId'], 'commandId', 80)
+    const roundId = commandId === undefined ? null : activeRoundOf(await service.get(id))?.id ?? null
+    const workspace = await resolveSessionWorkspace(sessionId)
+    ok(res, await service.transfers.run(commandId, 'zotero', id, sessionId, roundId, ids?.length === 1 ? ids[0] : undefined,
+      () => service.zoteroSync(id, ids ?? undefined, workspace,
+        target === undefined ? undefined : {
+          ...target,
+          ...(typeof targetFilesEditable === 'boolean' ? { filesEditable: targetFilesEditable } : {}),
+        },
+      )))
     return
   }
 
@@ -935,7 +929,7 @@ async function handleTasks(
     await service.get(id)
     if (service.isRunning(id)) throw new SearchError('conflict', '任务正在运行')
     // 面板里主动重跑 = 用户正在这个任务里工作，把它设为「当前任务」。
-    service.setCurrentTask(id)
+    service.setCurrentTask(id, sessionId)
     const workspace = await resolveSessionWorkspace(sessionId)
     if (mode === 'more') {
       await service.run(id,mode,'panel',workspace)
@@ -1011,7 +1005,23 @@ export function createHandler(
         }
         const raw = url.searchParams.get('sinceRev') ?? '0'
         const sinceRev = Number(raw)
-        ok(res, await service.eventsSince(Number.isFinite(sinceRev) ? sinceRev : 0))
+        ok(res, await service.eventsSince(Number.isFinite(sinceRev) ? sinceRev : 0, readSessionId(req, url.searchParams)))
+        return
+      }
+
+      if (head === 'panel' && req.method === 'POST' && seg.length === 2 && seg[1]) {
+        const sessionId = readSessionId(req, url.searchParams)
+        if (sessionId === undefined) throw new SearchError('bad_request', '缺少会话 id')
+        const body = await readJsonBody(req)
+        if (typeof body['accepted'] !== 'boolean') throw new SearchError('bad_request', '缺少面板确认结果')
+        ok(res, await service.finishPanel(seg[1], sessionId, body['accepted'], readString(body['error'], 'error', 4000)))
+        return
+      }
+
+      if (head === 'transfer' && req.method === 'POST' && seg.length === 2 && seg[1]) {
+        await readJsonBody(req)
+        service.transfers.cancel(seg[1], readSessionId(req, url.searchParams))
+        ok(res, { canceled: true })
         return
       }
 
@@ -1043,8 +1053,8 @@ export function createHandler(
         }
         const sessionId = readSessionId(req, url.searchParams)
         if (sessionId === undefined) throw new SearchError('bad_request', '缺少会话 id')
-        service.saveViewSnapshot(sessionId, readViewSnapshot(await readJsonBody(req), sessionId))
-        ok(res, { saved: true })
+        const saved = service.saveViewSnapshot(sessionId, readViewSnapshot(await readJsonBody(req), sessionId))
+        ok(res, { saved })
         return
       }
 

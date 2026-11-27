@@ -19,6 +19,7 @@ const hooks = registerHooks({
 const { parseIdentifier } = await import('../src/search/lookup.ts')
 const { TaskService } = await import('../src/host/tasks/service.ts')
 const { createHandler } = await import('../src/host/router.ts')
+const { literatureTools } = await import('../src/host/tools.ts')
 const { getSettings, setSettingsReader, ROUTE_PREFIX, WRITE_HEADER } = await import('../src/search/config.ts')
 hooks.deregister()
 
@@ -308,7 +309,12 @@ test('补录重跑后仍在，本地 PDF 可重新关联，Zotero 部分写入�
   await route(`${paperPath}/material`, 'POST', PDF)
   assert.equal((await sync()).items[0].transfer.attachment.status, 'check')
   await restart()
-  assert.equal((await sync()).items[0].transfer.attachment.status, 'check')
+  const transferTool = literatureTools(service).find((tool) => tool.name === 'literature_transfer')
+  assert.ok(transferTool)
+  const retryAttachment = await transferTool.execute({
+    action: 'resumeAttachments', taskId: task.id, paperId, collection: 'Reading',
+  }, {})
+  assert.equal(JSON.parse(retryAttachment.text).items[0].transfer.attachment.status, 'check')
   await restart()
   const results = await Promise.all([sync(), sync()])
   for (const result of results) {
