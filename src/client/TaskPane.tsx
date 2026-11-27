@@ -41,6 +41,7 @@ import { paperSummary, paperText, papersSummary, papersText, taskSummary, taskTe
 import { markConsumed, usePendingDownloadCommands } from './downloadCommandStore'
 import { DownloadDialog, type BatchDownloadItem } from './DownloadDialog'
 import { NoticeBar } from './NoticeBar'
+import { RisTools } from './RisTools'
 import { ZoteroSyncDialog, type ZoteroCommandMeta } from './ZoteroSyncDialog'
 import { markZoteroConsumed, usePendingZoteroCommands } from './zoteroCommandStore'
 import { FullTextTab } from './FullTextTab'
@@ -367,7 +368,7 @@ export function TaskPane({
   /** 单篇下载也走批量弹窗：先确认保存目录，再开始下载。 */
   const downloadPaper = (paper: Paper): void => {
     if (taskId === null) return
-    const source = paper.hitSources[0]?.source ?? paper.source
+    const source = paper.hitSources[0]?.source ?? paper.source ?? 'ris'
     const meta = [paper.venue, paper.year === null ? '' : String(paper.year)]
       .filter((part) => part !== '')
       .join(' · ')
@@ -947,7 +948,7 @@ export function TaskPane({
           status: t(`task.status.${detail.status}`),
           date: formatDate(detail.createdAt),
         })
-  const statsLine = tpl(t('task.stats'), {
+  const statsLine = tpl(t('task.resultStats'), {
     raw: detail.stats.rawHits,
     deduped: detail.stats.deduped,
     loaded: detail.result.totalLoaded,
@@ -1251,6 +1252,10 @@ export function TaskPane({
               }}
             />
           )}
+          <RisTools key={`ris:${taskId}`} t={t} taskId={taskId} onCommitted={() => {
+            view.goToPage(0)
+            view.reload()
+          }} />
           <SupplementBox
             key={taskId}
             t={t}

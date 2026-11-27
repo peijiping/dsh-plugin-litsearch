@@ -1,10 +1,11 @@
 import { matchesIdentifier } from '../../search/lookup.js'
 import type { Paper, SearchTask } from '../../search/types.js'
 import { countScreening } from './states.js'
+import { applyRisImports } from './ris-imports.js'
 
 export function resultSupplements(task: SearchTask): Paper[] {
   const originals = new Map(task.supplements?.map((paper) => [paper.paperId, paper]))
-  return task.result.papers
+  return (task.result.roundPapers ?? task.result.papers)
     .filter((paper) => paper.supplement !== undefined)
     .map((paper) => originals.get(paper.paperId) ?? paper)
 }
@@ -33,6 +34,7 @@ export function applySupplements(
   task.result.papers = [...supplemented, ...remaining]
   task.stats.supplemented = supplemented.length
   task.stats.screening = countScreening(task.result.papers, task.states)
+  applyRisImports(task, task.result.papers)
 }
 
 

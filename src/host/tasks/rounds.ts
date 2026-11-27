@@ -123,7 +123,7 @@ export function roundStats(task: SearchTask): NonNullable<SearchRound['stats']> 
   return {
     rawHits: task.stats.rawHits,
     deduped: task.stats.deduped,
-    loaded: task.result.papers.length,
+    loaded: (task.result.roundPapers ?? task.result.papers).length,
     ...(task.stats.supplemented === undefined ? {} : { supplemented: task.stats.supplemented }),
     perQuery: { ...task.stats.perQuery },
   }

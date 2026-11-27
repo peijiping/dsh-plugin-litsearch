@@ -2,20 +2,33 @@ import { isDeepStrictEqual } from 'node:util'
 
 import { DEFAULT_TASK_MAX_ROUNDS } from '../../search/config.js'
 import { SearchError } from '../../search/errors.js'
-import type { SearchRound, SearchTask, TaskOrigin } from '../../search/types.js'
+import type { Paper, SearchRound, SearchTask, TaskOrigin } from '../../search/types.js'
 import { readRoundSearchResults } from './paper-groups.js'
 import { activeRoundOf, cloneConditions, roundStats, startRound } from './rounds.js'
 import { countScreening } from './states.js'
 import { applySupplements } from './supplements.js'
+import { applyRisImports } from './ris-imports.js'
+
+export function savedRoundPapers(task: SearchTask, round: SearchRound): Paper[] {
+  if (activeRoundOf(task)?.id === round.id) return task.result.roundPapers ?? task.result.papers
+  const { papers } = readRoundSearchResults(task, round)
+  const snapshot = round.resultSnapshot
+  if (!snapshot) return [...papers.values()]
+  for (const paper of snapshot.papers) papers.set(paper.paperId, paper)
+  return snapshot.paperIds.flatMap((id) => {
+    const paper = papers.get(id)
+    return paper ? [paper] : []
+  })
+}
 
 export function archiveRoundResults(task: SearchTask): void {
   const round = activeRoundOf(task)
   if (!round) return
-  const { papers, sources, fetchedAt } = task.result
+  const { roundPapers = task.result.papers, sources, fetchedAt } = task.result
   const fromEvidence = readRoundSearchResults(task, round).papers
   round.resultSnapshot = {
-    paperIds: papers.map((paper) => paper.paperId),
-    papers: papers.filter((paper) => !isDeepStrictEqual(fromEvidence.get(paper.paperId), paper)),
+    paperIds: roundPapers.map((paper) => paper.paperId),
+    papers: roundPapers.filter((paper) => !isDeepStrictEqual(fromEvidence.get(paper.paperId), paper)),
     sources,
     fetchedAt,
     steps: task.steps,
@@ -39,6 +52,7 @@ export function createDraftRound(task: SearchTask, source: SearchRound, origin: 
   }
   const round = startRound(task, origin, DEFAULT_TASK_MAX_ROUNDS)
   round.status = 'draft'
+  applyRisImports(task)
   round.stats = roundStats(task)
 }
 
@@ -81,6 +95,6 @@ export function selectRoundResults(task: SearchTask, round: SearchRound): void {
       (paper) => paper.supplement !== undefined && cutoff !== undefined && paper.supplement.addedAt <= cutoff,
     )
     applySupplements(task, restored, supplements)
-  }
+  } else applyRisImports(task)
   round.resultSnapshot = undefined
 }

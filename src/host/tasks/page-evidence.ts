@@ -92,7 +92,7 @@ export function sameConditions(round: SearchRound, task: SearchTask): boolean {
   return fingerprints(newEvidence(task.conditions).runs) === fingerprints(round.evidence?.runs ?? [])
 }
 
-export function filterReasons(paper: PaperRecord, c: TaskConditions): string[] {
+export function filterReasons(paper: Pick<PaperRecord, 'year' | 'openAccess' | 'type' | 'language'>, c: TaskConditions): string[] {
   const reasons: string[] = []
   if (c.yearFrom !== undefined && (paper.year ?? 0) < c.yearFrom) reasons.push('yearFrom')
   if (c.yearTo !== undefined && (paper.year ?? Infinity) > c.yearTo) reasons.push('yearTo')

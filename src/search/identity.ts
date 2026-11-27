@@ -8,7 +8,7 @@
  * 命中源数、最佳排位、被引数与年份依次作为并列决胜。
  */
 
-import type { Paper, PaperHit, PaperIds, PaperRecord, SourceId } from './types.js'
+import type { Paper, PaperHit, PaperIds, PaperMetadata, PaperRecord, SourceId } from './types.js'
 import { SOURCE_IDS } from './types.js'
 import { bestPdfUrl, mergeOaLocations } from './oa.js'
 
@@ -34,6 +34,8 @@ const RRF_K = 60
 /** 标题键参与合并的最小长度（归一化后的字符数）。 */
 const MIN_TITLE_KEY = 12
 
+export const PAPER_ID_FIELDS = ['doi', 'pmid', 'pmcid', 'arxivId'] as const
+
 export interface RankedHit {
   record: PaperRecord
   source: SourceId
@@ -51,7 +53,7 @@ export function normalizeTitle(title: string): string {
 }
 
 /** 单条记录的身份键；无法可靠识别时回落到「源 + 内部 id」，保证不误合并。 */
-export function identityKey(record: PaperRecord): string {
+export function identityKey(record: PaperMetadata & { source?: SourceId }): string {
   if (record.ids.doi !== '') return `doi:${record.ids.doi}`
   if (record.ids.pmid !== '') return `pmid:${record.ids.pmid}`
   if (record.ids.pmcid !== '') return `pmcid:${record.ids.pmcid}`
@@ -130,8 +132,9 @@ export function comparePapers(a: Paper, b: Paper): number {
   if (score !== 0) return score
   const sources = b.hitSources.length - a.hitSources.length
   if (sources !== 0) return sources
-  const best = bestRank(a) - bestRank(b)
-  if (best !== 0) return best
+  const aRank = bestRank(a)
+  const bRank = bestRank(b)
+  if (aRank !== bRank) return aRank - bRank
   const citations = (b.citedBy ?? -1) - (a.citedBy ?? -1)
   if (citations !== 0) return citations
   return (b.year ?? 0) - (a.year ?? 0)

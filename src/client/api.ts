@@ -24,6 +24,10 @@ import type {
   PdfStatus,
   ProbeResult,
   ResultsPage,
+  RisImportBatchSummary,
+  RisImportIssue,
+  RisImportMetadata,
+  RisImportReport,
   SearchRound,
   SortMode,
   SourceId,
@@ -339,6 +343,23 @@ export function supplementPaper(
   signal?: AbortSignal,
 ): Promise<PaperSupplementResult> {
   return request(taskPath(taskId, '/supplement'), { ...writeInit('POST', { identifier }), signal })
+}
+
+export function listRisBatches(taskId: string, signal?: AbortSignal) {
+  return request<(RisImportBatchSummary & { issues: RisImportIssue[] })[]>(taskPath(taskId, '/ris'), { signal })
+}
+
+export function importRisFile(
+  taskId: string,
+  input: RisImportMetadata & { content: string },
+  fingerprint?: string,
+  signal?: AbortSignal,
+): Promise<RisImportReport> {
+  const operation = fingerprint === undefined ? 'preview' : 'commit'
+  return request<RisImportReport>(taskPath(taskId, `/ris/${operation}`), {
+    ...writeInit('POST', { ...input, fingerprint }),
+    signal,
+  })
 }
 
 export function associatePaperPdf(taskId: string, paperId: string, file: File): Promise<PaperDetail> {

@@ -4,6 +4,7 @@ import {
   identityKey,
   makePaperId,
   normalizeTitle,
+  PAPER_ID_FIELDS,
   type RankedHit,
 } from '../../search/identity.js'
 import type { MatchEvidence, PaperGroup, Review } from '../../search/evidence.js'
@@ -13,7 +14,7 @@ import { digest, filterReasons } from './page-evidence.js'
 import { activeRoundOf } from './rounds.js'
 import { reportRecord } from './task-migration.js'
 
-const idFields = ['doi', 'pmid', 'pmcid', 'arxivId'] as const
+const idFields = PAPER_ID_FIELDS
 type IdentityRecord = NonNullable<SearchTask['legacyPaperIdentities']>[string]
 
 function keys(r: IdentityRecord): [MatchEvidence['field'], string][] {
@@ -81,7 +82,8 @@ function components(ids: string[], records: Record<string, PaperRecord>) {
 export function resolvePaperId(task: SearchTask, id: string): string {
   if (task.result.papers.some((paper) => paper.paperId === id)) return id
   const index = activeRoundOf(task)?.index ?? Infinity
-  return task.paperAliases?.find((a) => a.from === id && Number(a.sinceRound.slice(1)) <= index)?.to ?? id
+  const resolved = task.paperAliases?.find((a) => a.from === id && Number(a.sinceRound.slice(1)) <= index)?.to ?? id
+  return task.result.risAliases?.[resolved] ?? resolved
 }
 
 function collectRoundHits(task: SearchTask, round: SearchRound) {
@@ -430,9 +432,10 @@ export function rebuildRound(task: SearchTask, round: SearchRound, supplements?:
   task.result.sources = sources
   applySupplements(task, saved, supplements)
   // 手工补录题录占用自己的稳定 ID；搜索结果被其覆盖时，旧链接也要能定位。
+  const roundPapers = task.result.roundPapers ?? task.result.papers
   for (const paper of saved) {
-    if (task.result.papers.some((entry) => entry.paperId === paper.paperId)) continue
-    const supplement = task.result.papers.find(
+    if (roundPapers.some((entry) => entry.paperId === paper.paperId)) continue
+    const supplement = roundPapers.find(
       (entry) =>
         entry.supplement &&
         (!entry.ids.doi || !paper.ids.doi || entry.ids.doi === paper.ids.doi) &&

@@ -26,6 +26,7 @@ hooks.deregister()
 const DOI = '10.5555/test'
 const SEARCHED_DOI = '10.5555/already-in-results'
 const COLLECTION = 'AAAA2222'
+const CONCURRENT_COLLECTION = 'BBBB3333'
 const PDF = Buffer.from('%PDF-1.4\nstartxref\n0\n%%EOF\n')
 
 async function body(req: IncomingMessage): Promise<Buffer> {
@@ -98,6 +99,7 @@ test('补录重跑后仍在，本地 PDF 可重新关联，Zotero 部分写入�
   type Item = { key: string; version: number; data: Record<string, unknown> }
   const items = new Map<string, Item>()
   let failCollection = true
+  let conflictCollection = true
   let failUpload = true
   let loseRegisterResponse = true
   let authorizeCount = 0
@@ -193,6 +195,13 @@ test('补录重跑后仍在，本地 PDF 可重新关联，Zotero 部分写入�
       if (failCollection) {
         failCollection = false
         res.writeHead(500).end()
+      } else if (conflictCollection) {
+        conflictCollection = false
+        item.data.collections = [CONCURRENT_COLLECTION]
+        item.version += 1
+        res.writeHead(412).end()
+      } else if (req.headers['if-unmodified-since-version'] !== String(item.version)) {
+        res.writeHead(412).end()
       } else {
         Object.assign(item.data, change)
         item.version += 1
@@ -299,6 +308,7 @@ test('补录重跑后仍在，本地 PDF 可重新关联，Zotero 部分写入�
   assert.equal(afterCollection.parent.status, 'done')
   assert.equal(afterCollection.collection, 'done')
   assert.equal(afterCollection.attachment.status, 'pending')
+  assert.deepEqual(items.get(afterCollection.parent.key!)?.data.collections, [CONCURRENT_COLLECTION, COLLECTION])
 
   const first = await route(`${paperPath}/material`, 'POST', PDF)
   const repeated = await route(`${paperPath}/material`, 'POST', PDF)

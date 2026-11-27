@@ -43,7 +43,7 @@ export function parseIdentifier(input: string): PaperIdentifier {
   throw new SearchError('bad_request', '请输入有效的 DOI、PMID 或 arXiv ID')
 }
 
-export function matchesIdentifier(paper: PaperRecord, identifier: PaperIdentifier): boolean {
+export function matchesIdentifier(paper: Pick<Paper, 'source' | 'ids' | 'doi' | 'arxivVersionId'>, identifier: PaperIdentifier): boolean {
   switch (identifier.kind) {
     case 'doi':
       // arXiv 条目的 DOI 可能指向期刊正式版，不能据此用预印本替代该 DOI 的注册题录。

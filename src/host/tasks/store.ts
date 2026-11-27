@@ -153,13 +153,13 @@ export class TaskStore {
   }
 
   /** 页记录与游标同次替换；对可见状态只发布成功写入的版本。 */
-  async checkpoint(task: SearchTask, change: (draft: SearchTask) => void): Promise<void> {
+  async checkpoint(task: SearchTask, change: (draft: SearchTask) => void | false): Promise<void> {
     await this.enqueue(async () => {
       for (;;) {
         if (this.cached(task.id) !== task) throw new Error('任务已删除或替换')
         const rev = task.rev
         const draft = structuredClone(task)
-        change(draft)
+        if (change(draft) === false) return
         draft.rev++
         draft.updatedAt = new Date().toISOString()
         await this.backupLegacyFile(task.id)
@@ -333,7 +333,16 @@ export class TaskStore {
 }
 
 function serialize(task: SearchTask): string {
-  return JSON.stringify({ version: TASK_FILE_VERSION, task: { ...task, rounds: trimRounds(roundsOf(task)) } })
+  // 任务级导入由批次恢复，磁盘只保存一份未叠加 RIS 的当前轮次题录。
+  const { roundPapers, risAliases: _aliases, ...result } = task.result
+  return JSON.stringify({
+    version: TASK_FILE_VERSION,
+    task: {
+      ...task,
+      result: roundPapers === undefined ? result : { ...result, papers: roundPapers },
+      rounds: trimRounds(roundsOf(task)),
+    },
+  })
 }
 
 async function atomicWrite(file: string, body: string): Promise<void> {

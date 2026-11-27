@@ -331,7 +331,9 @@ export function ZoteroSyncDialog({
           ? tpl(t('zotero.dialog.pendingPdf'), { n: pendingPdf })
           : failed === 0
           ? tpl(t('zotero.dialog.done'), { n: synced })
-          : tpl(t('zotero.dialog.partial'), { saved: synced, failed })
+          : pendingPdf > 0
+            ? tpl(t('zotero.dialog.partialWithPendingPdf'), { saved: synced + pendingPdf, pendingPdf, failed })
+            : tpl(t('zotero.dialog.partial'), { saved: synced, failed })
 
   const closeIdle = (): void => {
     if (running) return
@@ -443,6 +445,7 @@ export function ZoteroSyncDialog({
           <span style={{ color: PHASE_COLOR.synced }}>
             {tpl(t('zotero.dialog.synced'), { n: synced })}
           </span>
+          {pendingPdf > 0 && <span>{tpl(t('zotero.dialog.pendingPdfCount'), { n: pendingPdf })}</span>}
           <span style={{ color: PHASE_COLOR.syncing }}>
             {tpl(t('zotero.dialog.syncingCount'), { n: syncing })}
           </span>

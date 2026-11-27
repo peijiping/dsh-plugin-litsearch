@@ -53,6 +53,7 @@ import { resolvePdfRoot } from './pdf/store.js'
 import { pickDirectory } from './picker.js'
 import type { TranslateFn } from './translate.js'
 import { activeRoundOf } from './tasks/rounds.js'
+import { MAX_RIS_BYTES } from './tasks/ris-parser.js'
 import { resolveSessionWorkspace } from './workspace.js'
 
 /** dsh `webServer` 的最小结构接口（类型不在已安装的 dsh 包里）。 */
@@ -264,8 +265,8 @@ function readBody(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<Buffer> {
   })
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const raw = (await readBody(req)).toString('utf8')
+async function readJsonBody(req: IncomingMessage, max?: number): Promise<Record<string, unknown>> {
+  const raw = (await readBody(req, max)).toString('utf8')
   if (raw.trim() === '') return {}
   let parsed: unknown
   try {
@@ -779,6 +780,42 @@ async function handleTasks(
     const papers = readAnnotations(body['papers'])
     const expectedRev = readInt(body['rev'], 'rev', 1, Number.MAX_SAFE_INTEGER)
     ok(res, await service.annotate(id, papers, expectedRev))
+    return
+  }
+
+  if (action === 'ris') {
+    if (req.method === 'GET' && seg.length === 3) {
+      ok(res, await service.risBatches(id))
+      return
+    }
+    const operation = seg[3]
+    if (req.method !== 'POST' || seg.length !== 4 || (operation !== 'preview' && operation !== 'commit')) {
+      fail(res, 405, 'bad_request', 'RIS 批次支持 GET，预览和确认仅支持 POST')
+      return
+    }
+    const maxBase64 = Math.ceil(MAX_RIS_BYTES / 3) * 4
+    const maxRequest = maxBase64 + 32_768
+    if (Number(req.headers['content-length']) > maxRequest) throw new SearchError('bad_request', 'RIS 文件超过 5 MiB')
+    const body = await readJsonBody(req, maxRequest)
+    const encoded = body['content']
+    if (typeof encoded !== 'string' || encoded.length > maxBase64 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded) || encoded.length % 4 !== 0) {
+      throw new SearchError('bad_request', 'RIS 文件内容无效或过大')
+    }
+    const database = readString(body['database'], 'database', 200) ?? ''
+    const fileName = readString(body['fileName'], 'fileName', 250) ?? ''
+    const searchedAt = readString(body['searchedAt'], 'searchedAt', 10) ?? ''
+    if (!database || !fileName) throw new SearchError('bad_request', '请填写来源数据库并选择 RIS 文件')
+    if (searchedAt && (!/^\d{4}-\d{2}-\d{2}$/u.test(searchedAt) || !Number.isFinite(Date.parse(searchedAt)) ||
+        new Date(searchedAt).toISOString().slice(0, 10) !== searchedAt)) {
+      throw new SearchError('bad_request', '请输入有效的检索日期')
+    }
+    const fingerprint = operation === 'commit' ? readString(body['fingerprint'], 'fingerprint', 64) : undefined
+    if (operation === 'commit' && !/^[\da-f]{64}$/u.test(fingerprint ?? '')) {
+      throw new SearchError('bad_request', '请先预览 RIS 文件')
+    }
+    ok(res, await service.importRis(id, Buffer.from(encoded, 'base64'), {
+      fileName, database, searchedAt, query: readString(body['query'], 'query', 5000) ?? '',
+    }, fingerprint))
     return
   }
 

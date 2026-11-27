@@ -283,7 +283,7 @@ export function resolveDownloadScope(
     items.push({
       paperId: id,
       title: paper.title,
-      source: paper.hitSources[0]?.source ?? paper.source,
+      source: paper.hitSources[0]?.source ?? paper.source ?? 'ris',
       ...(meta === '' ? {} : { meta }),
     })
   }

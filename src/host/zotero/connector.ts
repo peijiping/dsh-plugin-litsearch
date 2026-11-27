@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
+import { publicationFormat } from '../../search/publication-type.js'
 
 import type {
   Paper,
@@ -376,18 +377,22 @@ export function toZoteroItem(
   tags: readonly string[],
   defaultTag: string,
 ): Record<string, unknown> {
+  const format = publicationFormat(paper.type)
   const item: Record<string, unknown> = {
     id: paper.paperId,
-    itemType: paper.type === '' ? 'journalArticle' : mapItemType(paper.type),
+    itemType: format.zotero,
     title: paper.title,
     creators: paper.authors.map((name) => {
+      const comma = name.indexOf(',')
+      if (comma >= 0) {
+        return { creatorType: 'author', lastName: name.slice(0, comma).trim(), firstName: name.slice(comma + 1).trim() }
+      }
       const parts = name.trim().split(/\s+/u)
       const lastName = parts.length > 1 ? parts.at(-1) ?? name : name
       const firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : ''
       return { creatorType: 'author', firstName, lastName }
     }),
-    date: paper.year === null ? '' : String(paper.year),
-    publicationTitle: paper.venue,
+    date: paper.date || (paper.year === null ? '' : String(paper.year)),
     DOI: paper.doi,
     url: paper.url,
     abstractNote: paper.abstract,
@@ -397,6 +402,10 @@ export function toZoteroItem(
       paper.ids.arxivId === '' ? '' : `arXiv: ${paper.supplement?.kind === 'arxiv' ? paper.supplement.id : paper.ids.arxivId}`,
     ].filter(Boolean).join('\n'),
   }
+  if (format.zoteroVenue) item[format.zoteroVenue] = paper.venue
+  if (paper.volume && ['journalArticle', 'book', 'bookSection', 'conferencePaper'].includes(format.zotero)) item.volume = paper.volume
+  if (paper.issue && ['journalArticle', 'conferencePaper'].includes(format.zotero)) item.issue = paper.issue
+  if (paper.pages && ['journalArticle', 'bookSection', 'conferencePaper', 'report'].includes(format.zotero)) item.pages = paper.pages
   const merged = new Set<string>()
   for (const tag of [...tags, defaultTag]) {
     const value = tag.trim()
@@ -404,16 +413,6 @@ export function toZoteroItem(
   }
   if (merged.size > 0) item['tags'] = [...merged].map((tag) => ({ tag }))
   return item
-}
-
-function mapItemType(type: string): string {
-  const value = type.toLowerCase()
-  if (value.includes('review')) return 'journalArticle'
-  if (value.includes('preprint') || value.includes('arxiv') || value === 'posted-content') return 'preprint'
-  if (value.includes('conference') || value.includes('proceedings')) return 'conferencePaper'
-  if (value.includes('book')) return 'book'
-  if (value.includes('dataset')) return 'dataset'
-  return 'journalArticle'
 }
 
 function newSessionID(): string {

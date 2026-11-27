@@ -3,8 +3,9 @@ import type { PaperRecord, SearchTask } from '../../search/types.js'
 import { activeRoundOf, finishRound } from './rounds.js'
 import { finalizeSteps } from './steps.js'
 import { clearInvalidSupplementOrigins } from './supplements.js'
+import { applyRisImports } from './ris-imports.js'
 
-export const TASK_FILE_VERSION = 3
+export const TASK_FILE_VERSION = 4
 const LEGACY_ABSTRACT_LIMIT = 800
 
 export function readTaskFile(text: string): { version: number; task: SearchTask } {
@@ -47,9 +48,9 @@ export function migrateTask(task: SearchTask, version: number): void {
       paper.title = europePmcTitle(paper.title) || paper.title
     }
   }
-  if (version < TASK_FILE_VERSION && task.result.papers.length) {
+  if (version < 3 && task.result.papers.length) {
     task.legacyPaperIdentities ??= Object.fromEntries(
-      task.result.papers.map((paper) => [
+      task.result.papers.flatMap((paper) => paper.source === undefined ? [] : [[
         paper.paperId,
         {
           source: paper.source,
@@ -58,10 +59,11 @@ export function migrateTask(task: SearchTask, version: number): void {
           ids: { ...paper.ids },
           url: paper.url,
         },
-      ]),
+      ]]),
     )
   }
   clearInvalidSupplementOrigins(task)
+  applyRisImports(task)
 }
 
 export function reportRecord(record: PaperRecord): PaperRecord {

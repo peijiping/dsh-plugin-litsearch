@@ -86,14 +86,6 @@ export class ZoteroResume {
       const record = toZoteroItem(paper, tags, defaultTag)
       // Local API 使用各类型自己的字段名。
       delete record.id
-      if (record.itemType !== 'journalArticle') {
-        const venue = record.publicationTitle
-        delete record.publicationTitle
-        if (record.itemType === 'conferencePaper') record.proceedingsTitle = venue
-        if (record.itemType === 'preprint') record.repository = venue
-        if (record.itemType === 'book') record.publisher = venue
-        if (record.itemType === 'dataset') record.repository = venue
-      }
       await this.create(key, record)
       item = await this.item(key)
       if (item === null) throw new Error('Zotero 已返回写入成功，暂时无法读回父条目')
@@ -143,16 +135,30 @@ export class ZoteroResume {
     if (key !== undefined && !asArray(parent.data.collections).includes(key)) {
       transfer.collection = 'check'
       await save(transfer)
-      await this.write(`${this.library}/items/${parent.key}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'If-Unmodified-Since-Version': String(parent.version),
-        },
-        body: JSON.stringify({ collections: [...asArray(parent.data.collections), key] }),
-      })
-      const verified = await this.item(parent.key)
-      if (verified === null || !asArray(verified.data.collections).includes(key)) {
+      let current: Item | null = parent
+      // Zotero 或其他工具可能在题录创建后立即编辑它。遇到版本冲突时按最新分类合并。
+      for (let attempt = 0; attempt < 3 && current !== null; attempt++) {
+        const collections = asArray(current.data.collections)
+        if (collections.includes(key)) break
+        try {
+          await this.write(`${this.library}/items/${parent.key}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'If-Unmodified-Since-Version': String(current.version),
+            },
+            body: JSON.stringify({ collections: [...collections, key] }),
+          })
+        } catch (error) {
+          if (!(error instanceof ZoteroResponseError && error.status === 412)) throw error
+          current = await this.item(parent.key)
+          if (attempt === 2 && current !== null && !asArray(current.data.collections).includes(key)) throw error
+          continue
+        }
+        current = await this.item(parent.key)
+        break
+      }
+      if (current === null || !asArray(current.data.collections).includes(key)) {
         throw new Error('暂时无法核验 Zotero 分类是否已写入')
       }
     }
@@ -272,14 +278,21 @@ export class ZoteroResume {
   }
 }
 
-class ZoteroResponseError extends Error {}
+class ZoteroResponseError extends Error {
+  readonly status?: number
+
+  constructor(message: string, status?: number) {
+    super(message)
+    this.status = status
+  }
+}
 
 async function checkResponse(response: Response): Promise<void> {
   if (!response.ok) {
     await response.body?.cancel()
     const message = `Zotero 请求失败（HTTP ${response.status}）`
     if (response.status >= 500) throw new Error(message)
-    throw new ZoteroResponseError(message)
+    throw new ZoteroResponseError(message, response.status)
   }
 }
 

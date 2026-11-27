@@ -43,6 +43,8 @@ import type {
   ProbeResult,
   QueryBlock,
   ResultsPage,
+  RisImportMetadata,
+  RisImportReport,
   SearchRound,
   SearchTask,
   SortMode,
@@ -93,7 +95,9 @@ import { filterPapers, sortPapers, type PaperFilter } from './filter.js'
 import type { Review, RoundReport } from '../../search/evidence.js'
 import { digest, sameConditions } from './page-evidence.js'
 import { rebuildRound, resolvePaperId } from './paper-groups.js'
-import { createDraftRound, selectRoundResults } from './round-results.js'
+import { createDraftRound, savedRoundPapers, selectRoundResults } from './round-results.js'
+import { applyRisImports, planRisImport, risBatchSummary, sameRisIdentity } from './ris-imports.js'
+import { parseRis } from './ris-parser.js'
 import { activeRoundOf, cloneConditions, finishRound, hasRoundResults } from './rounds.js'
 import { TaskRunner, type PageTarget } from './runner.js'
 import { computeStats } from './stats.js'
@@ -1249,9 +1253,56 @@ export class TaskService {
       supplement: { ...identifier, addedAt: new Date().toISOString() },
     }
     if (savedEntry === undefined) current.supplements = [entry, ...(current.supplements ?? [])]
-    applySupplements(current, current.result.papers, [entry, ...supplements])
+    applySupplements(current, current.result.roundPapers ?? current.result.papers, [entry, ...supplements])
     await this.saveResearchChange(current)
     return { status: 'added', paper: findPaper(current, entry.paperId) }
+  }
+
+  async risBatches(id: string) {
+    const task = await this.get(id)
+    return (task.risImports ?? []).map((batch) => ({ ...risBatchSummary(batch), issues: batch.issues }))
+  }
+
+  async importRis(id: string, bytes: Buffer, metadata: RisImportMetadata, fingerprint?: string): Promise<RisImportReport> {
+    const task = await this.get(id)
+    const parsed = parseRis(bytes)
+    if (fingerprint !== undefined && parsed.fingerprint !== fingerprint) {
+      throw new SearchError('conflict', 'RIS 文件已更换，请重新预览')
+    }
+    const importedAt = new Date().toISOString()
+    const previous = () => task.risImports?.find((batch) => batch.id === parsed.fingerprint)
+    const plan = (current: SearchTask) => planRisImport(current, parsed, metadata, importedAt,
+      current.rounds.filter((round) => round.id !== activeRoundOf(current)?.id)
+        .flatMap((round) => savedRoundPapers(current, round)),
+    )
+    const report = (batch: ReturnType<typeof planRisImport>, alreadyImported: boolean): RisImportReport => ({
+      fingerprint: batch.id,
+      rev: task.rev,
+      total: batch.total,
+      added: alreadyImported ? 0 : batch.added,
+      matched: alreadyImported ? batch.rows.length : batch.matched,
+      issues: batch.issues,
+      alreadyImported,
+    })
+    const existing = previous()
+    if (existing) return report(existing, true)
+    if (fingerprint === undefined) return report(plan(task), false)
+    if (!parsed.rows.length) throw new SearchError('bad_request', '没有可导入的有效 RIS 题录')
+
+    let committed: ReturnType<typeof planRisImport> | undefined
+    await this.store.checkpoint(task, (draft) => {
+      if (draft.risImports?.some((batch) => batch.id === parsed.fingerprint)) return false
+      committed = plan(draft)
+      draft.risImports = [...(draft.risImports ?? []), committed]
+      applyRisImports(draft)
+    })
+    if (!committed) {
+      const duplicate = previous()
+      if (duplicate) return report(duplicate, true)
+      throw new SearchError('conflict', '未能确认 RIS 导入结果，请刷新任务')
+    }
+    this.events.publish(toSummary(task))
+    return report(committed, false)
   }
 
   async associatePdf(id: string, paperId: string, bytes: Buffer, workspace?: string, expectedRoundId?: string | null): Promise<PaperDetail> {
@@ -1336,6 +1387,14 @@ export class TaskService {
     }
     const state = task.states[paperId]
     if (state !== undefined) detail.state = state
+    if (paper.risBatchIds?.length) {
+      detail.searchOrigins = searchOriginsOf(task, paper)
+      detail.risOrigins = (task.risImports ?? []).flatMap((batch) =>
+        batch.rows.filter((row) => row.paperId === paperId).map(({ line, rawType }) => ({
+          ...risBatchSummary(batch), line, rawType,
+        })),
+      )
+    }
     return detail
   }
 
@@ -1961,6 +2020,29 @@ function inheritStates(base: SearchTask): Record<string, PaperState> {
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min
   return Math.min(Math.max(Math.floor(value), min), max)
+}
+
+function searchOriginsOf(task: SearchTask, paper: Paper): NonNullable<PaperDetail['searchOrigins']> {
+  return task.rounds.flatMap((round) => {
+    const candidates = savedRoundPapers(task, round).filter((entry) => entry.matchedQueries.length > 0)
+    const exact = candidates.find((entry) => entry.paperId === paper.paperId)
+    const matches = exact ? [exact] : candidates.filter((entry) => sameRisIdentity(entry, paper))
+    if (matches.length !== 1) return []
+    const matched = matches[0]
+    const position = { roundId: round.id, roundIndex: round.index }
+    const members = new Set(round.evidence?.groups.find((group) => group.paperId === matched.paperId)?.members)
+    if (!members.size) return matched.hitSources.map((hit) => ({ ...position, source: hit.source }))
+    return (round.evidence?.runs ?? []).flatMap((run) => {
+      if (!run.pages.some((page) => page.committed?.hits.some((hit) => hit.status === 'kept' && members.has(hit.recordId)))) {
+        return []
+      }
+      return [{
+        ...position,
+        source: run.source,
+        query: round.conditions.queries.find((query) => query.id === run.queryId)?.text,
+      }]
+    })
+  })
 }
 
 function findPaper(task: SearchTask, paperId: string): Paper {

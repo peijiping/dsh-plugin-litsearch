@@ -109,9 +109,7 @@ export interface PdfAttempt {
   ms: number
 }
 
-/** provider 归一化后的论文记录（尚无跨源身份）。 */
-export interface PaperRecord {
-  source: SourceId
+export interface PaperMetadata {
   /** 数据源内部 id（如 OpenAlex Work id、Crossref DOI）。 */
   sourceId: string
   ids: PaperIds
@@ -134,6 +132,15 @@ export interface PaperRecord {
   /** 多源 OA 位置（含直链、网页全文、落地页）；缺省表示上游只给了 `pdfUrl`。 */
   oaLocations?: OaLocation[]
   type: string
+  date?: string
+  volume?: string
+  issue?: string
+  pages?: string
+}
+
+/** provider 归一化后的论文记录（尚无跨源身份）。 */
+export interface PaperRecord extends PaperMetadata {
+  source: SourceId
 }
 
 /** 一次命中：某个数据源在某个检索式里的排位。 */
@@ -144,7 +151,8 @@ export interface PaperHit {
 }
 
 /** 合并后的论文条目（任务结果的最小单位为它）。 */
-export interface Paper extends PaperRecord {
+export interface Paper extends PaperMetadata {
+  source?: SourceId
   /** 稳定身份键的散列，跨任务/跨检索一致。 */
   paperId: string
   /** 旧任务中的摘要可能在写盘时截断，无法确认已保存文本是否完整。 */
@@ -153,6 +161,44 @@ export interface Paper extends PaperRecord {
   /** 命中该论文的检索式 id。 */
   matchedQueries: string[]
   supplement?: { kind: PaperIdentifierKind; id: string; addedAt: string }
+  risBatchIds?: string[]
+}
+
+export interface RisImportMetadata {
+  fileName: string
+  database: string
+  searchedAt: string
+  query: string
+}
+
+export interface RisImportIssue {
+  record: number
+  line: number
+  code: 'missingType' | 'missingTitle' | 'missingEnd'
+}
+
+export interface RisImportBatchSummary extends RisImportMetadata {
+  id: string
+  importedAt: string
+  total: number
+  added: number
+  matched: number
+  failed: number
+}
+
+export interface RisImportBatch extends RisImportBatchSummary {
+  issues: RisImportIssue[]
+  rows: { line: number; rawType: string; paperId: string; metadata: PaperMetadata }[]
+}
+
+export interface RisImportReport {
+  fingerprint: string
+  rev: number
+  total: number
+  added: number
+  matched: number
+  issues: RisImportIssue[]
+  alreadyImported: boolean
 }
 
 export type PaperIdentifierKind = 'doi' | 'pmid' | 'arxiv'
@@ -383,6 +429,9 @@ export interface TaskStats {
 
 export interface TaskResult {
   papers: Paper[]
+  /** 当前在线轮次与手工补录的投影，供切换轮次与归档时还原。 */
+  roundPapers?: Paper[]
+  risAliases?: Record<string, string>
   sources: SourceStatus[]
   fetchedAt?: string
 }
@@ -473,6 +522,7 @@ export interface SearchTask {
   stats: TaskStats
   result: TaskResult
   supplements?: Paper[]
+  risImports?: RisImportBatch[]
   /** paperId → 筛选状态。 */
   states: Record<string, PaperState>
   /**
@@ -777,6 +827,8 @@ export interface PaperDetail {
   taskTitle: string
   rev: number
   paper: Paper
+  searchOrigins?: { roundId: string; roundIndex: number; source: SourceId; query?: string }[]
+  risOrigins?: (RisImportBatchSummary & { line: number; rawType: string })[]
   state?: PaperState
   groups: TaskGroup[]
   /** PDF 实际保存目录（供面板悬停提示）。 */

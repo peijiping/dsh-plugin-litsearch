@@ -43,6 +43,7 @@ import {
   zoteroActionUi,
 } from './pdfActions'
 import { PreviewFrame } from './PreviewFrame'
+import { RisOriginMetadata } from './RisTools'
 import { ZoteroSyncDialog } from './ZoteroSyncDialog'
 import { subscribeTaskSummary } from './taskListStore'
 import {
@@ -374,10 +375,23 @@ export function PaperPane({
           )}
           {meta !== '' && <div style={metaStyle}>{meta}</div>}
 
-          {sourceLine !== '' && <div style={SOURCE_LINE_STYLE}>{sourceLine}</div>}
+          {sourceLine !== '' && !detail.searchOrigins?.length && <div style={SOURCE_LINE_STYLE}>{sourceLine}</div>}
+          {detail.searchOrigins?.map((origin, index) => (
+            <div key={origin.roundId + ':' + index} style={{ ...SOURCE_LINE_STYLE, overflowWrap: 'anywhere' }}>
+              {tpl(t('ris.onlineOrigin'), { source: t('source.' + origin.source), round: origin.roundIndex })}
+              {origin.query && ' · ' + origin.query}
+            </div>
+          ))}
           {paper.supplement !== undefined && (
             <div style={metaStyle}>{t('supplement.badge')} · {paper.supplement.id}</div>
           )}
+          {detail.risOrigins?.map((batch) => (
+            <details key={batch.id + ':' + batch.line} style={{ ...metaStyle, overflowWrap: 'anywhere' }}>
+              <summary>{t('source.ris')} · {batch.database} · {batch.fileName}</summary>
+              <div>{tpl(t('ris.originLine'), { line: batch.line, rawType: batch.rawType })}</div>
+              <RisOriginMetadata t={t} batch={batch} />
+            </details>
+          ))}
         </article>
 
         <div style={CONTROL_STYLE}>

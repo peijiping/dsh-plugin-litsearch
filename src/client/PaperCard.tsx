@@ -291,6 +291,9 @@ export function PaperCard({
           {paper.supplement !== undefined && (
             <span style={SUPPLEMENT_BADGE_STYLE}>{t('supplement.badge')}</span>
           )}
+          {Boolean(paper.risBatchIds?.length) && (
+            <span style={INFO_BADGE_STYLE}>{t('source.ris')}</span>
+          )}
           <span style={{ ...INFO_BADGE_STYLE, color: SCREENING_COLOR[screening] }}>
             {t(`screening.${screening}`)}
           </span>

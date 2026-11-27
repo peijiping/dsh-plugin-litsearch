@@ -16,7 +16,7 @@ const ABSTRACT_LIMIT = 800
 export function paperText(t: Translate, paper: Paper): string {
   const lines = [
     tpl(t('cmp.paper.header'), {
-      source: t(`source.${paper.source}`),
+      source: t(`source.${paper.source ?? 'ris'}`),
       title: paper.title,
     }),
   ]
@@ -42,7 +42,7 @@ export function papersText(t: Translate, papers: readonly Paper[]): string {
 
 /** 单篇文献的胶囊摘要：标题 + 出处一行，悬浮卡展示摘要。 */
 export function paperSummary(t: Translate, paper: Paper): QuoteSummary {
-  const detail = [t(`source.${paper.source}`), paper.year === null ? '' : String(paper.year), paper.venue]
+  const detail = [t(`source.${paper.source ?? 'ris'}`), paper.year === null ? '' : String(paper.year), paper.venue]
     .filter((part) => part !== '')
     .join(' · ')
   return {

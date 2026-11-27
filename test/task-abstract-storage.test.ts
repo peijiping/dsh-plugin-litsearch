@@ -206,7 +206,7 @@ test('v2 任务按需升级：首次打开只在内存迁移，首次保存备�
   assert.deepEqual(migrated.supplements, legacy.supplements)
   await store.save(migrated, true)
   assert.equal(await readFile(backup, 'utf8'), original)
-  assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 3)
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).version, 4)
 
   const reopened = await openStore(root)
   const task = await reopened.loadTask(legacy.id)
