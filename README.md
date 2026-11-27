@@ -10,7 +10,7 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 
 不用注册账号、不用申请密钥、不用另起服务。**搜索、下载全文、存入 Zotero，对话里说和界面上点走的是同一套流程**：模型把范围算准，右侧栏弹出结果、清单和逐篇进度；面板的当前任务、当前页、筛选与勾选，模型也读得到。两边共用同一份任务现场，不用复制 id、不用猜对方看到哪一页。
 
-> 当前版本 **v0.4.1** · 十个免费来源（PubMed / Europe PMC / OpenAlex / Crossref / Semantic Scholar / arXiv / PubTator / DOAJ / OpenReview / OpenAIRE）+ 可选谷歌学术（需自备 SerpAPI Key，默认关闭）。
+> 当前版本 **v0.6.5** · 十个免费来源（PubMed / Europe PMC / OpenAlex / Crossref / Semantic Scholar / arXiv / PubTator / DOAJ / OpenReview / OpenAIRE）+ 可选谷歌学术（需自备 SerpAPI Key，默认关闭）。
 
 ## 为什么做这个
 
@@ -25,9 +25,10 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 | 动作 | 在对话里说一句 | 在右侧栏点一下 | 两边怎么合上 |
 | --- | --- | --- | --- |
 | **搜索** | 「查 GLP-1 与心血管结局，只看 2020 年后的」 | 填检索式、选来源 / 年份 / 排序 | 模型发起的检索落到同一个任务 tab，面板自动打开刷新；界面改条件重跑也记成新一轮，模型 `literature_task current` 读得到完整条件 |
+| **核对与续检** | 「看看第 2 轮为什么少了那几篇」 | 检索历史 → 执行明细 → 取下一页 / 重试 | `literature_task rounds` 给模型轮次与统计，模型和面板都能查看逐请求改写、页计数与过滤原因，按来源重试或续检；也能切回历史轮次、复制条件建草稿 |
 | **切换、补录与关联** | 「切到第 10 轮」「把这个 DOI 补到当前查询，再关联我上传的 PDF」 | 检索历史 → 切换轮次；结果 → 精确补录；论文页 → 关联 PDF | 使用同一轮次与题录，补录结果在对话和面板都能看到 |
 | **下载全文** | 「下载第 2 页有 PDF 的」「下载当前全部」 | 勾选 → 批量下载 | 模型把范围算成已校验的 `paperId` 清单，面板自动弹出下载框逐篇跑进度；「当前页 / 第 N 页 / 当前筛选」以面板上报的视图快照为准 |
-| **存入 Zotero** | 「把这批存到『综述』目录」 | 勾选 → 存入 Zotero → 选目录 | 与下载共用同一套范围解析；目录唯一匹配时自动预选开跑，没点名就停在弹窗等你选 |
+| **存入 Zotero** | 「把这批存到『综述』目录」 | 勾选 → 存入 Zotero → 选目录 | 与下载共用同一套范围解析；目录唯一匹配时自动预选开跑，没点名就停在弹窗等你选；中断后可从检查点续传 |
 
 反方向：面板点「加入对话」，论文或整个任务变成输入框里的胶囊，AI 拿到完整信息接着读。**决定权始终在你手上** —— 不自动发送、不自动再搜一轮；批量操作有独立取消按钮（关闭弹窗只隐藏，后台仍会跑完）；目录有歧义时模型一律先问，绝不猜。
 
@@ -43,12 +44,13 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 
 | 方面 | 能力 |
 | --- | --- |
-| 检索 | 多条检索式自动去重；来源 / 年份 / 语言 / 类型 / 只看 OA / 排序当场可调；字段标签与 AND / OR 语法提示；单源限流排队、抖动重试 |
-| 任务 | 一主题一任务，改条件重跑并记下每轮时间、条件、发起方、命中数；筛读状态跨轮保留；「加入对话」带任务进新会话续接 |
-| 结果 | 概览环形图 / 折线 / 双色条可点选筛选；多条件过滤、每页 20 条；独立论文页含摘要与全文链接，有 PMID 的可看 PubTator 实体；「全文」页列整批台账 |
+| 检索 | 多条检索式自动去重；来源 / 年份 / 语言 / 类型 / 只看 OA / 排序当场可调；字段标签与 AND / OR 语法提示；单源限流排队、抖动重试；逐检索式 × 来源记录语法改写、实际请求、页计数与过滤原因，支持取回后续页与重试限流页 |
+| 任务 | 一主题一任务，改条件重跑并记下每轮时间、条件、发起方、命中数；可切回历史轮次恢复当轮结果，或复制条件建轮次 / 任务草稿；筛读状态跨轮保留；「加入对话」带任务进新会话续接 |
+| 结果 | 概览环形图 / 折线 / 双色条可点选筛选；多条件过滤、每页 20 条；独立论文页保留**完整摘要**并附全文链接，有 PMID 的可看 PubTator 实体；「全文」页列整批台账；可按 DOI / PMID / arXiv ID 精确补录 |
 | 筛读与批量 | 没读 / 读过 / 纳入 / 排除、研究分组与分组阅读清单、与旧任务对比整批纳入「新增」、本页全选跨页累加、批量改状态 / 分组 / 下载 / 存 Zotero / 导出；下载与同步 5 并发、逐篇进度 |
-| 全文 | PDF 预览下载到工作目录 `dsh-litsearch/`；候选按「OA 直链 → 未确认直链 → 仓储渲染页」排序，缺直链时并发反查 OpenAlex / Europe PMC / OpenAIRE；抓取按域限并发、429 冷却、`%PDF-` + `%%EOF` 双校验、`.part` 原子落盘；网页全文依次走 Europe PMC JATS → PubMed Central JATS（缺 PMCID 时按 PMID 反查）→ arXiv HTML；导出 CSV / RIS / BibTeX / Markdown |
-| 对话 | 加入对话胶囊、任务续接、一句话批量下载 / 存 Zotero（含按页取数与只读预演） |
+| 全文 | PDF 预览下载到工作目录 `dsh-litsearch/`；候选按「OA 直链 → 未确认直链 → 仓储渲染页」排序，缺直链时并发反查 OpenAlex / Europe PMC / OpenAIRE；抓取按域限并发、429 冷却、`%PDF-` + `%%EOF` 双校验、`.part` 原子落盘；网页全文依次走 Europe PMC JATS → PubMed Central JATS（缺 PMCID 时按 PMID 反查）→ arXiv HTML；论文页可关联本地 PDF 或解除关联；导出 CSV / RIS / BibTeX / Markdown |
+| 对话 | 加入对话胶囊、任务续接、一句话批量下载 / 存 Zotero（含按页取数与只读预演）、按标识补录 |
+| Zotero | 写前核对已有条目与目录可写性；父条目 / 分类 / 附件分阶段记检查点，中断后可「继续 Zotero 同步」，不重复建条目 |
 | 翻译 | 卡片与单篇页的「原 / 译」一键切换，只翻标题与摘要、自动中英互译；Bing 免密钥与宿主 DeepSeek 两个引擎，设置里可选 |
 
 **能力边界**：PDF 由 Host 后台直连抓取，没有浏览器会话和机构授权，订阅 / 登录 / 人机验证页拿不到，403 / 限流 / HTML 页 / 无候选分别给原因，浏览器打开卡片上的 PDF / DOI 手动另存即可；填联系邮箱启用 Unpaywall 补 OA 候选，但补出的出版商直链仍可能被拒。
@@ -90,6 +92,24 @@ DeepSeek Harness 文献检索插件：模型主导检索，界面可视化呈现
 - 可以说「基于第 10 轮新建任务，叫 XXXXX」，模型会复制该轮条件并打开待执行的草稿。
 - **每轮结束模型只给改进建议，不自行发起下一轮**；你重跑或明确要求才继续。
 
+## 检索明细与断点续检
+
+「检索历史」里每一轮都记下条件、发起方与命中统计；新轮次还带执行明细，点「查看执行明细」看的是**这一轮到底怎么跑的**：
+
+- **条件怎么被改写**：原检索式与来源实际收到的表达式并列，标出被去掉的字段标签、`NOT`、布尔运算符和通配符——「排除了女性却没生效」这类问题不用猜。
+- **每页请求与计数**：来源报告的 total / 返回 / 规范化 / 可观察 / 过滤后条数，以及已提交页数；命中位置逐条给出过滤原因（年份 / OA / 语言 / 类型）。
+- **身份复核**：多条来源记录合并成一篇时可查看成员，选择「采用 / 分别保留 / 标记为相关版本 / 拆分」，结果写回本轮。
+- **导出**：整份明细可导出 JSON（`<taskId>-<roundId>.json`），便于留档排查。
+
+检索按「检索式 × 来源」分步推进并记检查点：中断后重启宿主会把任务标成「上次检索中断，已保存的结果可以继续查看」，不会假装跑完；在明细里可**向来源取回下一页**，429 会给出可重试时间，到点后点「重试来源第 N 页」即可。**只有支持分页的来源能续取**，仅返回首页的来源要整轮重跑。新轮次才有完整明细；早期轮次只保留历史汇总，不能切换结果，但可以按它的条件新建轮次 / 任务。
+
+## 轮次切换、草稿与精确补录
+
+- 「切换为本轮次」先把当前结果存成快照，再恢复目标轮次的条件、状态与结果；任务正在执行操作时拒绝切换。筛读状态与分组按论文 id 保留，不会因切轮次丢失。
+- 「新建轮次」把选中轮次的条件复制到**当前任务**的草稿，「新建任务」则复制条件建独立任务草稿；两者都不自动执行，改完再点跑。
+- 漏掉的那篇可按 DOI、PMID 或 arXiv ID（也接受 doi.org / PubMed / arXiv 链接）精确补录：Host 只接受能与来源题录**完全核对**的标识，重复的直接提示「无需补录」，arXiv 版本不符会要求核对版本号。补录条目带「手工补录」标记、独立保存，切换或重跑轮次时按添加时间恢复到对应结果。
+- 论文详情页还能把手上的 PDF **关联为正文**：需明确确认这份 PDF 属于该论文，关联后下载与存入 Zotero 直接用它；可解除关联，本地文件被移走后按钮变成「重新下载」，也能在文件系统中定位。
+
 ## 安装
 
 要求 dsh `>=0.2.1-rc.3 <0.3.0-0`，包内是预构建产物（`lib/` + `client/client.js`），安装不跑构建：
@@ -108,15 +128,17 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 | `ncbiApiKey` / `openalexApiKey` / `s2ApiKey` / `serpApiKey` | 提升 PubMed / OpenAlex / S2 额度（OpenAlex Key 免费申请，无 Key 时匿名检索易被临时限流）；`serpApiKey` 启用谷歌学术（每月 250 次免费），留空则该源不可选 | 空 |
 | `pubmedIntervalMs` / `s2IntervalMs` / `arxivIntervalMs` | 各源最小请求间隔（毫秒） | 350 / 3000 / 3000 |
 | `defaultPageSize` / `requestTimeoutMs` | 每源条数 / 超时（Europe PMC 有 25s 下限；OpenAIRE 有 30s 下限、单次最多 25 条） | 20 / 20000 |
-| `defaultSources` / `defaultSort` / `defaultLanguage` | 新任务默认来源、排序、语言（至少留一个来源） | 七源 / 相关度 / 不限 |
+| `defaultSources` / `defaultSort` / `defaultLanguage` | 新任务默认来源、排序、语言（至少留一个来源，谷歌学术不默认勾选） | 十源 / 相关度 / 不限 |
 | `autoOpenTaskTab` / `maxTaskTabs` | 模型发起后自动打开 tab；后者为兜底上限 | 开 / 5 |
 | `taskRetentionDays` / `taskRetentionCount` / `taskMaxPapers` | 未保留任务的天数、条数、单任务结果上限 | 90 / 120 / 1500 |
 | `pdfRoot` / `pdfMaxMb` / `autoDownloadPdf` / `pdfCacheMaxMb` | PDF 目录、单文件上限、检索后自动下载、去重缓存上限（0 关闭清理） | 工作目录 / 30 / 关 / 512 |
+| `pdfTimeoutMs` / `pdfRetryCount` / `pdfPerHostConcurrency` | 单个 PDF 候选的抓取预算 / 5xx 与网络错误重试次数 / 同域名并发 | 60000 / 1 / 2 |
+| `enableOaLookup` / `enableArxivHtml` | 下载时反查 OA 位置（OpenAlex / Europe PMC / OpenAIRE / Unpaywall）/ arXiv HTML 全文兜底 | 开 / 开 |
 | `enableEpmcFulltext` / `enablePmcFulltext` / `zoteroEnabled` / `zoteroBaseUrl` | Europe PMC 兜底 / PubMed Central 兜底 / 同步开关 / connector 地址（仅回环） | 开 / 开 / 开 / `http://127.0.0.1:23119` |
 | `zoteroAttachPdf` / `zoteroTag` | 附带 PDF / 附加标签 | 开 / `dsh-litsearch` |
 | `translateProvider` / `translateTarget` | 翻译引擎（`bing` / `deepseek`）与目标语言（`auto` = 中英互译，或锁定某门语言） | `bing` / `auto` |
 
-设置页另有逐源探活与限流冷却、PDF 目录可写性、Zotero 连接测试，以及按任务 / PDF 缓存 / 全部清理文件。
+密钥标记为 secret：设置页只显示「是否已配置 / 长度」，不回显原文；改完即生效，无需重启。单任务最多保留最近 30 轮的元数据。设置页另有逐源探活与限流冷却、PDF 目录可写性、Zotero 连接测试，以及按任务 / PDF 缓存 / 全部清理文件。
 
 ## 数据目录
 
@@ -124,22 +146,22 @@ dsh plugin --profile <profile> add dsh-plugin-litsearch
 
 ```
 $DSH_HOME/storages/dsh-plugin-litsearch/
-├── tasks/index.json + <taskId>.json   # 任务索引与全量元数据（条件、轮次、结果、分组、筛读）
+├── tasks/index.json + <taskId>.json   # v3 任务索引与全量元数据（条件、轮次明细、结果、补录、分组、筛读、Zotero 续传点）
 ├── current.json                       # 当前任务绑定
 ├── out/<taskId>/                      # CSV / RIS / BibTeX / Markdown 导出
 └── pdfs/<sha256>.pdf                  # PDF 去重缓存（受 pdfCacheMaxMb 约束）
 ```
 
-`DSH_HOME` 由宿主注入（未设置回落 `~/.dsh`）；旧版 `~/.dsh/dsh-litsearch/` 首次启动复制迁移、原目录留作备份。**可读 PDF 不在这里**，由 `pdfRoot` 决定（默认工作目录下的 `dsh-litsearch/`）；视图快照与模型指令只存内存（30 / 10 分钟窗口），不落盘、重启归零。
+`DSH_HOME` 由宿主注入（未设置回落 `~/.dsh`）；旧版 `$DSH_HOME/dsh-litsearch/` 与 `~/.dsh/dsh-litsearch/` 在首次启动时一次性复制迁移，原目录留作备份，新目录已有任务时不会被覆盖，复制失败会暂时回退旧目录读取。任务文件为 v3，旧版自动补齐字段并保留题录 id、日期与人工状态。**可读 PDF 不在这里**，由 `pdfRoot` 决定（默认工作目录下的 `dsh-litsearch/`；旧默认值 `~/Downloads/dsh-litsearch/` 视为未配置）；视图快照与模型指令只存内存（30 / 10 分钟窗口），重启归零，Zotero 续传点与 PDF 状态则随任务落盘。
 
 ## Zotero 同步
 
-走桌面端自带 connector，不需要 Web API Key：启动 Zotero → 勾选文献点「存入 Zotero」→ 弹窗选目录再同步。目录列表来自本机 Zotero，标出当前选中与不可写附件的目录，不必事先选分类。5 并发逐篇显示状态、可取消（已发出的仍会完成），写入元数据、分组标签与可选 PDF 附件；目录只读时只存条目，失败保留本次条目的 RIS 导出备用。**重新同步新建条目，不覆盖、不跳过已同步文献。**
+走桌面端自带 connector，不需要 Web API Key：启动 Zotero → 勾选文献点「存入 Zotero」→ 弹窗选目录再同步。目录列表来自本机 Zotero，标出当前选中与不可写附件的目录，不必事先选分类。5 并发逐篇显示状态、可取消（已发出的仍会完成），写入元数据、分组标签与可选 PDF 附件；目录只读时只存条目，失败保留本次条目的 RIS 导出备用。写入分**父条目 / 分类 / 附件**三段，每段完成即记检查点；失败或中断后卡片显示「继续 Zotero 同步」，从断点续传而不是重建条目。Zotero 10 开启本地 API 写权限后可自动核验并补传附件，否则按提示人工核对。**重新同步新建条目，不覆盖、不跳过已同步文献。**
 
 ## 隐私
 
-- 检索词发给所选数据源的公开 API；谷歌学术（默认关闭）经第三方 SerpAPI 转发；填了 `contactEmail` 才用 DOI + 邮箱查 Unpaywall。
-- PDF 下载与 Zotero connector 只在本机（connector 仅回环）；视图快照与模型指令只在内存。API Key 存本机配置文件（明文），不回显、不写日志。
+- 检索词发给所选数据源的公开 API；精确补录把用户输入的 DOI / PMID / arXiv ID 发给 Crossref / PubMed / arXiv 核对；谷歌学术（默认关闭）经第三方 SerpAPI 转发；填了 `contactEmail` 才用 DOI + 邮箱查 Unpaywall。
+- PDF 下载与 Zotero connector / 本地 API 只在本机（仅回环）；视图快照与模型指令只在内存。API Key 存本机配置文件（明文），不回显、不写日志。
 - 点「译」翻译时，该篇的**标题与摘要**会发给所选引擎：Bing 走微软翻译端点，DeepSeek 走你当前账号的模型。不点翻译就不会发送。
 
 ## 本地开发
@@ -151,14 +173,16 @@ pnpm typecheck:client
 pnpm test                         # node:test 单元测试
 ```
 
-专项单测见 `test/download-scope.test.ts`、`download-events.test.ts`、`download-store.test.ts`、`zotero-command.test.ts`（范围解析、按页切分、事件增量、指令幂等、目录歧义）。独立 profile 调试：`dsh --profile litsearch`。
+专项单测覆盖范围解析与按页切分（`download-scope.test.ts`）、事件增量与指令幂等（`download-events.test.ts`、`download-store.test.ts`、`zotero-command.test.ts`）、检索明细与断点续检（`page-evidence.test.ts`）、轮次与补录（`rounds.test.ts`、`research-handoff.test.ts`、`task-abstract-storage.test.ts`）、Zotero 写入（`zotero-write.test.ts`、`zotero-duplicate.test.ts`）、存储路径迁移（`storage-paths.test.ts`）等。独立 profile 调试：`dsh --profile litsearch`。
 
 ## 架构
 
-- `src/search/`：检索层；`providers/` 每家 API 一个 provider，新增源实现 `Provider` 并注册。
+- `src/search/`：检索层；`providers/` 每家 API 一个 provider，新增源实现 `Provider` 并注册；`evidence.ts` / `request-trace.ts` 定义逐页证据与请求记录。
 - `src/host/`：API 端点、任务执行 / 持久化 / 统计 / 导出，及模型工具。除检索、任务、范围预演、导出、下载和 Zotero 外，`literature_round` 操作历史轮次与执行明细，`literature_paper` 读取论文及关联 PDF，`literature_panel` 同步面板操作，`literature_transfer` 查询下载与同步结果，`literature_settings` 管理设置与诊断。
 - `src/host/tasks/download.ts` + `tools.ts`：8 种 `scope`（含 `pages`）解析成已校验的 `paperId` 清单，下载与 Zotero 共用 `resolveModelScope()`；`pdf/` 管候选链与失败归类，`zotero/match.ts` 做目录唯一匹配。
-- `src/client/`：任务 tab、论文页、设置页；`DownloadDialog.tsx` / `ZoteroSyncDialog.tsx` 批量弹窗，两个 `*CommandStore.ts` 各自幂等排队。
+- `src/host/tasks/page-evidence.ts` / `paper-groups.ts` / `round-results.ts`：按「检索式 × 来源」保存页证据与检查点、合并来源成员并做身份复核、为轮次切换存结果快照；`task-migration.ts` + `host/paths.ts` 负责 v3 任务兼容与旧目录迁移。
+- `src/host/zotero/resume.ts` / `write.ts`：父条目 / 分类 / 附件的分阶段检查点续传与本地 API 写入。
+- `src/client/`：任务 tab、论文页、设置页；`RoundEvidence.tsx` / `RoundsDialog.tsx` 展示执行明细与轮次历史；`DownloadDialog.tsx` / `ZoteroSyncDialog.tsx` 批量弹窗，两个 `*CommandStore.ts` 各自幂等排队。
 
 两侧靠 `/events` 增量轮询联动（Host 无原生推送）：
 
@@ -172,7 +196,8 @@ POST /view（上报当前页 / 筛选）→ Host 存内存快照
 
 ## 路线图
 
-- [ ] DOAJ
+- [x] DOAJ（已接入）
+- [ ] 订阅 / 登录墙内的 PDF：需要浏览器会话与机构授权，目前靠手动另存兜底
 
 ## License
 
